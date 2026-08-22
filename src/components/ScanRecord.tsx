@@ -22,7 +22,7 @@ import {
   Sparkle
 } from 'lucide-react';
 import { PlatformType, RecordingType, QueueItem } from '../types';
-import { dbPutQueue } from '../lib/storage';
+import { dbPutQueue, dbGetAllQueue } from '../lib/storage';
 import { checkDuplicate, requestApi } from '../lib/api';
 import { triggerUploadWorker } from '../lib/uploadWorker';
 
@@ -516,6 +516,33 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     if (!bypassDuplicateCheck) {
       setIsDuplicateChecking(true);
       try {
+        // 1. Check local IndexedDB queue for completed or pending orders
+        const allQueue = await dbGetAllQueue();
+        const targetOrderId = orderId.trim().toLowerCase();
+        const localMatch = allQueue.find(
+          (item) =>
+            item.orderId.trim().toLowerCase() === targetOrderId &&
+            item.platform.toLowerCase() === effectivePlatform.toLowerCase() &&
+            item.recordingType === recordingType &&
+            (item.status === 'completed' || item.status === 'uploading' || item.status === 'pending')
+        );
+
+        if (localMatch) {
+          setIsDuplicateChecking(false);
+          setDuplicateWarning({
+            orderId: orderId.trim(),
+            platform: effectivePlatform,
+            recordingType,
+            existing: {
+              timestamp: new Date(localMatch.createdAt).toISOString(),
+              packerEmail: currentUser?.email || 'operator@vms.local',
+              playbackUrl: localMatch.webViewLink || '#',
+            },
+          });
+          return;
+        }
+
+        // 2. Check remote Google Drive / Sheets
         const existing = await checkDuplicate({
           orderId: orderId.trim(),
           platform: effectivePlatform,
