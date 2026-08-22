@@ -703,8 +703,8 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
 
       {/* Main Grid: Camera Preview on Left, Order Form on Right */}
       <div id="scan-record-grid" className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Camera Column (9 Cols on LG for extra wide preview) */}
-        <div id="camera-viewport-card" className="lg:col-span-9 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+        {/* Camera Column (10 Cols on LG for extra wide preview) */}
+        <div id="camera-viewport-card" className="lg:col-span-10 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
           {/* Camera Header Controls */}
           <div className="p-3 bg-slate-900 text-white flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -931,8 +931,8 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
           )}
         </div>
 
-        {/* Order Information Column (3 Cols on LG) */}
-        <div id="order-details-card" className="lg:col-span-3 space-y-4">
+        {/* Order Information Column (2 Cols on LG) */}
+        <div id="order-details-card" className="lg:col-span-2 space-y-4">
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-semibold text-slate-800">Order Information</h3>
