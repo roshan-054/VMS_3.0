@@ -625,17 +625,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       const sizeMb = (blob.size / (1024 * 1024)).toFixed(2);
       const todayDateStr = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD
 
-      // 1. Trigger instant local download
-      const downloadUrl = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = downloadUrl;
-      link.download = fileName;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      setTimeout(() => URL.revokeObjectURL(downloadUrl), 60000);
-
-      // 2. Add to IndexedDB upload queue for Google Drive synchronization
+      // Video recorded successfully and stored automatically in IndexedDB & queued for Google Drive sync without prompting Save As dialog
       const queueItem: QueueItem = {
         id: crypto.randomUUID(),
         createdAt: Date.now(),
@@ -656,7 +646,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       onQueueUpdated();
       triggerUploadWorker();
 
-      onShowToast(`Video saved (${sizeMb} MB) & queued for Drive upload!`, 'success');
+      onShowToast(`Video recorded (${sizeMb} MB) & queued for automatic Drive upload!`, 'success');
       setStatusMessage({
         text: `Completed: ${fileName} saved & queued for Drive upload. Camera feed remains active for next order.`,
         type: 'success',
