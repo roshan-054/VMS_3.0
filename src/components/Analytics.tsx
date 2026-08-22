@@ -138,7 +138,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
       }),
       1
     );
-    return maxVal;
+    return Math.ceil(maxVal * 1.25) || 5; // Add 25% headroom so peak curve doesn't touch top
   }, [dailyList, activeChartMode]);
 
   // SVG Line Graph Geometry Calculations
@@ -147,6 +147,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
   const padding = { top: 30, right: 35, bottom: 45, left: 55 };
   const plotWidth = chartWidth - padding.left - padding.right;
   const plotHeight = chartHeight - padding.top - padding.bottom;
+  const baselineY = padding.top + plotHeight;
 
   const points = useMemo(() => {
     if (!dailyList.length) return [];
@@ -162,13 +163,12 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
     });
   }, [dailyList, maxDaily, activeChartMode, plotWidth, plotHeight, padding.left, padding.top]);
 
-  // Construct SVG Path strings
+  // Construct SVG Path strings with clamped control points to prevent dips below baseline
   const linePathD = useMemo(() => {
     if (!points.length) return '';
     if (points.length === 1) {
       return `M ${points[0].x - 10} ${points[0].y} L ${points[0].x + 10} ${points[0].y}`;
     }
-    // Smooth Catmull-Rom or Monotone Bezier Curve path
     let d = `M ${points[0].x} ${points[0].y}`;
     for (let i = 0; i < points.length - 1; i++) {
       const p0 = points[i === 0 ? 0 : i - 1];
@@ -177,18 +177,21 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
       const p3 = points[i + 2 >= points.length ? points.length - 1 : i + 2];
 
       const cp1x = p1.x + (p2.x - p0.x) / 6;
-      const cp1y = p1.y + (p2.y - p0.y) / 6;
+      let cp1y = p1.y + (p2.y - p0.y) / 6;
       const cp2x = p2.x - (p3.x - p1.x) / 6;
-      const cp2y = p2.y - (p3.y - p1.y) / 6;
+      let cp2y = p2.y - (p3.y - p1.y) / 6;
+
+      // Clamp control points between top padding and baselineY
+      cp1y = Math.max(padding.top, Math.min(cp1y, baselineY));
+      cp2y = Math.max(padding.top, Math.min(cp2y, baselineY));
 
       d += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
     }
     return d;
-  }, [points]);
+  }, [points, baselineY, padding.top]);
 
   const areaPathD = useMemo(() => {
     if (!points.length) return '';
-    const baselineY = padding.top + plotHeight;
     if (points.length === 1) {
       return `M ${points[0].x - 10} ${points[0].y} L ${points[0].x + 10} ${points[0].y} L ${points[0].x + 10} ${baselineY} L ${points[0].x - 10} ${baselineY} Z`;
     }
@@ -196,7 +199,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
     const lastP = points[points.length - 1];
     const firstP = points[0];
     return `${linePart} L ${lastP.x} ${baselineY} L ${firstP.x} ${baselineY} Z`;
-  }, [linePathD, points, padding.top, plotHeight]);
+  }, [linePathD, points, baselineY]);
 
   const hoveredPoint = hoveredIndex !== null && points[hoveredIndex] ? points[hoveredIndex] : null;
 
