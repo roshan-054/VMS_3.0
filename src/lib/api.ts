@@ -1,4 +1,4 @@
-import { getStoredApiUrl, getStoredToken } from './storage';
+import { getStoredApiUrl, getStoredToken, dbGetAllQueue } from './storage';
 import { User, VideoRecord, AnalyticsData } from '../types';
 
 export interface ApiResponse<T = any> {
@@ -24,6 +24,7 @@ export async function requestApi<T = any>(
 
   const response = await fetch(url, {
     method: 'POST',
+    mode: 'cors',
     redirect: 'follow',
     credentials: 'omit',
     headers: {
@@ -156,12 +157,56 @@ export async function fetchUploadLogs(params: {
     failed: number;
   };
 }> {
-  const res = await requestApi<{ logs: import('../types').UploadLogItem[]; stats?: any }>('getUploadLogs', params);
-  return {
-    success: true,
-    logs: res.logs || [],
-    stats: res.stats,
-  };
+  try {
+    const res = await requestApi<{ logs: import('../types').UploadLogItem[]; stats?: any }>('getUploadLogs', params);
+    return {
+      success: true,
+      logs: res.logs || [],
+      stats: res.stats,
+    };
+  } catch (err) {
+    try {
+      const localItems = await dbGetAllQueue();
+      const logs = localItems.map((item): import('../types').UploadLogItem => ({
+        timestamp: new Date(item.createdAt).toISOString(),
+        orderId: item.orderId,
+        platform: item.platform,
+        recordingType: item.recordingType,
+        fileName: item.fileName,
+        fileSize: String(item.fileSize),
+        status: item.status === 'completed' ? 'Completed' : item.status === 'failed' ? 'Failed' : 'Under Processing',
+        stage: item.stage || item.status,
+        progress: item.progress ?? (item.status === 'completed' ? 100 : 0),
+        packerEmail: 'operator@vms.local',
+        driveFileId: item.fileId || '',
+        playbackUrl: item.webViewLink,
+        uploadId: item.uploadId || item.id,
+        queueJobId: item.id,
+      }));
+
+      const completed = logs.filter(l => l.status === 'Completed').length;
+      const inProgress = logs.filter(l => l.status === 'Under Processing').length;
+      const failed = logs.filter(l => l.status === 'Failed').length;
+
+      return {
+        success: true,
+        logs,
+        stats: {
+          total: logs.length,
+          completed,
+          inProgress,
+          pending: 0,
+          failed,
+        },
+      };
+    } catch (dbErr) {
+      return {
+        success: true,
+        logs: [],
+        stats: { total: 0, completed: 0, inProgress: 0, pending: 0, failed: 0 },
+      };
+    }
+  }
 }
 
 export async function deleteLogEntry(params: {
