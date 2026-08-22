@@ -1,0 +1,16 @@
+{
+  "name": "Order Packing Video System",
+  "short_name": "Packing Videos",
+  "description": "Order Packing Video System for recording, uploading, searching and reporting packing videos.",
+  "start_url": "./index.html?v=2.9.29",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": [
+    {"src":"icons/icon128.png","sizes":"128x128","type":"image/png"},
+    {"src":"icons/icon48.png","sizes":"48x48","type":"image/png"},
+    {"src":"icons/icon32.png","sizes":"32x32","type":"image/png"},
+    {"src":"icons/icon16.png","sizes":"16x16","type":"image/png"}
+  ]
+}

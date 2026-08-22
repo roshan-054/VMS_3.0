@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#ffffff">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon128.png">
+<title>Order Packing Video System</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="toast"></div>
+
+<section id="loginView" class="center">
+  <div class="auth-card">
+    <div class="logo"><img src="icons/logo-default.png" alt="Order Packing Video System"></div>
+    <h1>Order Packing System</h1>
+    <p class="muted">Video Recording & Monitoring</p>
+    <form id="loginForm">
+      <label>Email</label>
+      <input id="loginEmail" type="email" required autocomplete="username" placeholder="Enter email address">
+      <label>Password</label>
+      <input id="loginPassword" type="password" required autocomplete="current-password" placeholder="Enter password">
+      <button class="primary full">Login</button>
+    </form>
+    <button id="showSignup" class="link full">Create New Account</button>
+    <p id="loginMsg" class="msg"></p>
+    <button id="showSetup" class="link full">⚙️ First-time Setup / Connect</button>
+    <div id="backendStatus" class="backend-status">Backend status: checking…</div>
+  </div>
+</section>
+
+<section id="setupView" class="center hidden">
+  <div class="auth-card setup-card">
+    <div class="logo"><img src="icons/logo-default.png" alt="Order Packing Video System"></div>
+    <h1>Quick Setup</h1>
+    <p class="muted">Connect this website to your Google Apps Script backend. No Drive ID needs to be entered — the backend can create the storage folder automatically.</p>
+    <div class="setup-steps">
+      <div class="setup-step"><b>1. Google Sheet</b><span>Create/open the Google Sheet that will store users and logs.</span></div>
+      <div class="setup-step"><b>2. Apps Script</b><span>Paste the supplied <code>Code.gs</code> and run <code>setupSystem()</code>. The system creates its Drive folder automatically.</span></div>
+      <div class="setup-step"><b>3. Deploy</b><span>Deploy as Web app → Execute as <b>Me</b> → Who has access: <b>Anyone</b>.</span></div>
+    </div>
+    <label>Apps Script Web App URL</label>
+    <input id="setupApiUrl" type="url" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="url">
+    <button id="testSetup" class="primary full">🔗 Test & Save Connection</button>
+    <button id="setupGuide" class="secondary full">📘 Show Setup Instructions</button>
+    <button id="backToLoginFromSetup" class="link full">Back to Login</button>
+    <p id="setupMsg" class="msg"></p>
+  </div>
+</section>
+
+<section id="signupView" class="center hidden">
+  <div class="auth-card">
+    <div class="logo"><img src="icons/logo-default.png" alt="Order Packing Video System"></div>
+    <h1>Create Account</h1>
+    <p class="muted">Administrator approval is required.</p>
+    <form id="signupForm">
+      <label>Full Name</label>
+      <input id="signupName" required autocomplete="name">
+      <label>Email</label>
+      <input id="signupEmail" type="email" required autocomplete="email">
+      <label>Password</label>
+      <input id="signupPassword" type="password" minlength="6" required autocomplete="new-password">
+      <button class="primary full">Create Account</button>
+    </form>
+    <button id="showLogin" class="link full">Back to Login</button>
+    <p id="signupMsg" class="msg"></p>
+  </div>
+</section>
+
+<section id="appView" class="hidden app-shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-icon"><img id="appLogo" src="icons/logo-default.png"></span>
+      <div><b>Packing Video System</b><small id="roleLabel"></small></div>
+    </div>
+
+    <button class="nav active" data-tab="record">📦 Scan & Record</button>
+    <button class="nav admin-only hidden" data-tab="search">🔎 Search Orders</button>
+    <button class="nav" data-tab="logs">📤 Upload Logs</button>
+    <button class="nav admin-only hidden" data-tab="reports">📊 Reports</button>
+    <button class="nav" data-tab="queue">🗂 Upload Queue</button>
+    <button class="nav admin-only hidden" data-tab="analytics">📈 Analytics</button>
+    <button class="nav" data-tab="health">🛠 System Health</button>
+    <button class="nav admin-only hidden" data-tab="admin">⚙️ Admin Panel</button>
+
+    <div class="sidebar-bottom">
+      <div id="userLabel" class="user-pill"></div>
+      <button id="logoutBtn" class="nav">⏻ Logout</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <h2 id="pageTitle">Scan & Record</h2>
+        <span id="pageSubtitle">Record a packing process and store it in Google Drive.</span>
+      </div>
+    </header>
+
+    <div class="content">
+
+      <!-- RECORD -->
+      <section id="recordTab" class="tab">
+        <div class="grid">
+          <div class="card camera-card">
+            <div class="card-head">
+              <div><h3>Packing Camera</h3><p class="muted">Camera runs directly inside this page.</p></div>
+              <span class="green-chip">Camera Ready</span>
+            </div>
+            <div class="camera-placeholder">
+              <div class="camera-icon">📷</div>
+              <h3>Camera Preview</h3>
+              <p>Select Forward or Return and your platform before recording. The camera opens in the same page.</p>
+            </div>
+            <button id="openCamera" class="primary big full">📷 Open Camera & Start Recording</button>
+            <p id="recordMsg" class="msg"></p>
+          </div>
+
+          <div class="card">
+            <h3>Order Information</h3>
+            <label>Order ID</label>
+            <input id="orderId" autocomplete="off" placeholder="Scan / enter Order ID">
+
+            <label>Recording Type</label>
+            <select id="recordingType">
+              <option value="Forward">Forward</option>
+              <option value="Return">Return</option>
+            </select>
+
+            <label>Platform</label>
+            <select id="platform">
+              <option value="Amazon">Amazon</option>
+              <option value="D2C">D2C</option>
+              <option value="JioMart">JioMart</option>
+              <option value="Custom">Custom Platform</option>
+            </select>
+
+            <div id="customPlatformWrap" class="hidden">
+              <label>Custom Platform Name</label>
+              <input id="customPlatform" maxlength="80" placeholder="Enter custom platform name">
+            </div>
+
+            <div class="info-box">
+              <b>Automatic Drive Storage</b>
+              <code>Parent Folder → Platform → Forward / Return → YYYY-MM-DD → OrderID_Platform_Type.mp4 / .webm</code>
+            </div>
+            <div class="warning-box">
+              <b>Maximum video size: 1 GB</b><br>
+              Recording automatically stops before the 1 GB limit.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SEARCH -->
+      <section id="searchTab" class="tab hidden">
+        <div class="card" id="advancedSearchCard">
+          <div class="card-head">
+            <div><h3>Advanced Search Filters</h3><p class="muted">Combine filters to find the exact recorded order video.</p></div>
+            <button id="clearFilters" class="secondary">Clear Filters</button>
+          </div>
+          <div class="filter-grid">
+            <div><label>Order ID</label><input id="fOrderId" placeholder="Enter Order ID"></div>
+            <div><label>Platform</label><select id="fPlatform"><option value="">All Platforms</option><option>Amazon</option><option>D2C</option><option>JioMart</option><option>Custom</option></select></div>
+            <div><label>Recording Type</label><select id="fType"><option value="">All Types</option><option>Forward</option><option>Return</option></select></div>
+            <div><label>Status</label><select id="fStatus"><option value="">All Statuses</option><option>Completed</option><option>Processing</option><option>Pending</option><option>Failed</option></select></div>
+            <div><label>Packer / User</label><input id="fPacker" placeholder="Email or user name"></div>
+            <div><label>Video Availability</label><select id="fVideo"><option value="">All Records</option><option value="yes">Video Available</option><option value="no">Video Missing</option></select></div>
+            <div><label>From Date</label><input id="fFrom" type="date"></div>
+            <div><label>To Date</label><input id="fTo" type="date"></div>
+            <div><label>Sort By</label><select id="fSort"><option value="newest">Newest First</option><option value="oldest">Oldest First</option><option value="orderAsc">Order ID A–Z</option><option value="orderDesc">Order ID Z–A</option></select></div>
+            <div><label>Results</label><select id="fLimit"><option>25</option><option selected>50</option><option>100</option><option>200</option></select></div>
+          </div>
+          <div class="actions"><button id="searchBtn" class="primary">🔎 Search Orders</button><span id="filterSummary" class="muted"></span></div>
+        </div>
+        <div id="searchResults"></div>
+      </section>
+
+      <!-- LOGS -->
+      <section id="logsTab" class="tab hidden">
+        <div class="card">
+          <div class="card-head"><div><h3>Upload Logs</h3><p class="muted">Upload session, progress, completion and failure history.</p></div><button id="refreshLogs" class="secondary">Refresh</button></div>
+          <div id="uploadLogs" class="table-wrap"></div>
+        </div>
+      </section>
+
+      <!-- REPORTS -->
+      <section id="reportsTab" class="tab hidden">
+        <div class="card">
+          <div class="card-head"><div><h3>Reports</h3><p class="muted">Consolidated order/video activity report. Maximum range: 90 days.</p></div><span class="green-chip">90 Days</span></div>
+          <div class="report-toolbar">
+            <div><label>From Date</label><input id="reportFrom" type="date"></div>
+            <div><label>To Date</label><input id="reportTo" type="date"></div>
+            <div><label>Quick Range</label><div class="actions"><button class="secondary small" data-days="7">7 Days</button><button class="secondary small" data-days="30">30 Days</button><button class="secondary small" data-days="90">90 Days</button></div></div>
+          </div>
+          <div class="advanced-filter-panel">
+            <div class="filter-title">Advanced Report Filters</div>
+            <div class="filter-grid report-filter-grid">
+              <div><label>Platform</label><select id="reportPlatform"><option value="">All Platforms</option><option>Amazon</option><option>D2C</option><option>JioMart</option></select></div>
+              <div><label>Recording Type</label><select id="reportType"><option value="">All Types</option><option>Forward</option><option>Return</option></select></div>
+              <div><label>Status</label><select id="reportStatus"><option value="">All Statuses</option><option>Completed</option><option>Processing</option><option>Pending</option><option>Failed</option></select></div>
+              <div><label>User / Packer Email</label><input id="reportPacker" placeholder="Email"></div>
+              <div><label>Video Availability</label><select id="reportVideo"><option value="">All Records</option><option value="yes">Video Available</option><option value="no">Video Missing</option></select></div>
+            </div>
+          </div>
+          <div class="actions"><button id="previewReport" class="secondary">Preview Report</button><button id="downloadReport" class="primary">⬇ Download Report CSV</button></div>
+          <p id="reportMsg" class="msg"></p>
+        </div>
+        <div id="reportSummary"></div>
+        <div class="card"><div id="reportPreview" class="table-wrap"><div class="empty">Select a date range and preview.</div></div></div>
+      </section>
+
+      <!-- QUEUE -->
+      <section id="queueTab" class="tab hidden">
+        <div class="card">
+          <div class="card-head"><div><h3>Upload Queue</h3><p class="muted">Automatic uploads continue while the page remains open. Queue data survives reloads.</p></div><button id="refreshQueue" class="secondary">Refresh</button></div>
+          <div id="queueSummary" class="muted"></div>
+          <div id="queueList" class="table-wrap"></div>
+        </div>
+
+        <div class="card">
+          <h3>Manual Video Upload</h3>
+          <p class="muted">Use this when an automatic upload fails. Duplicate guard applies here too.</p>
+          <div class="grid2">
+            <div><label>Order ID</label><input id="manualOrderId"></div>
+            <div><label>Recording Type</label><select id="manualType"><option>Forward</option><option>Return</option></select></div>
+            <div><label>Platform</label><select id="manualPlatform"><option>Amazon</option><option>D2C</option><option>JioMart</option><option>Custom</option></select></div>
+            <div id="manualCustomWrap" class="hidden"><label>Custom Platform Name</label><input id="manualCustomPlatform" maxlength="80"></div>
+            <div><label>Video File</label><input id="manualFile" type="file" accept="video/*,.mp4,.webm,.mov"></div>
+          </div>
+          <button id="addManualUpload" class="primary">＋ Add to Upload Queue</button>
+          <p id="manualMsg" class="msg"></p>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><div><h3>Bulk Video Upload</h3><p class="muted">Queue many videos using a CSV mapping file.</p></div><button id="downloadBulkTemplate" class="secondary">Download CSV Template</button></div>
+          <div class="info-box"><b>CSV columns</b><code>fileName,orderId,platform,recordingType</code></div>
+          <div class="grid2">
+            <div><label>CSV Mapping File</label><input id="bulkCsv" type="file" accept=".csv,text/csv"></div>
+            <div><label>Video Files</label><input id="bulkFiles" type="file" multiple accept="video/*,.mp4,.webm,.mov"></div>
+          </div>
+          <div class="actions"><button id="previewBulk" class="secondary">Preview Mapping</button><button id="addBulkUpload" class="primary">＋ Add All to Queue</button></div>
+          <div id="bulkPreview" class="msg"></div>
+          <div id="bulkMsg" class="msg"></div>
+        </div>
+      </section>
+
+      <!-- ANALYTICS -->
+      <section id="analyticsTab" class="tab hidden">
+        <div class="card">
+          <div class="card-head">
+            <div><h3>Advanced Analytics</h3><p class="muted">Daily recording activity with platform, type, user and status breakdowns.</p></div>
+            <button id="refreshAnalytics" class="secondary">Refresh</button>
+          </div>
+          <div class="analytics-filter-grid">
+            <div><label>From Date</label><input id="analyticsFrom" type="date"></div>
+            <div><label>To Date</label><input id="analyticsTo" type="date"></div>
+            <div><label>Platform</label><select id="analyticsPlatform"><option value="">All Platforms</option><option>Amazon</option><option>D2C</option><option>JioMart</option></select></div>
+            <div><label>Recording Type</label><select id="analyticsType"><option value="">All Types</option><option>Forward</option><option>Return</option></select></div>
+            <div><label>User / Packer Email</label><input id="analyticsPacker" placeholder="Email"></div>
+            <div><label>Status</label><select id="analyticsStatus"><option value="">All Statuses</option><option>Completed</option><option>Processing</option><option>Pending</option><option>Failed</option></select></div>
+          </div>
+          <div class="analytics-quickbar">
+            <span class="quick-label">Quick filter</span>
+            <button class="filter-chip" data-analytics-preset="today">Today</button>
+            <button class="filter-chip" data-analytics-preset="yesterday">Yesterday</button>
+            <button class="filter-chip" data-analytics-preset="7">7 Days</button>
+            <button class="filter-chip" data-analytics-preset="30">30 Days</button>
+            <button class="filter-chip" data-analytics-preset="90">90 Days</button>
+            <button id="resetAnalytics" class="secondary small">↺ Reset Filters</button>
+            <button id="runAnalytics" class="primary small">Run Analytics</button>
+          </div>
+          <div id="analyticsRoot"></div>
+        </div>
+      </section>
+
+      <!-- HEALTH -->
+      <section id="healthTab" class="tab hidden">
+        <div class="card"><div class="card-head"><div><h3>System Health</h3><p class="muted">Check the services required by the application.</p></div><button id="refreshHealth" class="secondary">Run Again</button></div><div id="healthRoot"></div></div>
+      </section>
+
+      <!-- ADMIN -->
+      <section id="adminTab" class="tab hidden">
+        <div class="card">
+          <div class="card-head"><div><h3>Admin Panel</h3><p class="muted">Manage users from the Users sheet through the backend.</p></div><button id="refreshUsers" class="secondary">Refresh</button></div>
+          <div class="admin-toolbar">
+            <input id="userSearch" placeholder="Search name or email">
+            <select id="userStatus"><option value="">All Statuses</option><option>Pending</option><option>Approved</option><option>Rejected</option><option>Disabled</option></select>
+            <select id="userRole"><option value="">All Roles</option><option>User</option><option>Admin</option></select>
+            <button id="createUser" class="primary">＋ Create User</button>
+          </div>
+          <div id="userStats" class="stats"></div>
+          <div id="usersTable" class="table-wrap"></div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+</section>
+
+<!-- CAMERA -->
+<div id="cameraModal" class="camera-modal hidden">
+  <div class="camera-panel">
+    <div class="card-head"><div><h2>Packing Camera</h2><div id="cameraOrderInfo" class="muted"></div></div><button id="closeCamera" class="secondary">✕ Close</button></div>
+    <video id="cameraPreview" autoplay muted playsinline></video>
+    <div class="camera-metrics">
+      <span>Time: <b id="timer">00:00</b></span>
+      <span>Size: <b id="sizeMetric">0.00 MB</b></span>
+      <span>Upload: <b id="uploadMetric">Queued</b></span>
+      <span id="focusBadge" class="green-chip hidden">Auto Focus ✓</span>
+    </div>
+    <div class="progress"><div id="progressBar"></div></div>
+    <div class="actions">
+      <button id="enableCamera" class="primary">Enable Camera</button>
+      <button id="startRecord" class="primary" disabled>● Start Recording</button>
+      <button id="stopRecord" class="danger" disabled>■ Stop & Upload</button>
+    </div>
+    <p id="cameraStatus" class="msg"></p>
+  </div>
+</div>
+
+
+<!-- CREATE USER MODAL -->
+<div id="createUserModal" class="user-modal hidden" role="dialog" aria-modal="true" aria-labelledby="createUserTitle">
+  <div class="user-modal-card">
+    <div class="user-modal-head">
+      <div class="user-modal-heading">
+        <div class="user-modal-icon">＋</div>
+        <div>
+          <h2 id="createUserTitle">Create New User</h2>
+          <p>Add a user account and assign access in the Packing Video System.</p>
+        </div>
+      </div>
+      <button id="closeCreateUser" class="modal-close" type="button" aria-label="Close">✕</button>
+    </div>
+
+    <form id="createUserForm" novalidate>
+      <div class="user-form-grid">
+        <div class="user-field full">
+          <label for="newUserName">Full Name</label>
+          <input id="newUserName" type="text" autocomplete="name" placeholder="Enter full name" maxlength="100" required>
+          <small>Use the name that should appear in the system.</small>
+        </div>
+
+        <div class="user-field full">
+          <label for="newUserEmail">Email Address</label>
+          <input id="newUserEmail" type="email" autocomplete="email" placeholder="name@company.com" maxlength="160" required>
+          <small>This email will be used for login.</small>
+        </div>
+
+        <div class="user-field">
+          <label for="newUserPassword">Password</label>
+          <div class="password-wrap">
+            <input id="newUserPassword" type="password" autocomplete="new-password" placeholder="Minimum 6 characters" minlength="6" required>
+            <button id="toggleNewUserPassword" class="password-toggle" type="button">Show</button>
+          </div>
+        </div>
+
+        <div class="user-field">
+          <label for="newUserConfirmPassword">Confirm Password</label>
+          <input id="newUserConfirmPassword" type="password" autocomplete="new-password" placeholder="Re-enter password" minlength="6" required>
+        </div>
+
+        <div class="user-field">
+          <label for="newUserRole">Role</label>
+          <select id="newUserRole">
+            <option value="User">User</option>
+            <option value="Admin">Admin</option>
+          </select>
+        </div>
+
+        <div class="user-field">
+          <label for="newUserStatus">Initial Status</label>
+          <select id="newUserStatus">
+            <option value="Approved">Approved</option>
+            <option value="Pending">Pending</option>
+            <option value="Disabled">Disabled</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="createUserMsg" class="user-form-msg" aria-live="polite"></div>
+
+      <div class="user-modal-footer">
+        <button id="cancelCreateUser" class="secondary" type="button">Cancel</button>
+        <button id="submitCreateUser" class="primary create-user-submit" type="submit">
+          <span class="submit-icon">＋</span> Create User
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- PLAYBACK -->
+<div id="playbackModal" class="camera-modal hidden">
+  <div class="camera-panel playback-panel">
+    <div class="card-head"><div><h2 id="playbackTitle">Video Playback</h2><div id="playbackMeta" class="muted"></div></div><button id="closePlayback" class="secondary">✕ Close</button></div>
+    <iframe id="playbackFrame" src="about:blank" allow="autoplay; fullscreen; encrypted-media" allowfullscreen></iframe>
+    <div class="actions"><button id="playbackDownload" class="primary">⬇ Download Video</button></div>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+
+<script>
+(function(){
+  if(!("serviceWorker" in navigator)) return;
+  navigator.serviceWorker.getRegistrations().then(function(regs){
+    return Promise.all(regs.map(function(reg){
+      if(!reg.active || !reg.active.scriptURL.includes("sw-v2.9.36.js")) return reg.unregister();
+      return false;
+    }));
+  }).catch(function(){})
+  .finally(function(){
+    navigator.serviceWorker.register("./sw-v2.9.36.js?v=2.9.29", {scope:"./"}).catch(function(){});
+  });
+})();
+</script>
+</body>
+</html>
