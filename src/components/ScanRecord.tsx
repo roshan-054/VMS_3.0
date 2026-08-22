@@ -610,6 +610,15 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       timerIntervalRef.current = null;
     }
     setIsRecording(false);
+    // Also turn off camera as requested
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setIsCameraActive(false);
   };
 
   const handleFinishRecording = async () => {
@@ -863,26 +872,15 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                     </button>
                   )}
 
-                  {!isRecording ? (
-                    <button
-                      id="close-camera-btn"
-                      onClick={stopCamera}
-                      className="px-3.5 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm rounded-lg font-medium transition inline-flex items-center gap-1.5"
-                      title="Turns off camera sensor"
-                    >
-                      Turn Off Camera
-                    </button>
-                  ) : (
-                    <button
-                      id="stop-recording-alt-btn"
-                      onClick={stopRecording}
-                      className="px-3.5 py-2.5 bg-red-100 hover:bg-red-200 text-red-700 text-sm rounded-lg font-semibold transition inline-flex items-center gap-1.5 border border-red-300"
-                      title="Stop Recording"
-                    >
-                      <StopCircle className="w-4 h-4 text-red-600" />
-                      Stop Recording
-                    </button>
-                  )}
+                  <button
+                    id="stop-recording-secondary-btn"
+                    onClick={stopRecording}
+                    className="px-3.5 py-2.5 bg-red-100 hover:bg-red-200 text-red-700 text-sm rounded-lg font-semibold transition inline-flex items-center gap-1.5 border border-red-300 shadow-xs"
+                    title="Stop active order recording"
+                  >
+                    <StopCircle className="w-4 h-4 text-red-600" />
+                    Stop Recording
+                  </button>
 
                   <button
                     id="trigger-autofocus-btn"
