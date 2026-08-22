@@ -37,7 +37,7 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast }) => {
   const [typeFilter, setTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [packerFilter, setPackerFilter] = useState('');
-  const [datePreset, setDatePreset] = useState<'all' | 'today' | 'yesterday' | '7days' | '30days' | 'custom'>('all');
+  const [datePreset, setDatePreset] = useState<'all' | 'today' | 'yesterday' | '7days' | '30days' | 'custom'>('today');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [sortBy, setSortBy] = useState<'newest' | 'oldest' | 'orderId' | 'fileSize'>('newest');

@@ -216,7 +216,7 @@ export async function triggerUploadWorker(): Promise<void> {
 
     const totalBytes = currentItem.blob.size;
     const configuredChunkSize = getStoredChunkSize();
-    const chunkSize = configuredChunkSize > 0 ? configuredChunkSize : 8 * 1024 * 1024;
+    const chunkSize = configuredChunkSize > 0 ? configuredChunkSize : 16 * 1024 * 1024;
     const totalChunks = Math.max(1, Math.ceil(totalBytes / chunkSize));
     const driveFolderId = currentItem.driveFolderId || getStoredDriveFolderId();
 

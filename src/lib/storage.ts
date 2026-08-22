@@ -52,8 +52,8 @@ export function setStoredDriveFolderId(folderId: string): void {
   localStorage.setItem('ops_drive_folder_id', folderId.trim());
 }
 
-export const DEFAULT_CHUNK_SIZE_MB = 8;
-export const DEFAULT_CHUNK_SIZE_BYTES = DEFAULT_CHUNK_SIZE_MB * 1024 * 1024; // 8 MB
+export const DEFAULT_CHUNK_SIZE_MB = 16;
+export const DEFAULT_CHUNK_SIZE_BYTES = DEFAULT_CHUNK_SIZE_MB * 1024 * 1024; // 16 MB
 
 export function getStoredChunkSize(): number {
   const stored = localStorage.getItem('ops_upload_chunk_size_mb');
@@ -157,6 +157,24 @@ export async function dbGetQueueItem(id: string): Promise<QueueItem | null> {
     const req = store.get(id);
     req.onsuccess = () => resolve(req.result || null);
     req.onerror = () => reject(req.error);
+  });
+}
+
+export async function clearAllApplicationCacheAndStorage(): Promise<void> {
+  const keysToRemove: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && (key.startsWith('ops_') || key.startsWith('vms_') || key.includes('user') || key.includes('auth'))) {
+      keysToRemove.push(key);
+    }
+  }
+  keysToRemove.forEach(k => localStorage.removeItem(k));
+
+  await new Promise<void>((resolve) => {
+    const req = indexedDB.deleteDatabase(DB_NAME);
+    req.onsuccess = () => resolve();
+    req.onerror = () => resolve();
+    req.onblocked = () => resolve();
   });
 }
 

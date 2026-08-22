@@ -397,8 +397,8 @@ export function App() {
       </aside>
 
       {/* Main Content Viewport */}
-      <div className="flex-1 flex flex-col min-w-0">
-        <main className="flex-1 w-full px-4 sm:px-6 lg:px-8 py-6">
+      <div className="flex-1 flex flex-col min-w-0 bg-slate-100">
+        <main className="flex-1 w-full px-4 sm:px-6 lg:px-10 xl:px-12 py-6 transition-all duration-200">
           {activeTab === 'record' && (
             <ScanRecord
               onQueueUpdated={refreshQueueBadge}

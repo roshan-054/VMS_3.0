@@ -57,7 +57,8 @@ import {
   getStoredAutoUpload,
   setStoredAutoUpload,
   getStoredAutoResume,
-  setStoredAutoResume
+  setStoredAutoResume,
+  clearAllApplicationCacheAndStorage
 } from '../lib/storage';
 
 interface AdminPanelProps {
@@ -112,6 +113,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
   const [chunkSizeMbInput, setChunkSizeMbInput] = useState<number>(getStoredChunkSizeMb());
   const [autoUploadInput, setAutoUploadInput] = useState<boolean>(getStoredAutoUpload());
   const [autoResumeInput, setAutoResumeInput] = useState<boolean>(getStoredAutoResume());
+  const [clearingCache, setClearingCache] = useState(false);
   const [testingHealth, setTestingHealth] = useState(false);
   const [healthStatus, setHealthStatus] = useState<{
     tested: boolean;
@@ -137,6 +139,24 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
     setAutoUploadInput(getStoredAutoUpload());
     setAutoResumeInput(getStoredAutoResume());
   }, []);
+
+  const handleClearAllCache = async () => {
+    if (!window.confirm('Are you sure you want to clear all local application cache, IndexedDB queue, and stored session settings? This will reset local storage to defaults.')) {
+      return;
+    }
+    try {
+      setClearingCache(true);
+      await clearAllApplicationCacheAndStorage();
+      onShowToast('All local cache and storage cleared successfully. Reloading…', 'success');
+      setTimeout(() => {
+        window.location.reload();
+      }, 1000);
+    } catch (err) {
+      onShowToast('Failed to clear cache', 'error');
+    } finally {
+      setClearingCache(false);
+    }
+  };
 
   const handleTestBackendConnection = async () => {
     if (!apiUrlInput.trim().startsWith('https://script.google.com/macros/s/')) {
@@ -688,6 +708,39 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                       className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 disabled:opacity-50"
                     />
                   </label>
+                </div>
+              </div>
+
+              {/* 5. Cache & Storage Management */}
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
+                <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+                  <div className="w-7 h-7 rounded-lg bg-red-50 text-red-600 flex items-center justify-center font-bold text-xs">
+                    5
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900">Cache & Storage Management</h4>
+                    <p className="text-[11px] text-slate-500">Remove cached application state and local queue data</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-xs font-semibold text-slate-800 block">
+                      Clear All Local Cache & Storage
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      Wipes local storage configs, temporary session flags, and IndexedDB upload queues
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={clearingCache}
+                    onClick={handleClearAllCache}
+                    className="px-4 py-2.5 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                  >
+                    <Trash2 className={`w-4 h-4 ${clearingCache ? 'animate-spin' : ''}`} />
+                    {clearingCache ? 'Clearing…' : 'Clear All Cache'}
+                  </button>
                 </div>
               </div>
 
