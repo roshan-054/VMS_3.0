@@ -66,8 +66,22 @@ export async function checkBackendHealth(customUrl?: string): Promise<{
   service?: string;
   error?: string;
 }> {
+  const url = customUrl || getStoredApiUrl();
+  // Try POST request via requestApi first
   try {
-    const url = customUrl || getStoredApiUrl();
+    const res = await requestApi<{ status?: string; version?: string; service?: string }>(
+      'health',
+      {},
+      url
+    );
+    if (res && res.success) {
+      return { online: true, version: res.version || '2.9.38', service: res.service || 'Order Packing Video System' };
+    }
+  } catch (err) {
+    // Fall back to GET fetch
+  }
+
+  try {
     const res = await fetch(url, {
       redirect: 'follow',
       cache: 'no-store',
@@ -80,7 +94,7 @@ export async function checkBackendHealth(customUrl?: string): Promise<{
     }
     return { online: false, error: data.error || 'Unexpected response status' };
   } catch (err: any) {
-    return { online: false, error: err.message || 'Connection failed' };
+    return { online: false, error: err.message || 'Connection failed. Please ensure Web App is deployed with "Anyone" access.' };
   }
 }
 
