@@ -76,27 +76,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
     }
   };
 
-  const handleQuickDefaultAdmin = async () => {
-    setEmail('admin@vms.local');
-    setPassword('admin123');
-    setLoading(true);
-    setAuthError(null);
 
-    try {
-      const res = await requestApi<{ token: string; user: User }>('login', {
-        email: 'admin@vms.local',
-        password: 'admin123',
-      });
-      setStoredToken(res.token);
-      onLoginSuccess(res.user);
-      onShowToast('Logged in as Administrator!', 'success');
-    } catch (err) {
-      // Fallback local admin login
-      handleBypassDemo();
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleAutoRegisterCurrent = async () => {
     if (!email.trim() || !password.trim()) {
@@ -192,24 +172,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
             </button>
           </div>
 
-          {/* Quick Admin Access Preset */}
-          {!isSignup && (
-            <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-xl flex items-center justify-between gap-2">
-              <div className="text-xs text-blue-900">
-                <span className="font-semibold block">Default Admin Login:</span>
-                <span className="font-mono text-[11px] text-blue-700">admin@vms.local / admin123</span>
-              </div>
-              <button
-                type="button"
-                onClick={handleQuickDefaultAdmin}
-                disabled={loading}
-                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-xs transition shrink-0 flex items-center gap-1"
-              >
-                <KeyRound className="w-3 h-3" />
-                Quick Login
-              </button>
-            </div>
-          )}
+
 
           <form onSubmit={handleSubmit} className="space-y-4">
             {isSignup && (

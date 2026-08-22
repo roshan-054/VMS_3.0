@@ -106,21 +106,21 @@ export function canUserManageUsers(user: User | null | undefined): boolean {
   if (!user) return false;
   if (isMasterAdmin(user)) return true;
   if (user.role === 'User') return false;
-  return getUserPermissions(user).canManageUsers === true;
+  return isAdmin(user) || getUserPermissions(user).canManageUsers === true;
 }
 
 export function canUserManageSettings(user: User | null | undefined): boolean {
   if (!user) return false;
   if (isMasterAdmin(user)) return true;
   if (user.role === 'User') return false;
-  return getUserPermissions(user).canManageSettings === true;
+  return isAdmin(user) || getUserPermissions(user).canManageSettings === true;
 }
 
 export function canUserManageBranding(user: User | null | undefined): boolean {
   if (!user) return false;
   if (isMasterAdmin(user)) return true;
   if (user.role === 'User') return false;
-  return getUserPermissions(user).canManageBranding === true;
+  return isAdmin(user) || getUserPermissions(user).canManageBranding === true;
 }
 
 export function canUserAccessSearch(user: User | null | undefined): boolean {
