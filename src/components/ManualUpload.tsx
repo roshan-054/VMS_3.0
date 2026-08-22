@@ -41,6 +41,7 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
   const [stagedFiles, setStagedFiles] = useState<StagedFile[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [bulkPlatform, setBulkPlatform] = useState<PlatformType>('Amazon');
+  const [bulkCustomPlatform, setBulkCustomPlatform] = useState<string>('CustomShop');
   const [bulkRecordingType, setBulkRecordingType] = useState<RecordingType>('Forward');
   const [bulkDate, setBulkDate] = useState<string>(() => new Date().toLocaleDateString('en-CA'));
   const [isProcessing, setIsProcessing] = useState(false);
@@ -185,13 +186,13 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
       prev.map((f) => ({
         ...f,
         platform: bulkPlatform,
+        customPlatform: bulkPlatform === 'Custom' ? bulkCustomPlatform : f.customPlatform,
         recordingType: bulkRecordingType,
         recordingDate: bulkDate || f.recordingDate,
       }))
     );
-    onShowToast(`Applied ${bulkPlatform} (${bulkRecordingType}, Date: ${bulkDate}) to all staged files`, 'info');
-    // Recheck duplicates with updated meta
-    checkDuplicatesForBatch(stagedFiles.map((f) => ({ ...f, platform: bulkPlatform, recordingType: bulkRecordingType })));
+    onShowToast(`Applied ${bulkPlatform === 'Custom' ? bulkCustomPlatform : bulkPlatform} (${bulkRecordingType}) to all staged files`, 'info');
+    checkDuplicatesForBatch(stagedFiles.map((f) => ({ ...f, platform: bulkPlatform })));
   };
 
   const handleRemoveStaged = (id: string) => {
@@ -348,6 +349,15 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
                 <option value="JioMart">JioMart</option>
                 <option value="Custom">Custom</option>
               </select>
+              {bulkPlatform === 'Custom' && (
+                <input
+                  type="text"
+                  placeholder="Enter custom platform name"
+                  value={bulkCustomPlatform}
+                  onChange={(e) => setBulkCustomPlatform(e.target.value)}
+                  className="bg-white border border-slate-300 rounded px-2 py-1 text-slate-800 text-xs font-medium w-32 focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                />
+              )}
             </div>
             <div className="flex items-center gap-1.5">
               <span className="text-slate-500">Type:</span>
@@ -417,11 +427,12 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
               </div>
 
               {/* Editable Meta Controls */}
-              <div className="flex flex-wrap items-center gap-2 min-w-0 flex-1">
-                <div className="flex-1 min-w-[110px]">
+              <div className="flex flex-wrap items-center gap-2.5 min-w-0 flex-1">
+                <div className="flex-1 min-w-[180px]">
+                  <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">Order ID / Custom ID</label>
                   <input
                     type="text"
-                    placeholder="Order ID"
+                    placeholder="Type Order ID..."
                     value={item.orderId}
                     onChange={(e) => {
                       const val = e.target.value;
@@ -429,60 +440,87 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
                         prev.map((f) => (f.id === item.id ? { ...f, orderId: val } : f))
                       );
                     }}
-                    className="w-full px-2 py-1 bg-slate-50 border border-slate-300 rounded font-mono text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="w-full px-3 py-1.5 bg-white border-2 border-slate-300 rounded-md font-mono text-xs text-slate-900 shadow-2xs focus:bg-white focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-100 transition"
                   />
                 </div>
 
-                <select
-                  aria-label="Platform"
-                  value={item.platform}
-                  onChange={(e) => {
-                    const val = e.target.value as PlatformType;
-                    setStagedFiles((prev) =>
-                      prev.map((f) => (f.id === item.id ? { ...f, platform: val } : f))
-                    );
-                  }}
-                  className="px-2 py-1 bg-slate-50 border border-slate-300 rounded text-xs text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-                >
-                  <option value="Amazon">Amazon</option>
-                  <option value="D2C">D2C</option>
-                  <option value="JioMart">JioMart</option>
-                  <option value="Custom">Custom</option>
-                </select>
-
-                <select
-                  aria-label="Recording Type"
-                  value={item.recordingType}
-                  onChange={(e) => {
-                    const val = e.target.value as RecordingType;
-                    setStagedFiles((prev) =>
-                      prev.map((f) => (f.id === item.id ? { ...f, recordingType: val } : f))
-                    );
-                  }}
-                  className="px-2 py-1 bg-slate-50 border border-slate-300 rounded text-xs text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-                >
-                  <option value="Forward">Forward</option>
-                  <option value="Return">Return</option>
-                </select>
-
-                <div className="flex items-center gap-1" title="Target Date Folder (YYYY-MM-DD)">
-                  <input
-                    type="date"
-                    aria-label="Target Recording Date"
-                    value={item.recordingDate}
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">Platform</label>
+                  <select
+                    aria-label="Platform"
+                    value={item.platform}
                     onChange={(e) => {
-                      const val = e.target.value;
+                      const val = e.target.value as PlatformType;
                       setStagedFiles((prev) =>
-                        prev.map((f) => (f.id === item.id ? { ...f, recordingDate: val } : f))
+                        prev.map((f) => (f.id === item.id ? { ...f, platform: val } : f))
                       );
                     }}
-                    className="px-2 py-1 bg-slate-50 border border-slate-300 rounded text-xs text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  />
+                    className="px-2.5 py-1.5 bg-white border border-slate-300 rounded-md text-xs font-medium text-slate-800 shadow-2xs focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-500 transition"
+                  >
+                    <option value="Amazon">Amazon</option>
+                    <option value="D2C">D2C</option>
+                    <option value="JioMart">JioMart</option>
+                    <option value="Custom">Custom</option>
+                  </select>
+                </div>
+
+                {item.platform === 'Custom' && (
+                  <div className="min-w-[120px]">
+                    <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">Custom Name</label>
+                    <input
+                      type="text"
+                      placeholder="Type custom..."
+                      value={item.customPlatform || ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setStagedFiles((prev) =>
+                          prev.map((f) => (f.id === item.id ? { ...f, customPlatform: val } : f))
+                        );
+                      }}
+                      className="w-full px-2.5 py-1.5 bg-white border-2 border-slate-300 rounded-md text-xs text-slate-900 shadow-2xs focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-100 transition"
+                    />
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">Type</label>
+                  <select
+                    aria-label="Recording Type"
+                    value={item.recordingType}
+                    onChange={(e) => {
+                      const val = e.target.value as RecordingType;
+                      setStagedFiles((prev) =>
+                        prev.map((f) => (f.id === item.id ? { ...f, recordingType: val } : f))
+                      );
+                    }}
+                    className="px-2.5 py-1.5 bg-white border border-slate-300 rounded-md text-xs font-medium text-slate-800 shadow-2xs focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-500 transition"
+                  >
+                    <option value="Forward">Forward</option>
+                    <option value="Return">Return</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">Date</label>
+                  <div className="flex items-center gap-1" title="Target Date Folder (YYYY-MM-DD)">
+                    <input
+                      type="date"
+                      aria-label="Target Recording Date"
+                      value={item.recordingDate}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setStagedFiles((prev) =>
+                          prev.map((f) => (f.id === item.id ? { ...f, recordingDate: val } : f))
+                        );
+                      }}
+                      className="px-2.5 py-1.5 bg-white border border-slate-300 rounded-md text-xs font-medium text-slate-800 shadow-2xs focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-500 transition"
+                    />
+                  </div>
                 </div>
 
                 {item.isDuplicate && (
                   <span
-                    className="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded border border-amber-300 flex items-center gap-1 shrink-0"
+                    className="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-1 rounded border border-amber-300 flex items-center gap-1 shrink-0 self-end mt-4"
                     title="This Order ID has already been recorded in Google Drive & Sheet."
                   >
                     <AlertTriangle className="w-3 h-3 text-amber-600" />

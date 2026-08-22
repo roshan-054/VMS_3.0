@@ -688,6 +688,11 @@ function uploadChunk_(p){
           const orderSh = sheet_(CONFIG.ORDER_LOG_SHEET);
           orderSh.appendRow([new Date(), s.order, s.platform, s.packerEmail, fid, playback, '', 'Completed', s.type, s.queueJobId, s.mime, 'READY']);
           applyDuplicateConditionalFormatting_(orderSh);
+          try {
+            sheet_(CONFIG.DOWNLOAD_LOG_SHEET).appendRow([
+              new Date(), s.order, s.platform, s.packerEmail, s.name, s.size, 'Recording & Cloud Upload Complete', s.type
+            ]);
+          } catch(_) {}
           updateUploadLog_(uploadId, 'Completed', 100, fid, 'Completed', '');
           if(s.reservationKey) releaseReservation_(s.reservationKey);
           cleanupOldStartedUploads_(s.order, uploadId);
@@ -731,6 +736,11 @@ function uploadChunk_(p){
       const orderSh = sheet_(CONFIG.ORDER_LOG_SHEET);
       orderSh.appendRow([new Date(), s.order, s.platform, s.packerEmail, fid, playback, '', 'Completed', s.type, s.queueJobId, s.mime, 'READY']);
       applyDuplicateConditionalFormatting_(orderSh);
+      try {
+        sheet_(CONFIG.DOWNLOAD_LOG_SHEET).appendRow([
+          new Date(), s.order, s.platform, s.packerEmail, s.name, s.size, 'Recording & Cloud Upload Complete', s.type
+        ]);
+      } catch(_) {}
       updateUploadLog_(uploadId, 'Completed', 100, fid, 'Completed', '');
       if(s.reservationKey) releaseReservation_(s.reservationKey);
       cleanupOldStartedUploads_(s.order, uploadId);
@@ -791,6 +801,11 @@ function uploadChunk_(p){
         const orderSh = sheet_(CONFIG.ORDER_LOG_SHEET);
         orderSh.appendRow([new Date(), s.order, s.platform, s.packerEmail, fid, playback, '', 'Completed', s.type, s.queueJobId, s.mime, 'READY']);
         applyDuplicateConditionalFormatting_(orderSh);
+        try {
+          sheet_(CONFIG.DOWNLOAD_LOG_SHEET).appendRow([
+            new Date(), s.order, s.platform, s.packerEmail, s.name, s.size, 'Recording & Cloud Upload Complete', s.type
+          ]);
+        } catch(_) {}
         updateUploadLog_(uploadId, 'Completed', 100, fid, 'Completed', '');
         if(s.reservationKey) releaseReservation_(s.reservationKey);
         cleanupOldStartedUploads_(s.order, uploadId);

@@ -51,7 +51,8 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
   onNavigateToLogs
 }) => {
   const [queue, setQueue] = useState<QueueItem[]>([]);
-  const [showManualUpload, setShowManualUpload] = useState(false);
+  const [selectedQueueIds, setSelectedQueueIds] = useState<string[]>([]);
+  const [showManualUpload, setShowManualUpload] = useState(true);
   const [isApplyingFormatting, setIsApplyingFormatting] = useState(false);
   const [filterType, setFilterType] = useState<'all' | 'pending' | 'duplicate' | 'completed'>('all');
   const [autoUploadEnabled, setAutoUploadEnabled] = useState(getStoredAutoUpload());
@@ -174,6 +175,32 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
     onShowToast(`Cleared ${completed.length} completed items from queue.`, 'info');
   };
 
+  const handleToggleSelectAll = () => {
+    if (selectedQueueIds.length === filteredQueue.length) {
+      setSelectedQueueIds([]);
+    } else {
+      setSelectedQueueIds(filteredQueue.map((i) => i.id));
+    }
+  };
+
+  const handleToggleSelectOne = (id: string) => {
+    setSelectedQueueIds((prev) =>
+      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
+    );
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedQueueIds.length === 0) return;
+    for (const id of selectedQueueIds) {
+      await dbDeleteQueueItem(id);
+    }
+    const count = selectedQueueIds.length;
+    setSelectedQueueIds([]);
+    loadQueue();
+    onQueueChanged();
+    onShowToast(`Successfully deleted ${count} selected queue item(s).`, 'success');
+  };
+
   const currentChunkSizeMb = getStoredChunkSizeMb();
 
   // Filtered queue items
@@ -269,7 +296,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
             }`}
           >
             <PlusCircle className="w-3.5 h-3.5 text-blue-600" />
-            {showManualUpload ? 'Hide Backup Upload' : 'Manual Upload (Backup)'}
+            {showManualUpload ? 'Hide Custom Bulk Upload' : 'Custom Bulk Upload'}
           </button>
 
           {onNavigateToLogs && (
@@ -435,6 +462,37 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
         </div>
       ) : (
         <div className="space-y-3">
+          {/* Bulk Select & Delete Bar */}
+          <div className="bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-200 flex items-center justify-between text-xs">
+            <div className="flex items-center gap-2.5">
+              <input
+                type="checkbox"
+                aria-label="Select all queue items"
+                checked={selectedQueueIds.length > 0 && selectedQueueIds.length === filteredQueue.length}
+                onChange={handleToggleSelectAll}
+                className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+              />
+              <span className="font-semibold text-slate-700">
+                Select All ({filteredQueue.length} items)
+              </span>
+              {selectedQueueIds.length > 0 && (
+                <span className="bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-bold text-[11px]">
+                  {selectedQueueIds.length} selected
+                </span>
+              )}
+            </div>
+
+            {selectedQueueIds.length > 0 && (
+              <button
+                onClick={handleBulkDelete}
+                className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Delete Selected ({selectedQueueIds.length})
+              </button>
+            )}
+          </div>
+
           {filteredQueue.map((item) => {
             const isItemUploading = workerState.isProcessing && workerState.activeItemId === item.id;
             const fileSizeMb = item.fileSize ? (item.fileSize / (1024 * 1024)).toFixed(2) : '0';
@@ -444,20 +502,30 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
               (item.status === 'failed' &&
                 (item.error?.toLowerCase().includes('duplicate') ||
                   item.stage?.toLowerCase().includes('duplicate')));
+            const isSelected = selectedQueueIds.includes(item.id);
 
             return (
               <div
                 key={item.id}
                 className={`bg-white rounded-2xl border p-4 shadow-xs flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 transition ${
-                  isDuplicate
+                  isSelected
+                    ? 'border-blue-400 bg-blue-50/30 ring-1 ring-blue-400'
+                    : isDuplicate
                     ? 'border-red-300 bg-red-50/20'
                     : isItemUploading
                     ? 'border-blue-300 ring-2 ring-blue-500/10'
                     : 'border-slate-200 hover:border-slate-300'
                 }`}
               >
-                {/* Left: Video Details */}
-                <div className="flex items-start gap-3.5 min-w-0 flex-1">
+                {/* Left: Checkbox & Video Details */}
+                <div className="flex items-start gap-3 min-w-0 flex-1">
+                  <input
+                    type="checkbox"
+                    aria-label={`Select queue item ${item.orderId}`}
+                    checked={isSelected}
+                    onChange={() => handleToggleSelectOne(item.id)}
+                    className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer mt-3 shrink-0"
+                  />
                   <div
                     className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${
                       isDuplicate

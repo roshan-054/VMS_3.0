@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import { PlatformType, RecordingType, QueueItem } from '../types';
 import { dbPutQueue } from '../lib/storage';
-import { checkDuplicate } from '../lib/api';
+import { checkDuplicate, requestApi } from '../lib/api';
 import { triggerUploadWorker } from '../lib/uploadWorker';
 
 interface ScanRecordProps {

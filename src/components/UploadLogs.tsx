@@ -729,7 +729,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
               className="px-3.5 py-2 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 rounded-xl text-xs font-semibold transition inline-flex items-center gap-1.5 shadow-2xs cursor-pointer"
             >
               <HardDrive className="w-3.5 h-3.5 text-blue-600" />
-              Manage Active Queue
+              Manage Active Queue & Bulk Upload
             </button>
           )}
 
