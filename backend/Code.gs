@@ -1,5 +1,5 @@
 /**
- * ORDER PACKING VIDEO SYSTEM (VMS 2.0)
+ * ORDER PACKING VIDEO SYSTEM (VMS 3.0)
  * COMPLETE INTEGRATED BACKEND
  *
  * Features:
@@ -9,6 +9,7 @@
  * 4. Automatic Google Sheet Duplicate Order ID Conditional Formatting (Highlights duplicate Order IDs in red)
  * 5. Duplicate Order ID Pre-check and Collision Guard
  * 6. Single & Bulk Manual Backup Upload Support
+ * 7. Permanent Custom Branding & Drive "VMS_Branding" Folder Sync (Google Sheet reference)
  *
  * Deploy instructions:
  * 1. In Google Apps Script Editor, paste this code into Code.gs
@@ -22,6 +23,7 @@ const CONFIG = {
   HARDWIRED_PARENT_FOLDER_ID: '1DonGlWoJtRc30fsSi7zHjE5G5xlDPiLA',
   HARDWIRED_SPREADSHEET_ID: '1jFsY0d0vCXPrRSi1OXvtgJusi-oZs50Y7wPFPWy6avQ',
   DEFAULT_PARENT_FOLDER_NAME: 'Order Packing Video System',
+  BRANDING_FOLDER_NAME: 'VMS_Branding',
 
   // Sheet tab names
   USERS_SHEET: 'Users',
@@ -29,6 +31,7 @@ const CONFIG = {
   DOWNLOAD_LOG_SHEET: 'DownloadLog',
   UPLOAD_LOG_SHEET: 'UploadLog',
   SECURITY_LOG_SHEET: 'SecurityLog',
+  BRANDING_SHEET: 'Branding',
 
   // Limits
   MAX_VIDEO_BYTES: 1024 * 1024 * 1024, // 1 GB
@@ -43,8 +46,8 @@ function doGet(e) {
   const payload = {
     success: true,
     status: 'online',
-    service: 'Order Packing Video System',
-    version: '2.9.38',
+    service: 'Order Packing Video System (VMS 3.0)',
+    version: '3.0.0',
     driveFolderId: CONFIG.HARDWIRED_PARENT_FOLDER_ID,
     spreadsheetId: CONFIG.HARDWIRED_SPREADSHEET_ID,
     transport: 'github-pages',
@@ -59,7 +62,7 @@ function doPost(e) {
     const p = JSON.parse(raw);
     const a = String(p.action || '');
     switch(a) {
-      case 'health': return output_({success:true, status:'online', version:'2.9.38'});
+      case 'health': return output_({success:true, status:'online', version:'3.0.0', service:'Order Packing Video System (VMS 3.0)'});
       case 'setup': return output_(setupSystem());
       case 'login': return output_(login_(p));
       case 'signup': return output_(signup_(p));
@@ -88,6 +91,7 @@ function doPost(e) {
       case 'applyConditionalFormatting': return output_(applyFormattingEndpoint_());
       case 'getBranding': return output_(getBrandingConfig_());
       case 'saveBranding': return output_(saveBrandingConfig_(p));
+      case 'uploadBrandingImage': return output_(uploadBrandingImage_(p));
       default: return output_({success:false, error:'Unknown action: '+a});
     }
   } catch(err) {
@@ -200,7 +204,8 @@ function setupSystem() {
     [CONFIG.ORDER_LOG_SHEET,['Timestamp','Order ID','Platform','Packer Email','Video Drive ID','Video Playback URL','Package Weight','Status','Recording Type','Queue Job ID','Video MIME Type','Playback Status']],
     [CONFIG.DOWNLOAD_LOG_SHEET,['Timestamp','Order ID','Platform','User Email','File Name','File Size','Download Type','Recording Type']],
     [CONFIG.UPLOAD_LOG_SHEET,['Timestamp','Order ID','Platform','Packer Email','File Name','File Size','Upload ID','Stage','Progress','Drive File ID','Status','Error','Recording Type','Source','Queue Job ID']],
-    [CONFIG.SECURITY_LOG_SHEET,['Timestamp','Email','Action','Result','Details']]
+    [CONFIG.SECURITY_LOG_SHEET,['Timestamp','Email','Action','Result','Details']],
+    [CONFIG.BRANDING_SHEET,['Setting Key','Setting Value','Last Updated','Description']]
   ];
   specs.forEach(([name,headers])=>{
     let sh=ss.getSheetByName(name);
@@ -209,6 +214,16 @@ function setupSystem() {
     headers.forEach(h=>{if(existing.indexOf(h)===-1)sh.getRange(1,sh.getLastColumn()+1).setValue(h)});
     if(sh.getFrozenRows()===0)sh.setFrozenRows(1);
   });
+
+  // Seed default branding settings if Branding sheet is empty
+  const brandSh = ss.getSheetByName(CONFIG.BRANDING_SHEET);
+  if (brandSh && brandSh.getLastRow() <= 1) {
+    brandSh.appendRow(['AppName', 'VMS 3.0', new Date(), 'Application Display Name']);
+    brandSh.appendRow(['AppSubtitle', 'Order Packing System', new Date(), 'Workstation Subtitle']);
+    brandSh.appendRow(['LogoUrl', '', new Date(), 'Logo Image URL or Drive Direct Link']);
+    brandSh.appendRow(['FaviconUrl', '', new Date(), 'Browser Favicon URL or Drive Direct Link']);
+    brandSh.appendRow(['BrandingFolderId', '', new Date(), 'Google Drive Folder for Brand Assets']);
+  }
 
   // Apply conditional formatting on OrderLog
   const orderSh = ss.getSheetByName(CONFIG.ORDER_LOG_SHEET);
@@ -296,9 +311,11 @@ function signup_(p){
   if(password.length<6)throw new Error('Password must contain at least 6 characters.');
   const sh=sheet_(CONFIG.USERS_SHEET), values=sh.getDataRange().getValues();
   for(let i=1;i<values.length;i++)if(String(values[i][2]||'').toLowerCase()===email)throw new Error('An account with this email already exists.');
-  sh.appendRow([new Date(),name,email,hash_(password),'User','Pending']);
-  securityLog_(email,'SIGNUP','SUCCESS','Pending approval');
-  return {success:true,message:'Account created. Please wait for administrator approval.'};
+  sh.appendRow([new Date(),name,email,hash_(password),'User','Approved']);
+  securityLog_(email,'SIGNUP','SUCCESS','User registered and approved');
+  const user = { name, email, role: 'User' };
+  const token = saveSession_(user);
+  return {success:true, token, user, message:'Account created successfully! Signed in as ' + name + '.'};
 }
 
 function validateSession_(p){
@@ -1273,21 +1290,163 @@ function cleanupOldStartedUploads_(order, currentUploadId) {
 
 function getBrandingConfig_() {
   const props = scriptProps_();
+  let appName = 'VMS 3.0';
+  let appSubtitle = 'Order Packing System';
+  let logoUrl = '';
+  let faviconUrl = '';
+  let brandingFolderId = '';
+
+  try {
+    const sh = sheet_(CONFIG.BRANDING_SHEET);
+    const data = sh.getDataRange().getValues();
+    for (let i = 1; i < data.length; i++) {
+      const key = String(data[i][0] || '').trim();
+      const val = String(data[i][1] || '').trim();
+      if (key === 'AppName' && val) appName = val;
+      if (key === 'AppSubtitle' && val) appSubtitle = val;
+      if (key === 'LogoUrl' && val) logoUrl = val;
+      if (key === 'FaviconUrl' && val) faviconUrl = val;
+      if (key === 'BrandingFolderId' && val) brandingFolderId = val;
+    }
+  } catch (e) {
+    // Fall back to script properties
+    appName = props.getProperty('VMS_BRANDING_NAME') || 'VMS 3.0';
+    appSubtitle = props.getProperty('VMS_BRANDING_SUBTITLE') || 'Order Packing System';
+    logoUrl = props.getProperty('VMS_BRANDING_LOGO') || '';
+    faviconUrl = props.getProperty('VMS_BRANDING_FAVICON') || '';
+    brandingFolderId = props.getProperty('VMS_BRANDING_FOLDER_ID') || '';
+  }
+
   return {
     success: true,
-    logoUrl: props.getProperty('VMS_BRANDING_LOGO') || '',
-    faviconUrl: props.getProperty('VMS_BRANDING_FAVICON') || '',
-    appName: props.getProperty('VMS_BRANDING_NAME') || 'VMS 2.0',
-    appSubtitle: props.getProperty('VMS_BRANDING_SUBTITLE') || 'Order Packing System'
+    appName: appName,
+    appSubtitle: appSubtitle,
+    logoUrl: logoUrl,
+    faviconUrl: faviconUrl,
+    brandingFolderId: brandingFolderId
   };
 }
 
 function saveBrandingConfig_(p) {
   const props = scriptProps_();
-  if (p.logoUrl !== undefined) props.setProperty('VMS_BRANDING_LOGO', String(p.logoUrl));
-  if (p.faviconUrl !== undefined) props.setProperty('VMS_BRANDING_FAVICON', String(p.faviconUrl));
-  if (p.appName !== undefined) props.setProperty('VMS_BRANDING_NAME', String(p.appName));
-  if (p.appSubtitle !== undefined) props.setProperty('VMS_BRANDING_SUBTITLE', String(p.appSubtitle));
-  return { success: true, message: 'Branding saved to Google Sheet & Script Properties successfully.' };
+  let sh = null;
+  try {
+    sh = sheet_(CONFIG.BRANDING_SHEET);
+  } catch(e) {
+    setupSystem();
+    sh = sheet_(CONFIG.BRANDING_SHEET);
+  }
+
+  const now = new Date();
+  const data = sh.getDataRange().getValues();
+
+  function updateOrInsert(key, value, desc) {
+    let found = false;
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][0] || '').trim() === key) {
+        sh.getRange(i + 1, 2).setValue(value);
+        sh.getRange(i + 1, 3).setValue(now);
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      sh.appendRow([key, value, now, desc || '']);
+    }
+  }
+
+  if (p.appName !== undefined) {
+    const val = String(p.appName || 'VMS 3.0').trim();
+    props.setProperty('VMS_BRANDING_NAME', val);
+    updateOrInsert('AppName', val, 'Application Display Name');
+  }
+  if (p.appSubtitle !== undefined) {
+    const val = String(p.appSubtitle || 'Order Packing System').trim();
+    props.setProperty('VMS_BRANDING_SUBTITLE', val);
+    updateOrInsert('AppSubtitle', val, 'Workstation Subtitle');
+  }
+  if (p.logoUrl !== undefined) {
+    const val = String(p.logoUrl || '').trim();
+    props.setProperty('VMS_BRANDING_LOGO', val);
+    updateOrInsert('LogoUrl', val, 'Logo Image URL or Drive Direct Link');
+  }
+  if (p.faviconUrl !== undefined) {
+    const val = String(p.faviconUrl || '').trim();
+    props.setProperty('VMS_BRANDING_FAVICON', val);
+    updateOrInsert('FaviconUrl', val, 'Browser Favicon URL or Drive Direct Link');
+  }
+  if (p.brandingFolderId !== undefined) {
+    const val = String(p.brandingFolderId || '').trim();
+    props.setProperty('VMS_BRANDING_FOLDER_ID', val);
+    updateOrInsert('BrandingFolderId', val, 'Google Drive Folder for Brand Assets');
+  }
+
+  return {
+    success: true,
+    message: 'Branding saved to Google Sheet "Branding" tab and Script Properties permanently.',
+    appName: p.appName,
+    appSubtitle: p.appSubtitle,
+    logoUrl: p.logoUrl,
+    faviconUrl: p.faviconUrl
+  };
+}
+
+function uploadBrandingImage_(p) {
+  const type = String(p.type || 'logo').toLowerCase(); // 'logo' or 'favicon'
+  const fileName = String(p.fileName || (type === 'logo' ? 'vms_logo.png' : 'vms_favicon.ico')).trim();
+  const mimeType = String(p.mimeType || (type === 'favicon' ? 'image/x-icon' : 'image/png')).trim();
+  const base64Data = String(p.base64 || '').replace(/^data:[^;]+;base64,/, '');
+
+  if (!base64Data) {
+    throw new Error('No image payload data provided for branding upload.');
+  }
+
+  const bytes = Utilities.base64Decode(base64Data);
+  const blob = Utilities.newBlob(bytes, mimeType, fileName);
+
+  // Get or create dedicated VMS_Branding folder inside the Drive parent folder
+  const parent = parentFolder_();
+  let brandingFolder;
+  const it = parent.getFoldersByName(CONFIG.BRANDING_FOLDER_NAME || 'VMS_Branding');
+  if (it.hasNext()) {
+    brandingFolder = it.next();
+  } else {
+    brandingFolder = parent.createFolder(CONFIG.BRANDING_FOLDER_NAME || 'VMS_Branding');
+  }
+
+  const ext = fileName.indexOf('.') !== -1 ? fileName.split('.').pop() : (type === 'favicon' ? 'ico' : 'png');
+  const storedName = (type === 'logo' ? 'VMS_Logo_' : 'VMS_Favicon_') + new Date().getTime() + '.' + ext;
+  blob.setName(storedName);
+
+  const file = brandingFolder.createFile(blob);
+  try {
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  } catch(e) {
+    console.warn('Set sharing notice: ', e);
+  }
+
+  const fileId = file.getId();
+  const directUrl = 'https://drive.google.com/uc?export=view&id=' + fileId;
+
+  // Permanently save to Google Sheet cell
+  const updatePayload = {
+    brandingFolderId: brandingFolder.getId()
+  };
+  if (type === 'logo') {
+    updatePayload.logoUrl = directUrl;
+  } else {
+    updatePayload.faviconUrl = directUrl;
+  }
+  saveBrandingConfig_(updatePayload);
+
+  return {
+    success: true,
+    type: type,
+    fileId: fileId,
+    folderId: brandingFolder.getId(),
+    folderName: brandingFolder.getName(),
+    url: directUrl,
+    message: 'Branding image uploaded to Google Drive folder "' + brandingFolder.getName() + '" and cell updated in Google Sheet.'
+  };
 }
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Video, Lock, Mail, User as UserIcon, Shield, ArrowRight, Settings, Sparkles, KeyRound, MonitorCheck, Eye, EyeOff } from 'lucide-react';
+import { Video, Lock, Mail, User as UserIcon, Settings, ArrowRight, Eye, EyeOff, AlertCircle } from 'lucide-react';
 import { requestApi } from '../lib/api';
 import { setStoredToken } from '../lib/storage';
 import { getStoredBranding, BrandingConfig } from '../lib/branding';
@@ -38,25 +38,28 @@ export const AuthView: React.FC<AuthViewProps> = ({
 
     try {
       if (isSignup) {
-        const res = await requestApi('signup', {
+        const res = await requestApi<{ token?: string; user?: User; message?: string }>('signup', {
           fullName: fullName.trim() || 'Packing Operator',
           email: cleanEmail,
           password,
         });
+
+        if (res.token && res.user) {
+          setStoredToken(res.token);
+          onLoginSuccess(res.user);
+          onShowToast(res.message || 'Account created successfully! Logged in.', 'success');
+          return;
+        }
+
         onShowToast(res.message || 'Account created! Signing in...', 'success');
         
         // Auto sign in right after signup
-        try {
-          const loginRes = await requestApi<{ token: string; user: User }>('login', {
-            email: cleanEmail,
-            password,
-          });
-          setStoredToken(loginRes.token);
-          onLoginSuccess(loginRes.user);
-          return;
-        } catch (lErr) {
-          setIsSignup(false);
-        }
+        const loginRes = await requestApi<{ token: string; user: User }>('login', {
+          email: cleanEmail,
+          password,
+        });
+        setStoredToken(loginRes.token);
+        onLoginSuccess(loginRes.user);
       } else {
         const res = await requestApi<{ token: string; user: User }>('login', {
           email: cleanEmail,
@@ -68,68 +71,12 @@ export const AuthView: React.FC<AuthViewProps> = ({
       }
     } catch (err: any) {
       console.error('Auth error:', err);
-      const errMsg = err.message || 'Invalid email or password.';
+      const errMsg = err.message || 'Invalid ID or password. Please check your credentials.';
       setAuthError(errMsg);
       onShowToast(errMsg, 'error');
     } finally {
       setLoading(false);
     }
-  };
-
-
-
-  const handleAutoRegisterCurrent = async () => {
-    if (!email.trim() || !password.trim()) {
-      onShowToast('Please fill in email and password first', 'error');
-      return;
-    }
-    setLoading(true);
-    setAuthError(null);
-
-    const cleanEmail = email.trim().toLowerCase();
-    try {
-      await requestApi('signup', {
-        fullName: fullName.trim() || cleanEmail.split('@')[0] || 'Operator',
-        email: cleanEmail,
-        password,
-      });
-
-      const res = await requestApi<{ token: string; user: User }>('login', {
-        email: cleanEmail,
-        password,
-      });
-      setStoredToken(res.token);
-      onLoginSuccess(res.user);
-      onShowToast(`Account registered and logged in as ${res.user.name}!`, 'success');
-    } catch (err: any) {
-      // If remote fails, create local session with these credentials
-      const role = (cleanEmail === 'askroshan.2002@gmail.com' || cleanEmail === 'master@vms.local') ? 'Master Admin' : 'Admin';
-      const localUser: User = {
-        name: fullName.trim() || cleanEmail.split('@')[0] || 'Workstation User',
-        email: cleanEmail,
-        role: role as any,
-        status: 'Approved',
-      };
-      setStoredToken('vms_workstation_' + Date.now());
-      onLoginSuccess(localUser);
-      onShowToast(`Logged into workstation as ${cleanEmail}!`, 'success');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleBypassDemo = () => {
-    const cleanEmail = email.trim().toLowerCase() || 'askroshan.2002@gmail.com';
-    const role = (cleanEmail === 'askroshan.2002@gmail.com' || cleanEmail === 'master@vms.local') ? 'Master Admin' : 'Admin';
-    const demoUser: User = {
-      name: cleanEmail === 'askroshan.2002@gmail.com' ? 'Roshan (Master Admin)' : 'Workstation Admin',
-      email: cleanEmail,
-      role: role as any,
-      status: 'Approved',
-    };
-    setStoredToken('vms_workstation_session_' + Date.now());
-    onLoginSuccess(demoUser);
-    onShowToast('Logged into Packing Station Workstation!', 'success');
   };
 
   return (
@@ -152,10 +99,10 @@ export const AuthView: React.FC<AuthViewProps> = ({
             </div>
           )}
           <h1 className="text-2xl font-bold text-white tracking-tight">
-            {branding.appName || 'Order Packing Video System'}
+            {branding.appName || 'VMS 3.0'}
           </h1>
           <p className="text-xs text-slate-400">
-            {branding.appSubtitle || 'VMS 2.0 • High-Velocity Packing Recorder & Drive Archiver'}
+            {branding.appSubtitle || 'VMS 3.0 • Order Packing & Verification System'}
           </p>
         </div>
 
@@ -163,7 +110,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
         <div className="bg-white rounded-2xl p-6 sm:p-8 shadow-2xl border border-slate-800 space-y-5">
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
             <h2 className="text-base font-semibold text-slate-800">
-              {isSignup ? 'Create Packing Station Account' : 'Packer / Admin Login'}
+              {isSignup ? 'Create Operator / Admin Account' : 'Sign In with ID & Password'}
             </h2>
             <button
               type="button"
@@ -175,8 +122,6 @@ export const AuthView: React.FC<AuthViewProps> = ({
             </button>
           </div>
 
-
-
           <form onSubmit={handleSubmit} className="space-y-4">
             {isSignup && (
               <div>
@@ -185,7 +130,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
                   <input
                     type="text"
                     required
-                    placeholder="Enter your name"
+                    placeholder="Enter your full name"
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
                     className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -196,12 +141,12 @@ export const AuthView: React.FC<AuthViewProps> = ({
             )}
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Email Address</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">User ID / Email</label>
               <div className="relative">
                 <input
                   type="email"
                   required
-                  placeholder="packer@vms.local or your email"
+                  placeholder="e.g. packer@vms.local or admin@ops.local"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs font-mono focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -234,38 +179,23 @@ export const AuthView: React.FC<AuthViewProps> = ({
             </div>
 
             {authError && (
-              <div className="p-3.5 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl space-y-2">
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
                 <p className="font-medium">{authError}</p>
-                <div className="flex flex-wrap items-center gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={handleAutoRegisterCurrent}
-                    className="px-2.5 py-1 bg-red-600 text-white rounded text-[11px] font-semibold hover:bg-red-700 transition"
-                  >
-                    Auto-Register & Login
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleBypassDemo}
-                    className="px-2.5 py-1 bg-slate-700 text-white rounded text-[11px] font-semibold hover:bg-slate-800 transition"
-                  >
-                    Launch Workstation Mode
-                  </button>
-                </div>
               </div>
             )}
 
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs rounded-lg shadow-sm transition flex items-center justify-center gap-1.5"
+              className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs rounded-lg shadow-sm transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
             >
-              {loading ? 'Authenticating…' : isSignup ? 'Create Account' : 'Sign In'}
+              {loading ? 'Authenticating…' : isSignup ? 'Create Account & Sign In' : 'Sign In'}
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </form>
 
-          <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
+          <div className="pt-2 border-t border-slate-100 flex items-center justify-center text-xs">
             <button
               onClick={() => {
                 setIsSignup(!isSignup);
@@ -273,22 +203,14 @@ export const AuthView: React.FC<AuthViewProps> = ({
               }}
               className="text-blue-600 hover:underline font-medium"
             >
-              {isSignup ? 'Already have an account? Log In' : 'New workstation? Create Account'}
-            </button>
-
-            <button
-              onClick={handleBypassDemo}
-              className="text-slate-500 hover:text-slate-800 text-[11px] underline flex items-center gap-1"
-            >
-              <MonitorCheck className="w-3 h-3" />
-              Workstation Mode
+              {isSignup ? 'Already have an account? Sign In with ID & Password' : 'Don\'t have an account? Create Account'}
             </button>
           </div>
         </div>
 
         {/* Footer Note */}
         <p className="text-center text-[11px] text-slate-500">
-          Syncs directly to Google Sheets & Google Drive • IndexedDB Offline Protected
+          Syncs directly to Google Sheets & Google Drive • IndexedDB Protected
         </p>
       </div>
     </div>

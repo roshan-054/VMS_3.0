@@ -91,7 +91,7 @@ export const SetupModal: React.FC<SetupModalProps> = ({ isOpen, onClose, onShowT
             </div>
             <div>
               <h3 className="text-base font-semibold text-slate-800">Apps Script & Drive Setup</h3>
-              <p className="text-xs text-slate-400">Connect VMS 2.0 to your Google Cloud & Sheet backend</p>
+              <p className="text-xs text-slate-400">Connect VMS 3.0 to your Google Cloud & Sheet backend</p>
             </div>
           </div>
           <button

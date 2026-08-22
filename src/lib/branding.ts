@@ -7,13 +7,13 @@ export interface BrandingConfig {
   appSubtitle: string;
 }
 
-const BRANDING_STORAGE_KEY = 'ops_vms_branding_config_v2';
+const BRANDING_STORAGE_KEY = 'ops_vms_branding_config_v3';
 const BRANDING_CHANGE_EVENT = 'ops_vms_branding_changed';
 
 export const DEFAULT_BRANDING: BrandingConfig = {
   logoUrl: '',
   faviconUrl: '',
-  appName: 'VMS 2.0',
+  appName: 'VMS 3.0',
   appSubtitle: 'Order Packing System',
 };
 
@@ -129,7 +129,7 @@ export function resetStoredBranding(): BrandingConfig {
     // Ignore
   }
   applyFavicon('');
-  document.title = 'VMS 2.0 - Order Packing Video System';
+  document.title = 'VMS 3.0 - Order Packing Video System';
 
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(BRANDING_CHANGE_EVENT, { detail: DEFAULT_BRANDING }));

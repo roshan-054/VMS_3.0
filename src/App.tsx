@@ -229,7 +229,7 @@ export function App() {
             )}
             <div>
               <span className="font-bold text-slate-900 tracking-tight text-sm">
-                {branding.appName || 'VMS 2.0'}
+                {branding.appName || 'VMS 3.0'}
               </span>
               <span className="ml-1.5 bg-blue-50 text-blue-700 text-[10px] font-semibold px-1.5 py-0.5 rounded border border-blue-200">
                 Drive
@@ -294,7 +294,7 @@ export function App() {
             <div>
               <div className="flex items-center gap-1.5">
                 <span className="font-bold text-slate-900 tracking-tight text-base truncate max-w-[120px]">
-                  {branding.appName || 'VMS 2.0'}
+                  {branding.appName || 'VMS 3.0'}
                 </span>
                 <span className="bg-blue-50 text-blue-700 text-[10px] font-bold px-1.5 py-0.5 rounded border border-blue-200">
                   DRIVE

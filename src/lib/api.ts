@@ -296,3 +296,30 @@ export async function saveCloudBranding(config: {
     return false;
   }
 }
+
+export async function uploadBrandingImage(params: {
+  type: 'logo' | 'favicon';
+  fileName: string;
+  mimeType: string;
+  base64: string;
+}): Promise<{
+  success: boolean;
+  url: string;
+  fileId?: string;
+  folderId?: string;
+  message?: string;
+}> {
+  const res = await requestApi<{
+    url: string;
+    fileId?: string;
+    folderId?: string;
+    message?: string;
+  }>('uploadBrandingImage', params);
+  return {
+    success: true,
+    url: res.url,
+    fileId: res.fileId,
+    folderId: res.folderId,
+    message: res.message,
+  };
+}

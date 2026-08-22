@@ -31,7 +31,7 @@ import {
   Lock
 } from 'lucide-react';
 import { User, UserRole, UserStatus, AdminPermissions } from '../types';
-import { requestApi, checkBackendHealth } from '../lib/api';
+import { requestApi, checkBackendHealth, uploadBrandingImage } from '../lib/api';
 import {
   isMasterAdmin,
   getUserPermissions,
@@ -106,6 +106,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
   const [faviconUrlInput, setFaviconUrlInput] = useState('');
   const [appNameInput, setAppNameInput] = useState(branding.appName);
   const [appSubtitleInput, setAppSubtitleInput] = useState(branding.appSubtitle);
+  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  const [isUploadingFavicon, setIsUploadingFavicon] = useState(false);
 
   // Settings & Drive Integration State
   const [apiUrlInput, setApiUrlInput] = useState(getStoredApiUrl());
@@ -344,18 +346,48 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
       return;
     }
 
-    if (file.size > 2 * 1024 * 1024) {
-      onShowToast('Image size should be less than 2MB for fast loading', 'error');
+    if (file.size > 5 * 1024 * 1024) {
+      onShowToast('Image size should be less than 5MB', 'error');
       return;
     }
 
+    setIsUploadingLogo(true);
+    onShowToast('Uploading logo to Google Drive "VMS_Branding" folder & saving to Google Sheet...', 'info');
+
     const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      setLogoUrlInput(result);
-      onShowToast('Logo loaded for preview. Click "Save Branding Changes" to persist.', 'info');
+    reader.onload = async () => {
+      const base64 = reader.result as string;
+      try {
+        const res = await uploadBrandingImage({
+          type: 'logo',
+          fileName: file.name,
+          mimeType: file.type,
+          base64: base64,
+        });
+
+        if (res.success && res.url) {
+          setLogoUrlInput(res.url);
+          const updated = setStoredBranding({
+            logoUrl: res.url,
+            faviconUrl: faviconUrlInput.trim(),
+            appName: appNameInput.trim() || 'VMS 3.0',
+            appSubtitle: appSubtitleInput.trim() || 'Order Packing System',
+          });
+          setBranding(updated);
+          onShowToast('Logo stored in Google Drive "VMS_Branding" folder and saved permanently in Google Sheet!', 'success');
+        } else {
+          setLogoUrlInput(base64);
+          onShowToast('Logo loaded locally. Click "Save Branding Changes" to persist.', 'info');
+        }
+      } catch (err: any) {
+        setLogoUrlInput(base64);
+        onShowToast(`Logo loaded locally: ${err?.message || 'Drive upload offline, saved locally.'}`, 'info');
+      } finally {
+        setIsUploadingLogo(false);
+      }
     };
     reader.onerror = () => {
+      setIsUploadingLogo(false);
       onShowToast('Failed to read image file', 'error');
     };
     reader.readAsDataURL(file);
@@ -366,22 +398,52 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
     if (!file) return;
 
     if (!file.type.startsWith('image/') && !file.name.endsWith('.ico')) {
-      onShowToast('Please upload a valid icon file (ICO, PNG, SVG)', 'error');
+      onShowToast('Please upload a valid icon file (ICO, PNG, SVG, JPG)', 'error');
       return;
     }
 
-    if (file.size > 1024 * 1024) {
-      onShowToast('Favicon file should be less than 1MB', 'error');
+    if (file.size > 2 * 1024 * 1024) {
+      onShowToast('Favicon file should be less than 2MB', 'error');
       return;
     }
+
+    setIsUploadingFavicon(true);
+    onShowToast('Uploading favicon to Google Drive "VMS_Branding" folder & saving to Google Sheet...', 'info');
 
     const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      setFaviconUrlInput(result);
-      onShowToast('Favicon loaded for preview. Click "Save Branding Changes" to apply.', 'info');
+    reader.onload = async () => {
+      const base64 = reader.result as string;
+      try {
+        const res = await uploadBrandingImage({
+          type: 'favicon',
+          fileName: file.name,
+          mimeType: file.type || 'image/x-icon',
+          base64: base64,
+        });
+
+        if (res.success && res.url) {
+          setFaviconUrlInput(res.url);
+          const updated = setStoredBranding({
+            logoUrl: logoUrlInput.trim(),
+            faviconUrl: res.url,
+            appName: appNameInput.trim() || 'VMS 3.0',
+            appSubtitle: appSubtitleInput.trim() || 'Order Packing System',
+          });
+          setBranding(updated);
+          onShowToast('Favicon stored in Google Drive "VMS_Branding" folder and saved permanently in Google Sheet!', 'success');
+        } else {
+          setFaviconUrlInput(base64);
+          onShowToast('Favicon loaded locally. Click "Save Branding Changes" to apply.', 'info');
+        }
+      } catch (err: any) {
+        setFaviconUrlInput(base64);
+        onShowToast(`Favicon loaded locally: ${err?.message || 'Drive upload offline, saved locally.'}`, 'info');
+      } finally {
+        setIsUploadingFavicon(false);
+      }
     };
     reader.onerror = () => {
+      setIsUploadingFavicon(false);
       onShowToast('Failed to read favicon file', 'error');
     };
     reader.readAsDataURL(file);
@@ -392,11 +454,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
     const updated = setStoredBranding({
       logoUrl: logoUrlInput.trim(),
       faviconUrl: faviconUrlInput.trim(),
-      appName: appNameInput.trim() || 'VMS 2.0',
+      appName: appNameInput.trim() || 'VMS 3.0',
       appSubtitle: appSubtitleInput.trim() || 'Order Packing System',
     });
     setBranding(updated);
-    onShowToast('Branding & Favicon saved permanently! Changes applied across the app.', 'success');
+    onShowToast('Branding & Favicon saved permanently! Synced with Google Sheet and applied across the app.', 'success');
   };
 
   const handleResetToDefaultBranding = () => {
@@ -877,18 +939,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                       id="logo-file-input"
                     />
                     <div
-                      onClick={() => { if(!disableBranding) logoFileInputRef.current?.click(); }}
-                      className={`border-2 border-dashed border-slate-300 rounded-xl p-5 text-center transition flex flex-col items-center justify-center gap-2 group ${disableBranding ? 'opacity-50 cursor-not-allowed' : 'hover:border-blue-500 hover:bg-blue-50/50 cursor-pointer'}`}
+                      onClick={() => { if(!disableBranding && !isUploadingLogo) logoFileInputRef.current?.click(); }}
+                      className={`border-2 border-dashed border-slate-300 rounded-xl p-5 text-center transition flex flex-col items-center justify-center gap-2 group ${disableBranding || isUploadingLogo ? 'opacity-50 cursor-not-allowed' : 'hover:border-blue-500 hover:bg-blue-50/50 cursor-pointer'}`}
                     >
                       <div className="w-10 h-10 rounded-full bg-slate-100 group-hover:bg-blue-100 text-slate-500 group-hover:text-blue-600 flex items-center justify-center transition">
-                        <Upload className="w-5 h-5" />
+                        {isUploadingLogo ? (
+                          <RefreshCw className="w-5 h-5 animate-spin text-blue-600" />
+                        ) : (
+                          <Upload className="w-5 h-5" />
+                        )}
                       </div>
                       <div>
                         <span className="text-xs font-semibold text-blue-600 hover:underline">
-                          Click to browse and upload company logo
+                          {isUploadingLogo ? 'Uploading to Drive "VMS_Branding" folder...' : 'Click to browse and upload company logo'}
                         </span>
                         <p className="text-[11px] text-slate-400 mt-0.5">
-                          PNG, SVG, JPG, or WebP (transparent background recommended, max 2MB)
+                          PNG, SVG, JPG, or WebP (Saved to Drive & Google Sheet permanently)
                         </p>
                       </div>
                     </div>
@@ -983,18 +1049,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                       id="favicon-file-input"
                     />
                     <div
-                      onClick={() => { if (!disableBranding) faviconFileInputRef.current?.click(); }}
-                      className={`border-2 border-dashed border-slate-300 rounded-xl p-5 text-center transition flex flex-col items-center justify-center gap-2 group ${disableBranding ? 'opacity-50 cursor-not-allowed' : 'hover:border-blue-500 hover:bg-blue-50/50 cursor-pointer'}`}
+                      onClick={() => { if (!disableBranding && !isUploadingFavicon) faviconFileInputRef.current?.click(); }}
+                      className={`border-2 border-dashed border-slate-300 rounded-xl p-5 text-center transition flex flex-col items-center justify-center gap-2 group ${disableBranding || isUploadingFavicon ? 'opacity-50 cursor-not-allowed' : 'hover:border-blue-500 hover:bg-blue-50/50 cursor-pointer'}`}
                     >
                       <div className="w-10 h-10 rounded-full bg-slate-100 group-hover:bg-blue-100 text-slate-500 group-hover:text-blue-600 flex items-center justify-center transition">
-                        <Globe className="w-5 h-5" />
+                        {isUploadingFavicon ? (
+                          <RefreshCw className="w-5 h-5 animate-spin text-blue-600" />
+                        ) : (
+                          <Globe className="w-5 h-5" />
+                        )}
                       </div>
                       <div>
                         <span className="text-xs font-semibold text-blue-600 hover:underline">
-                          Click to browse and upload browser favicon
+                          {isUploadingFavicon ? 'Uploading to Drive "VMS_Branding" folder...' : 'Click to browse and upload browser favicon'}
                         </span>
                         <p className="text-[11px] text-slate-400 mt-0.5">
-                          ICO, PNG, or SVG (square 1:1 format, 32x32 to 512x512 recommended)
+                          ICO, PNG, or SVG (Saved to Drive & Google Sheet permanently)
                         </p>
                       </div>
                     </div>
@@ -1064,7 +1134,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                       disabled={disableBranding}
                       value={appNameInput}
                       onChange={(e) => setAppNameInput(e.target.value)}
-                      placeholder="e.g. VMS 2.0 or ACME Packing"
+                      placeholder="e.g. VMS 3.0 or ACME Packing"
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-semibold disabled:opacity-50"
                     />
                   </div>
@@ -1140,7 +1210,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                       </div>
                     )}
                     <span className="text-xs text-slate-200 font-medium truncate">
-                      {appNameInput || 'VMS 2.0'} - Order Packing Video
+                      {appNameInput || 'VMS 3.0'} - Order Packing Video
                     </span>
                     <span className="text-slate-500 text-xs ml-auto">✕</span>
                   </div>
@@ -1169,7 +1239,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                     <div>
                       <div className="flex items-center gap-1.5">
                         <span className="font-bold text-slate-900 tracking-tight text-sm">
-                          {appNameInput || 'VMS 2.0'}
+                          {appNameInput || 'VMS 3.0'}
                         </span>
                         <span className="bg-blue-50 text-blue-700 text-[10px] font-bold px-1.5 py-0.2 rounded border border-blue-200">
                           DRIVE
@@ -1202,7 +1272,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                         </div>
                       )}
                       <span className="font-bold text-slate-900 text-xs">
-                        {appNameInput || 'VMS 2.0'}
+                        {appNameInput || 'VMS 3.0'}
                       </span>
                     </div>
                     <span className="bg-emerald-50 text-emerald-700 text-[10px] font-medium px-2 py-0.5 rounded-full border border-emerald-200">

@@ -1,6 +1,6 @@
 {
-  "name": "VMS 2.0",
-  "description": "Order Packing Video System (VMS 2.0) with GitHub and Google Apps Script integration",
+  "name": "VMS 3.0",
+  "description": "Order Packing Video Management System (VMS 3.0) with Google Drive and Sheet backend integration",
   "requestFramePermissions": ["camera", "microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
