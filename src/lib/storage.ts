@@ -10,10 +10,18 @@ export function getStoredApiUrl(): string {
     'https://script.google.com/macros/s/AKfycbwZFm2t3o2vLFC7blM1AOzmgDMxB0UiZ_scWkLYasPGn7iB9XPoCCIi3mggjObpaMP_/exec'
   ).trim();
 
-  // Automatically fix any versioned deployment URLs (e.g. ending in /1, /2, /exec/1) to use /exec
+  // Automatically clean and normalize any Google Apps Script URL (removing version numbers like /1, /2, /exec/1)
   if (url.includes('/macros/s/')) {
-    url = url.replace(/\/exec\/\d+\/?$/, '/exec');
-    url = url.replace(/\/\d+\/?$/, '/exec');
+    const [baseUrl, query] = url.split('?');
+    let cleanedBase = baseUrl
+      .replace(/\/exec\/\d+\/?$/, '/exec')
+      .replace(/\/\d+\/?$/, '/exec');
+    
+    if (!cleanedBase.endsWith('/exec')) {
+      cleanedBase = cleanedBase.replace(/\/+$/, '') + '/exec';
+    }
+    
+    url = query ? `${cleanedBase}?${query}` : cleanedBase;
     localStorage.setItem('ops_api_url', url);
   }
   return url;
@@ -22,8 +30,16 @@ export function getStoredApiUrl(): string {
 export function setStoredApiUrl(url: string): void {
   let cleaned = url.trim();
   if (cleaned.includes('/macros/s/')) {
-    cleaned = cleaned.replace(/\/exec\/\d+\/?$/, '/exec');
-    cleaned = cleaned.replace(/\/\d+\/?$/, '/exec');
+    const [baseUrl, query] = cleaned.split('?');
+    let cleanedBase = baseUrl
+      .replace(/\/exec\/\d+\/?$/, '/exec')
+      .replace(/\/\d+\/?$/, '/exec');
+    
+    if (!cleanedBase.endsWith('/exec')) {
+      cleanedBase = cleanedBase.replace(/\/+$/, '') + '/exec';
+    }
+    
+    cleaned = query ? `${cleanedBase}?${query}` : cleanedBase;
   }
   localStorage.setItem('ops_api_url', cleaned);
 }

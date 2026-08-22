@@ -506,9 +506,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    Web App URL (/exec)
-                  </label>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Web App URL (/exec)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const defaultUrl = 'https://script.google.com/macros/s/AKfycbwZFm2t3o2vLFC7blM1AOzmgDMxB0UiZ_scWkLYasPGn7iB9XPoCCIi3mggjObpaMP_/exec';
+                        setApiUrlInput(defaultUrl);
+                        setStoredApiUrl(defaultUrl);
+                        onShowToast('Reset API URL to clean /exec endpoint', 'success');
+                      }}
+                      className="text-[11px] text-blue-600 hover:underline font-medium cursor-pointer"
+                    >
+                      Reset to Default /exec URL
+                    </button>
+                  </div>
                   <input
                     type="url"
                     required

@@ -86,6 +86,8 @@ function doPost(e) {
       case 'removeUploadLog': return output_(deleteLogEntry_(p));
       case 'deleteOrderLog': return output_(deleteLogEntry_(p));
       case 'applyConditionalFormatting': return output_(applyFormattingEndpoint_());
+      case 'getBranding': return output_(getBrandingConfig_());
+      case 'saveBranding': return output_(saveBrandingConfig_(p));
       default: return output_({success:false, error:'Unknown action: '+a});
     }
   } catch(err) {
@@ -1267,5 +1269,25 @@ function cleanupOldStartedUploads_(order, currentUploadId) {
       }
     }
   } catch(_) {}
+}
+
+function getBrandingConfig_() {
+  const props = scriptProps_();
+  return {
+    success: true,
+    logoUrl: props.getProperty('VMS_BRANDING_LOGO') || '',
+    faviconUrl: props.getProperty('VMS_BRANDING_FAVICON') || '',
+    appName: props.getProperty('VMS_BRANDING_NAME') || 'VMS 2.0',
+    appSubtitle: props.getProperty('VMS_BRANDING_SUBTITLE') || 'Order Packing System'
+  };
+}
+
+function saveBrandingConfig_(p) {
+  const props = scriptProps_();
+  if (p.logoUrl !== undefined) props.setProperty('VMS_BRANDING_LOGO', String(p.logoUrl));
+  if (p.faviconUrl !== undefined) props.setProperty('VMS_BRANDING_FAVICON', String(p.faviconUrl));
+  if (p.appName !== undefined) props.setProperty('VMS_BRANDING_NAME', String(p.appName));
+  if (p.appSubtitle !== undefined) props.setProperty('VMS_BRANDING_SUBTITLE', String(p.appSubtitle));
+  return { success: true, message: 'Branding saved to Google Sheet & Script Properties successfully.' };
 }
 

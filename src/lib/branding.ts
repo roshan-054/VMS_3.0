@@ -1,3 +1,5 @@
+import { fetchCloudBranding, saveCloudBranding } from './api';
+
 export interface BrandingConfig {
   logoUrl: string;
   faviconUrl: string;
@@ -14,6 +16,43 @@ export const DEFAULT_BRANDING: BrandingConfig = {
   appName: 'VMS 2.0',
   appSubtitle: 'Order Packing System',
 };
+
+let isCloudSynced = false;
+
+export async function syncCloudBranding(): Promise<BrandingConfig> {
+  const local = getStoredBranding();
+  try {
+    const cloud = await fetchCloudBranding();
+    if (cloud && (cloud.logoUrl || cloud.faviconUrl || cloud.appName)) {
+      const merged: BrandingConfig = {
+        logoUrl: cloud.logoUrl || local.logoUrl,
+        faviconUrl: cloud.faviconUrl || local.faviconUrl,
+        appName: cloud.appName || local.appName,
+        appSubtitle: cloud.appSubtitle || local.appSubtitle,
+      };
+      localStorage.setItem(BRANDING_STORAGE_KEY, JSON.stringify(merged));
+      applyFavicon(merged.faviconUrl);
+      if (merged.appName) {
+        document.title = `${merged.appName} - Order Packing Video System`;
+      }
+      isCloudSynced = true;
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent(BRANDING_CHANGE_EVENT, { detail: merged }));
+      }
+      return merged;
+    }
+  } catch (err) {
+    // offline or unconfigured
+  }
+  return local;
+}
+
+// Trigger background cloud sync on module load
+if (typeof window !== 'undefined') {
+  setTimeout(() => {
+    syncCloudBranding().catch(() => {});
+  }, 1000);
+}
 
 export function getStoredBranding(): BrandingConfig {
   try {
@@ -63,6 +102,9 @@ export function setStoredBranding(config: Partial<BrandingConfig>): BrandingConf
   } catch (err) {
     console.error('Failed to persist branding config:', err);
   }
+
+  // Persist to Google Sheet / backend in background
+  saveCloudBranding(updated).catch(() => {});
 
   // Update dynamic document title and favicon
   if (updated.faviconUrl !== undefined) {

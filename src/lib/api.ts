@@ -257,3 +257,42 @@ export function bytesToBase64(bytes: Uint8Array): string {
   }
   return btoa(binary);
 }
+
+export async function fetchCloudBranding(): Promise<{
+  logoUrl?: string;
+  faviconUrl?: string;
+  appName?: string;
+  appSubtitle?: string;
+} | null> {
+  try {
+    const res = await requestApi<{
+      logoUrl?: string;
+      faviconUrl?: string;
+      appName?: string;
+      appSubtitle?: string;
+    }>('getBranding', {});
+    if (res.success) {
+      return {
+        logoUrl: res.logoUrl || '',
+        faviconUrl: res.faviconUrl || '',
+        appName: res.appName || '',
+        appSubtitle: res.appSubtitle || '',
+      };
+    }
+  } catch (err) {}
+  return null;
+}
+
+export async function saveCloudBranding(config: {
+  logoUrl: string;
+  faviconUrl: string;
+  appName: string;
+  appSubtitle: string;
+}): Promise<boolean> {
+  try {
+    const res = await requestApi('saveBranding', config);
+    return !!res.success;
+  } catch (err) {
+    return false;
+  }
+}
