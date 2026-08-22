@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>VMS - Order Packing Video Management System</title>
+    <script type="text/javascript">
+      // Single Page Apps for GitHub Pages
+      // Redirects 404 to index.html with path preserved in query string or hash
+      var segmentCount = 1;
+      var l = window.location;
+      var repoName = '/VMS_3.0';
+      l.replace(
+        l.protocol + '//' + l.hostname + (l.port ? ':' + l.port : '') +
+        repoName + '/?p=/' +
+        l.pathname.slice(repoName.length).split('/').slice(segmentCount).join('/') +
+        (l.search ? '&q=' + l.search.slice(1).replace(/&/g, '~and~') : '') +
+        l.hash
+      );
+    </script>
+  </head>
+  <body></body>
+</html>
