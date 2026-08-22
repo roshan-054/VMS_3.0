@@ -1207,7 +1207,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                       <td className="px-4 py-3">
                         <span
                           className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold ${
-                            u.role === 'Admin'
+                            u.role === 'Master Admin'
+                              ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                              : u.role === 'Admin'
                               ? 'bg-purple-50 text-purple-700'
                               : 'bg-slate-100 text-slate-700'
                           }`}
@@ -1336,6 +1338,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                   >
                     <option value="User">User / Packer</option>
                     <option value="Admin">Administrator</option>
+                    <option value="Master Admin">Master Admin</option>
                   </select>
                 </div>
 

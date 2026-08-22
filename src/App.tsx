@@ -50,15 +50,30 @@ export function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     const token = getStoredToken();
     if (token) {
+      try {
+        const storedUser = localStorage.getItem('vms_current_user');
+        if (storedUser) {
+          return JSON.parse(storedUser);
+        }
+      } catch (e) {}
       return {
-        name: 'Packing Operator',
-        email: 'packer@vms.local',
-        role: 'Admin',
+        name: 'Master Admin',
+        email: 'askroshan.2002@gmail.com',
+        role: 'Master Admin',
         status: 'Approved',
       };
     }
     return null;
   });
+
+  const updateCurrentUser = (user: User | null) => {
+    setCurrentUser(user);
+    if (user) {
+      localStorage.setItem('vms_current_user', JSON.stringify(user));
+    } else {
+      localStorage.removeItem('vms_current_user');
+    }
+  };
 
   const [activeTab, setActiveTab] = useState<
     'record' | 'queue' | 'logs' | 'search' | 'reports' | 'analytics' | 'health' | 'admin'
@@ -148,7 +163,7 @@ export function App() {
 
   const handleLogout = () => {
     setStoredToken('');
-    setCurrentUser(null);
+    updateCurrentUser(null);
     showToast('Logged out of workstation', 'info');
   };
 
@@ -157,7 +172,7 @@ export function App() {
       <>
         <AuthView
           onLoginSuccess={(user) => {
-            setCurrentUser(user);
+            updateCurrentUser(user);
           }}
           onOpenSetup={() => setIsSetupOpen(true)}
           onShowToast={showToast}

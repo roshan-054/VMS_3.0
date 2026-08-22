@@ -103,10 +103,11 @@ export const AuthView: React.FC<AuthViewProps> = ({
       onShowToast(`Account registered and logged in as ${res.user.name}!`, 'success');
     } catch (err: any) {
       // If remote fails, create local session with these credentials
+      const role = (cleanEmail === 'askroshan.2002@gmail.com' || cleanEmail === 'master@vms.local') ? 'Master Admin' : 'Admin';
       const localUser: User = {
         name: fullName.trim() || cleanEmail.split('@')[0] || 'Workstation User',
         email: cleanEmail,
-        role: 'Admin',
+        role: role as any,
         status: 'Approved',
       };
       setStoredToken('vms_workstation_' + Date.now());
@@ -118,10 +119,12 @@ export const AuthView: React.FC<AuthViewProps> = ({
   };
 
   const handleBypassDemo = () => {
+    const cleanEmail = email.trim().toLowerCase() || 'askroshan.2002@gmail.com';
+    const role = (cleanEmail === 'askroshan.2002@gmail.com' || cleanEmail === 'master@vms.local') ? 'Master Admin' : 'Admin';
     const demoUser: User = {
-      name: 'Workstation Admin',
-      email: email.trim() || 'admin@vms.local',
-      role: 'Admin',
+      name: cleanEmail === 'askroshan.2002@gmail.com' ? 'Roshan (Master Admin)' : 'Workstation Admin',
+      email: cleanEmail,
+      role: role as any,
       status: 'Approved',
     };
     setStoredToken('vms_workstation_session_' + Date.now());
