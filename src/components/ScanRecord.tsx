@@ -702,8 +702,8 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
 
       {/* Main Grid: Camera Preview on Left, Order Form on Right */}
       <div id="scan-record-grid" className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Camera Column (7 Cols on LG) */}
-        <div id="camera-viewport-card" className="lg:col-span-7 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+        {/* Camera Column (8 Cols on LG for larger preview) */}
+        <div id="camera-viewport-card" className="lg:col-span-8 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
           {/* Camera Header Controls */}
           <div className="p-3 bg-slate-900 text-white flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -712,34 +712,47 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                 Packing Lens View
               </span>
             </div>
-            {cameraDevices.length > 1 && (
-              <div className="flex items-center gap-1 text-xs">
-                <SwitchCamera className="w-3.5 h-3.5 text-slate-400" />
-                <select
-                  id="camera-device-select"
-                  aria-label="Camera Device"
-                  className="bg-slate-800 text-slate-200 text-xs rounded px-2 py-1 border border-slate-700 focus:outline-none"
-                  value={selectedDeviceId}
-                  onChange={(e) => {
-                    setSelectedDeviceId(e.target.value);
-                    if (isCameraActive) startCamera(e.target.value);
-                  }}
-                >
-                  {cameraDevices.map((dev, idx) => (
-                    <option key={dev.deviceId || idx} value={dev.deviceId}>
-                      {dev.label || `Camera ${idx + 1}`}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+            
+            <div className="flex items-center gap-2">
+              {cameraDevices.length > 1 && (
+                <div className="flex items-center gap-1 text-xs">
+                  <SwitchCamera className="w-3.5 h-3.5 text-slate-400" />
+                  <select
+                    id="camera-device-select"
+                    aria-label="Camera Device"
+                    className="bg-slate-800 text-slate-200 text-xs rounded px-2 py-1 border border-slate-700 focus:outline-none"
+                    value={selectedDeviceId}
+                    onChange={(e) => {
+                      setSelectedDeviceId(e.target.value);
+                      if (isCameraActive) startCamera(e.target.value);
+                    }}
+                  >
+                    {cameraDevices.map((dev, idx) => (
+                      <option key={dev.deviceId || idx} value={dev.deviceId}>
+                        {dev.label || `Camera ${idx + 1}`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setIsFullScreen(!isFullScreen)}
+                className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded-lg font-medium transition inline-flex items-center gap-1 border border-slate-700"
+                title={isFullScreen ? 'Exit Fullscreen' : 'Expand Preview (Fullscreen)'}
+              >
+                {isFullScreen ? <Minimize2 className="w-3.5 h-3.5 text-amber-400" /> : <Maximize2 className="w-3.5 h-3.5 text-blue-400" />}
+                <span>{isFullScreen ? 'Compact' : 'Expand'}</span>
+              </button>
+            </div>
           </div>
 
           {/* Viewport Box */}
           <div
             id="camera-video-container"
-            className={`relative bg-slate-950 flex items-center justify-center overflow-hidden aspect-video ${
-              isFullScreen ? 'fixed inset-0 z-50 aspect-auto bg-black' : ''
+            className={`relative bg-slate-950 flex items-center justify-center overflow-hidden aspect-video min-h-[440px] ${
+              isFullScreen ? 'fixed inset-0 z-50 aspect-auto bg-black min-h-screen' : ''
             }`}
           >
             {/* Hidden Canvas for Timestamp Stamping & Recording Capture */}
@@ -919,8 +932,8 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
           )}
         </div>
 
-        {/* Order Information Column (5 Cols on LG) */}
-        <div id="order-details-card" className="lg:col-span-5 space-y-4">
+        {/* Order Information Column (4 Cols on LG) */}
+        <div id="order-details-card" className="lg:col-span-4 space-y-4">
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-semibold text-slate-800">Order Information</h3>

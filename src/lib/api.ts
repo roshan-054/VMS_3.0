@@ -37,13 +37,24 @@ export async function requestApi<T = any>(
   try {
     data = JSON.parse(text);
   } catch (err) {
+    if (text.toLowerCase().includes('version') || text.toLowerCase().includes('less than the existing version')) {
+      throw new Error(
+        'Google Apps Script Version Mismatch: Please update your Apps Script Web App URL in "Drive & Script Config" to use the latest deployment endpoint ("/exec" without version numbers).'
+      );
+    }
     throw new Error(
       'Invalid Apps Script response. Please check that the Web App is deployed with "Anyone" access.'
     );
   }
 
   if (!data.success) {
-    throw new Error(data.error || 'Request failed.');
+    const errMsg = data.error || 'Request failed.';
+    if (errMsg.toLowerCase().includes('version') && errMsg.toLowerCase().includes('less than')) {
+      throw new Error(
+        `Google Apps Script Version Error: ${errMsg}. Please update your Web App URL in "Drive & Script Config" to use the latest deployment endpoint ("/exec").`
+      );
+    }
+    throw new Error(errMsg);
   }
 
   return data;
