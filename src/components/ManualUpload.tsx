@@ -18,6 +18,7 @@ import {
 import { PlatformType, RecordingType, QueueItem } from '../types';
 import { dbPutQueue, getStoredDriveFolderId } from '../lib/storage';
 import { checkDuplicate } from '../lib/api';
+import { triggerUploadWorker } from '../lib/uploadWorker';
 
 interface ManualUploadProps {
   onQueueUpdated: () => void;
@@ -248,6 +249,7 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
 
       setStagedFiles([]);
       onQueueUpdated();
+      triggerUploadWorker();
       onShowToast(
         `Successfully queued ${queuedCount} manual video(s) for Google Drive upload into relevant date folders!`,
         'success'
