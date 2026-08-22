@@ -29,7 +29,7 @@ import {
   getStoredAutoUpload,
   setStoredAutoUpload
 } from '../lib/storage';
-import { applySheetConditionalFormatting } from '../lib/api';
+import { applySheetConditionalFormatting, fetchUploadLogs } from '../lib/api';
 import {
   triggerUploadWorker,
   pauseUploadItem,
@@ -67,7 +67,47 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
 
   const loadQueue = async () => {
     try {
-      const items = await dbGetAllQueue();
+      const localItems = await dbGetAllQueue();
+      
+      // Fetch cloud logs from Google Sheets backend so GitHub published portals and new browsers also display all entries
+      let cloudItems: QueueItem[] = [];
+      try {
+        const res = await fetchUploadLogs({ limit: 100 });
+        if (res && Array.isArray(res.logs)) {
+          cloudItems = res.logs.map((log: any) => ({
+            id: log.queueJobId || log.uploadId || `cloud_${log.orderId}_${log.timestamp}`,
+            createdAt: new Date(log.timestamp).getTime() || Date.now(),
+            orderId: log.orderId,
+            platform: log.platform || 'Amazon',
+            recordingType: (log.recordingType as any) || 'Forward',
+            fileName: log.fileName || `Recording_${log.orderId}.mp4`,
+            fileSize: parseInt(String(log.fileSize || '0'), 10) || 0,
+            mimeType: 'video/mp4',
+            source: log.source || 'Cloud Sync',
+            status: log.status.toLowerCase().includes('complete') ? 'completed' : 
+                    log.status.toLowerCase().includes('fail') ? 'failed' : 
+                    log.status.toLowerCase().includes('pend') ? 'pending' : 'uploading',
+            progress: typeof log.progress === 'number' ? log.progress : 100,
+            stage: log.stage || log.status,
+            error: log.error,
+            uploadId: log.uploadId,
+            fileId: log.driveFileId,
+            webViewLink: log.playbackUrl || (log.driveFileId ? `https://drive.google.com/file/d/${log.driveFileId}/view` : undefined),
+          }));
+        }
+      } catch (cloudErr) {
+        // Fallback gracefully if offline or cloud fetch fails
+      }
+
+      const mergedMap = new Map<string, QueueItem>();
+      cloudItems.forEach(item => {
+        mergedMap.set(item.id, item);
+      });
+      localItems.forEach(item => {
+        mergedMap.set(item.id, item);
+      });
+
+      const items = Array.from(mergedMap.values());
       // Sort newest first
       items.sort((a, b) => b.createdAt - a.createdAt);
       setQueue(items);
