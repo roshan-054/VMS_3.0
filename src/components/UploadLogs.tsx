@@ -163,11 +163,9 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
         // Filter out any logs that have been deleted locally
         const currentDeleted = getStoredDeletedKeys();
         const cleanedLogs = res.logs.filter((log) => {
-          const ord = String(log.orderId || '').trim().toLowerCase();
           const up = String(log.uploadId || '').trim().toLowerCase();
           const drv = String(log.driveFileId || '').trim().toLowerCase();
           const qj = String(log.queueJobId || '').trim().toLowerCase();
-          if (ord && currentDeleted.has(ord)) return false;
           if (up && currentDeleted.has(up)) return false;
           if (drv && currentDeleted.has(drv)) return false;
           if (qj && currentDeleted.has(qj)) return false;
@@ -292,53 +290,62 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
     }
 
     try {
-      // 1. Remove matching items from local IndexedDB queue
+      // 1. Remove matching item from local IndexedDB queue
       if (targetQueueId) {
         await dbDeleteQueueItem(targetQueueId).catch(() => {});
       }
       const localMatches = localQueue.filter(
         (q) =>
-          (targetOrderId && q.orderId === targetOrderId) ||
+          (targetDriveId && q.fileId === targetDriveId) ||
           (targetUploadId && (q.uploadId === targetUploadId || q.id === targetUploadId)) ||
-          (targetDriveId && q.fileId === targetDriveId)
+          (targetQueueId && q.id === targetQueueId) ||
+          (!targetDriveId && !targetUploadId && !targetQueueId && targetOrderId && q.orderId === targetOrderId)
       );
       for (const m of localMatches) {
         await dbDeleteQueueItem(m.id).catch(() => {});
       }
 
-      // 2. Persist deleted IDs to prevent reappearing on subsequent fetches
-      const keysToRemember = [targetOrderId, targetUploadId, targetDriveId, targetQueueId].filter(Boolean) as string[];
+      // 2. Persist deleted specific unique IDs (do NOT store generic orderId so other duplicates remain intact)
+      const specificKey = targetDriveId || targetUploadId || targetQueueId;
+      const keysToRemember = (specificKey ? [specificKey] : [targetOrderId]).filter(Boolean) as string[];
       saveDeletedKey(keysToRemember);
       setDeletedKeys(getStoredDeletedKeys());
 
-      // 3. Optimistically update local states immediately
+      // 3. Optimistically update local states immediately for ONLY the target item
       setCloudLogs((prev) =>
-        prev.filter(
-          (l) =>
-            !(
-              (targetOrderId && l.orderId === targetOrderId) ||
-              (targetUploadId && l.uploadId === targetUploadId) ||
-              (targetDriveId && l.driveFileId && l.driveFileId === targetDriveId)
-            )
-        )
+        prev.filter((l) => {
+          if (targetDriveId && (l.driveFileId === targetDriveId || (l.playbackUrl && l.playbackUrl.includes(targetDriveId)))) return false;
+          if (targetUploadId && l.uploadId === targetUploadId) return false;
+          if (targetQueueId && l.queueJobId === targetQueueId) return false;
+          if (!targetDriveId && !targetUploadId && !targetQueueId && targetOrderId && l.orderId === targetOrderId) return false;
+          return true;
+        })
       );
       setLocalQueue((prev) =>
-        prev.filter(
-          (q) =>
-            !(
-              (targetOrderId && q.orderId === targetOrderId) ||
-              (targetUploadId && (q.uploadId === targetUploadId || q.id === targetUploadId)) ||
-              (targetDriveId && q.fileId === targetDriveId) ||
-              (targetQueueId && q.id === targetQueueId)
-            )
-        )
+        prev.filter((q) => {
+          if (targetDriveId && q.fileId === targetDriveId) return false;
+          if (targetUploadId && (q.uploadId === targetUploadId || q.id === targetUploadId)) return false;
+          if (targetQueueId && q.id === targetQueueId) return false;
+          if (!targetDriveId && !targetUploadId && !targetQueueId && targetOrderId && q.orderId === targetOrderId) return false;
+          return true;
+        })
       );
 
-      // Close modals if active
-      if (playbackLog && (playbackLog.orderId === targetOrderId || playbackLog.uploadId === targetUploadId || (targetDriveId && playbackLog.driveFileId === targetDriveId))) {
+      // Close modals if active for this specific log
+      if (playbackLog && (
+        (targetDriveId && playbackLog.driveFileId === targetDriveId) ||
+        (targetUploadId && playbackLog.uploadId === targetUploadId) ||
+        (targetQueueId && playbackLog.queueJobId === targetQueueId) ||
+        (!targetDriveId && !targetUploadId && !targetQueueId && playbackLog.orderId === targetOrderId)
+      )) {
         handleClosePlayback();
       }
-      if (selectedLog && (selectedLog.orderId === targetOrderId || selectedLog.uploadId === targetUploadId || (targetDriveId && selectedLog.driveFileId === targetDriveId))) {
+      if (selectedLog && (
+        (targetDriveId && selectedLog.driveFileId === targetDriveId) ||
+        (targetUploadId && selectedLog.uploadId === targetUploadId) ||
+        (targetQueueId && selectedLog.queueJobId === targetQueueId) ||
+        (!targetDriveId && !targetUploadId && !targetQueueId && selectedLog.orderId === targetOrderId)
+      )) {
         setSelectedLog(null);
       }
 

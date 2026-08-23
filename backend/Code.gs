@@ -1056,6 +1056,9 @@ function deleteLogEntry_(p){
     discoveredDriveIds.push(driveFileId);
   }
 
+  // Has specific unique pointer to ONE log entry?
+  const hasSpecificId = Boolean((driveFileId && driveFileId.length > 5) || (uploadId && uploadId.length > 5) || (queueJobId && queueJobId.length > 5));
+
   try {
     // 1. Delete matching entries from OrderLog sheet
     try {
@@ -1069,15 +1072,21 @@ function deleteLogEntry_(p){
         const rowJobId = String(orderData[i][9] || '').trim();
 
         let match = false;
-        if (orderId && rowOrderId && normalize_(rowOrderId) === normalize_(orderId)) match = true;
-        if (driveFileId && rowDriveId && rowDriveId === driveFileId) match = true;
-        if (uploadId && rowJobId && rowJobId === uploadId) match = true;
-        if (queueJobId && rowJobId && rowJobId === queueJobId) match = true;
-        if (driveFileId && rowPlayback && rowPlayback.indexOf(driveFileId) !== -1) match = true;
+        if (hasSpecificId) {
+          // Strict specific match: only match the exact Drive ID, Upload ID, or Queue Job ID
+          if (driveFileId && rowDriveId && rowDriveId === driveFileId) match = true;
+          else if (driveFileId && rowPlayback && rowPlayback.indexOf(driveFileId) !== -1) match = true;
+          else if (uploadId && rowJobId && rowJobId === uploadId) match = true;
+          else if (queueJobId && rowJobId && rowJobId === queueJobId) match = true;
+        } else {
+          // Fallback only when no unique ID was available: match by order ID
+          if (orderId && rowOrderId && normalizeOrderId_(rowOrderId) === normalizeOrderId_(orderId)) match = true;
+        }
 
         if (match) {
           if (rowDriveId && rowDriveId.length > 5 && !discoveredDriveIds.includes(rowDriveId)) {
-            discoveredDriveIds.push(rowDriveId);
+            // Only add if no specific driveFileId was passed, to prevent trashing other files
+            if (!hasSpecificId) discoveredDriveIds.push(rowDriveId);
           }
           orderSh.deleteRow(i + 1);
           orderLogsRemoved++;
@@ -1110,16 +1119,21 @@ function deleteLogEntry_(p){
         const rowJobId = String(uploadData[i][14] || '').trim();
 
         let match = false;
-        if (uploadId && rowUploadId && rowUploadId === uploadId) match = true;
-        if (uploadId && rowJobId && rowJobId === uploadId) match = true;
-        if (queueJobId && rowJobId && rowJobId === queueJobId) match = true;
-        if (queueJobId && rowUploadId && rowUploadId === queueJobId) match = true;
-        if (orderId && rowOrderId && normalize_(rowOrderId) === normalize_(orderId)) match = true;
-        if (driveFileId && rowDriveId && rowDriveId === driveFileId) match = true;
+        if (hasSpecificId) {
+          // Strict specific match: only match the exact Drive ID, Upload ID, or Queue Job ID
+          if (driveFileId && rowDriveId && rowDriveId === driveFileId) match = true;
+          else if (uploadId && rowUploadId && rowUploadId === uploadId) match = true;
+          else if (uploadId && rowJobId && rowJobId === uploadId) match = true;
+          else if (queueJobId && rowJobId && rowJobId === queueJobId) match = true;
+          else if (queueJobId && rowUploadId && rowUploadId === queueJobId) match = true;
+        } else {
+          // Fallback only when no unique ID was available: match by order ID
+          if (orderId && rowOrderId && normalizeOrderId_(rowOrderId) === normalizeOrderId_(orderId)) match = true;
+        }
 
         if (match) {
           if (rowDriveId && rowDriveId.length > 5 && !discoveredDriveIds.includes(rowDriveId)) {
-            discoveredDriveIds.push(rowDriveId);
+            if (!hasSpecificId) discoveredDriveIds.push(rowDriveId);
           }
           uploadSh.deleteRow(i + 1);
           uploadLogsRemoved++;
@@ -1140,14 +1154,14 @@ function deleteLogEntry_(p){
       console.warn('Note deleting from UploadLog:', e);
     }
 
-    // 3. Delete matching entries from DownloadLog sheet if matching orderId
-    if (orderId) {
+    // 3. Delete matching entries from DownloadLog sheet if matching orderId and no specific ID was given
+    if (orderId && !hasSpecificId) {
       try {
         const dlSh = sheet_(CONFIG.DOWNLOAD_LOG_SHEET);
         const dlData = dlSh.getDataRange().getValues();
         for (let i = dlData.length - 1; i >= 1; i--) {
           const rowOrderId = String(dlData[i][1] || '').trim();
-          if (rowOrderId && normalize_(rowOrderId) === normalize_(orderId)) {
+          if (rowOrderId && normalizeOrderId_(rowOrderId) === normalizeOrderId_(orderId)) {
             dlSh.deleteRow(i + 1);
             downloadLogsRemoved++;
           }

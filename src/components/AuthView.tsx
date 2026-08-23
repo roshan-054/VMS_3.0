@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Video, Lock, Mail, User as UserIcon, Settings, ArrowRight, Eye, EyeOff, AlertCircle } from 'lucide-react';
+import { Video, Lock, Mail, User as UserIcon, ArrowRight, Eye, EyeOff, AlertCircle } from 'lucide-react';
 import { requestApi } from '../lib/api';
 import { setStoredToken } from '../lib/storage';
 import { getStoredBranding, BrandingConfig } from '../lib/branding';
@@ -7,13 +7,12 @@ import { User } from '../types';
 
 interface AuthViewProps {
   onLoginSuccess: (user: User) => void;
-  onOpenSetup: () => void;
+  onOpenSetup?: () => void;
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
 }
 
 export const AuthView: React.FC<AuthViewProps> = ({
   onLoginSuccess,
-  onOpenSetup,
   onShowToast,
 }) => {
   const [branding, setBranding] = useState<BrandingConfig>(getStoredBranding());
@@ -108,18 +107,10 @@ export const AuthView: React.FC<AuthViewProps> = ({
 
         {/* Auth Box */}
         <div className="bg-white rounded-2xl p-6 sm:p-8 shadow-2xl border border-slate-800 space-y-5">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-            <h2 className="text-base font-semibold text-slate-800">
+          <div className="border-b border-slate-100 pb-3">
+            <h2 className="text-base font-semibold text-slate-800 text-center">
               {isSignup ? 'Create Operator / Admin Account' : 'Sign In with ID & Password'}
             </h2>
-            <button
-              type="button"
-              onClick={onOpenSetup}
-              className="text-xs text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1"
-            >
-              <Settings className="w-3.5 h-3.5" />
-              Apps Script Setup
-            </button>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -207,11 +198,6 @@ export const AuthView: React.FC<AuthViewProps> = ({
             </button>
           </div>
         </div>
-
-        {/* Footer Note */}
-        <p className="text-center text-[11px] text-slate-500">
-          Syncs directly to Google Sheets & Google Drive • IndexedDB Protected
-        </p>
       </div>
     </div>
   );
