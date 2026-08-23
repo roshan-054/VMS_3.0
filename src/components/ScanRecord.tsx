@@ -56,6 +56,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'info' | 'success' | 'error' } | null>(null);
   const [isBarcodeMode, setIsBarcodeMode] = useState(false);
   const [isDuplicateChecking, setIsDuplicateChecking] = useState(false);
+  const [detectedDuplicate, setDetectedDuplicate] = useState<any | null>(null);
   const [isFocusing, setIsFocusing] = useState(false);
   const [cameraResolution, setCameraResolution] = useState<{ width: number; height: number }>({ width: 1920, height: 1080 });
   const [duplicateWarning, setDuplicateWarning] = useState<{
@@ -74,6 +75,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   const barcodeBufferRef = useRef<string>('');
   const barcodeTimeRef = useRef<number>(0);
   const animFrameRef = useRef<number | null>(null);
+  const bypassDuplicateRef = useRef<boolean>(false);
   const [currentLiveTime, setCurrentLiveTime] = useState<string>('');
 
   // Component unmount cleanup: shut down hardware camera tracks when leaving the screen
@@ -274,6 +276,64 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onShowToast]);
+
+  // Debounced real-time duplicate check whenever Order ID, platform, or recording type changes
+  useEffect(() => {
+    const trimmed = orderId.trim();
+    if (trimmed.length < 3) {
+      setDetectedDuplicate(null);
+      return;
+    }
+
+    let isCancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        setIsDuplicateChecking(true);
+        // 1. Check local IndexedDB queue
+        const allQueue = await dbGetAllQueue();
+        const normTarget = trimmed.toLowerCase().replace(/^[#_-\s]+/, '');
+        const localMatch = allQueue.find(
+          (item) =>
+            item.orderId.trim().toLowerCase().replace(/^[#_-\s]+/, '') === normTarget &&
+            item.recordingType === recordingType &&
+            (item.status === 'completed' || item.status === 'uploading' || item.status === 'pending')
+        );
+
+        if (localMatch && !isCancelled) {
+          setDetectedDuplicate({
+            orderId: localMatch.orderId,
+            platform: localMatch.platform,
+            recordingType: localMatch.recordingType,
+            timestamp: new Date(localMatch.createdAt).toISOString(),
+            packerEmail: currentUser?.email || 'operator@vms.local',
+            playbackUrl: localMatch.webViewLink || '#',
+          });
+          setIsDuplicateChecking(false);
+          return;
+        }
+
+        // 2. Check remote Google Sheets / Drive
+        const remote = await checkDuplicate({
+          orderId: trimmed,
+          platform: effectivePlatform,
+          recordingType,
+        });
+
+        if (!isCancelled) {
+          setDetectedDuplicate(remote || null);
+        }
+      } catch (e) {
+        if (!isCancelled) setDetectedDuplicate(null);
+      } finally {
+        if (!isCancelled) setIsDuplicateChecking(false);
+      }
+    }, 350);
+
+    return () => {
+      isCancelled = true;
+      clearTimeout(timer);
+    };
+  }, [orderId, effectivePlatform, recordingType, currentUser]);
 
   const startCamera = async (deviceId?: string) => {
     setStatusMessage({ text: 'Initializing high-definition camera stream with auto-focus…', type: 'info' });
@@ -570,6 +630,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       if (!streamRef.current) return;
     }
 
+    bypassDuplicateRef.current = bypassDuplicateCheck;
     recordedChunksRef.current = [];
     const mimeType = chooseMimeType();
 
@@ -685,7 +746,11 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
         status: 'pending',
         progress: 0,
         recordingDate: todayDateStr,
+        bypassDuplicate: bypassDuplicateRef.current,
       };
+
+      // Reset bypass flag after recording is queued
+      bypassDuplicateRef.current = false;
 
       await dbPutQueue(queueItem);
       onQueueUpdated();
@@ -994,7 +1059,11 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                   placeholder="Scan barcode or type Order ID"
                   value={orderId}
                   onChange={(e) => setOrderId(e.target.value)}
-                  className="w-full pl-3.5 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 font-mono placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className={`w-full pl-3.5 pr-10 py-2.5 rounded-lg text-sm font-mono placeholder:text-slate-400 focus:outline-none transition ${
+                    detectedDuplicate
+                      ? 'bg-red-50 border-2 border-red-500 text-red-900 focus:ring-2 focus:ring-red-400'
+                      : 'bg-slate-50 border border-slate-300 text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500'
+                  }`}
                 />
                 {orderId && (
                   <button
@@ -1005,6 +1074,31 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                   </button>
                 )}
               </div>
+
+              {detectedDuplicate && (
+                <div className="mt-2.5 p-3 bg-red-50 border border-red-300 rounded-lg text-xs space-y-1.5 animate-in fade-in duration-200">
+                  <div className="flex items-center gap-1.5 font-bold text-red-800">
+                    <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                    <span>DUPLICATE ORDER ID DETECTED</span>
+                  </div>
+                  <p className="text-red-700 text-[11px] leading-snug">
+                    Order <b>{orderId}</b> has already been uploaded to Google Drive on{' '}
+                    <b>{detectedDuplicate.timestamp ? new Date(detectedDuplicate.timestamp).toLocaleString() : 'a previous session'}</b> by{' '}
+                    <b>{detectedDuplicate.packerEmail || 'operator'}</b>. Duplicate upload will be automatically blocked.
+                  </p>
+                  {detectedDuplicate.playbackUrl && (
+                    <a
+                      href={detectedDuplicate.playbackUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 hover:text-blue-900 underline pt-0.5"
+                    >
+                      <FolderSync className="w-3 h-3" />
+                      Open Existing Recording in Google Drive
+                    </a>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Recording Type */}

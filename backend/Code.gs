@@ -373,7 +373,14 @@ function adminDeleteUser_(p){
 
 /* ---------- Duplicate Detection & Guard ---------- */
 function normalize_(v){return String(v||'').trim().toLowerCase()}
-function key_(order,platform,type){return [normalize_(order),normalize_(platform),normalize_(type||'Forward')].join('||')}
+function normalizeOrderId_(v){
+  if(v===null||v===undefined)return '';
+  let s=String(v).trim().toLowerCase();
+  // Strip leading hashtag, underscores, hyphens or spaces (e.g. "#OD-4737" -> "od-4737")
+  s=s.replace(/^[#_-\s]+/,'');
+  return s;
+}
+function key_(order,platform,type){return [normalizeOrderId_(order),normalize_(platform),normalize_(type||'Forward')].join('||')}
 
 function driveExists_(id){
   if(!id)return false;
@@ -381,22 +388,85 @@ function driveExists_(id){
 }
 
 function completedDuplicate_(order,platform,type){
-  const wanted=key_(order,platform,type), v=sheet_(CONFIG.ORDER_LOG_SHEET).getDataRange().getValues();
-  for(let i=v.length-1;i>=1;i--){
-    const id=String(v[i][4]||''), status=normalize_(v[i][7]), rk=key_(v[i][1],v[i][2],v[i][8]||'Forward');
-    if(rk===wanted&&id&&status==='completed'&&driveExists_(id)){
-      return {
-        row: i+1,
-        orderId: String(v[i][1]||''),
-        platform: String(v[i][2]||''),
-        recordingType: String(v[i][8]||'Forward'),
-        timestamp: v[i][0] instanceof Date ? v[i][0].toISOString() : String(v[i][0]||''),
-        packerEmail: String(v[i][3]||''),
-        fileId: id,
-        playbackUrl: String(v[i][5]||'https://drive.google.com/file/d/'+id+'/preview')
-      };
+  const normTargetOrder = normalizeOrderId_(order);
+  if (!normTargetOrder) return null;
+  const normTargetType = normalize_(type || 'Forward');
+
+  // 1. Check ORDER_LOG_SHEET first
+  try {
+    const orderSheet = sheet_(CONFIG.ORDER_LOG_SHEET);
+    if (orderSheet) {
+      const v = orderSheet.getDataRange().getValues();
+      for (let i = v.length - 1; i >= 1; i--) {
+        const rawOrder = v[i][1];
+        const normRowOrder = normalizeOrderId_(rawOrder);
+        if (!normRowOrder || normRowOrder !== normTargetOrder) continue;
+
+        const rawType = v[i][8] || 'Forward';
+        const normRowType = normalize_(rawType);
+        // Match if recordingType matches (Forward vs Forward) or if type is not specified
+        if (normTargetType && normRowType && normTargetType !== normRowType) continue;
+
+        const rawStatus = normalize_(v[i][7] || '');
+        const fileId = String(v[i][4] || '').trim();
+
+        // If marked Completed/Ready or has a valid Drive file ID
+        if (rawStatus === 'completed' || rawStatus === 'ready' || rawStatus === 'success' || fileId.length > 5) {
+          return {
+            sourceSheet: CONFIG.ORDER_LOG_SHEET,
+            row: i + 1,
+            orderId: String(rawOrder || ''),
+            platform: String(v[i][2] || ''),
+            recordingType: String(rawType || 'Forward'),
+            timestamp: v[i][0] instanceof Date ? v[i][0].toISOString() : String(v[i][0] || ''),
+            packerEmail: String(v[i][3] || ''),
+            fileId: fileId,
+            playbackUrl: String(v[i][5] || (fileId ? 'https://drive.google.com/file/d/' + fileId + '/preview' : ''))
+          };
+        }
+      }
     }
+  } catch (e) {
+    console.warn('OrderLog duplicate check note:', e);
   }
+
+  // 2. Check UPLOAD_LOG_SHEET next (as an extra safety net)
+  try {
+    const uploadSheet = sheet_(CONFIG.UPLOAD_LOG_SHEET);
+    if (uploadSheet) {
+      const u = uploadSheet.getDataRange().getValues();
+      for (let i = u.length - 1; i >= 1; i--) {
+        const rawOrder = u[i][1];
+        const normRowOrder = normalizeOrderId_(rawOrder);
+        if (!normRowOrder || normRowOrder !== normTargetOrder) continue;
+
+        const rawType = u[i][12] || 'Forward';
+        const normRowType = normalize_(rawType);
+        if (normTargetType && normRowType && normTargetType !== normRowType) continue;
+
+        const rawStatus = normalize_(u[i][10] || '');
+        const rawStage = normalize_(u[i][7] || '');
+        const fileId = String(u[i][9] || '').trim();
+
+        if (rawStatus === 'completed' || rawStage === 'completed' || fileId.length > 5) {
+          return {
+            sourceSheet: CONFIG.UPLOAD_LOG_SHEET,
+            row: i + 1,
+            orderId: String(rawOrder || ''),
+            platform: String(u[i][2] || ''),
+            recordingType: String(rawType || 'Forward'),
+            timestamp: u[i][0] instanceof Date ? u[i][0].toISOString() : String(u[i][0] || ''),
+            packerEmail: String(u[i][3] || ''),
+            fileId: fileId,
+            playbackUrl: fileId ? 'https://drive.google.com/file/d/' + fileId + '/preview' : ''
+          };
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('UploadLog duplicate check note:', e);
+  }
+
   return null;
 }
 
@@ -525,7 +595,7 @@ function startUpload_(p){
     return {
       success: false,
       code: 'DUPLICATE_ORDER_ID',
-      error: `Duplicate Order ID: Order "${order}" (${platform} - ${type}) has already been uploaded to Google Drive. Duplicate upload was prevented.`,
+      error: `Duplicate Order ID: Order "${order}" (${platform} - ${type}) has already been uploaded to Google Drive on ${done.timestamp || 'previous session'}. Duplicate upload was prevented.`,
       isDuplicate: true,
       existing: done
     };

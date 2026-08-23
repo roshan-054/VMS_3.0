@@ -147,28 +147,27 @@ export async function triggerUploadWorker(): Promise<void> {
     // Check if another completed item with same orderId exists locally or remotely
     // -------------------------------------------------------------
     if (!currentItem.bypassDuplicate) {
+      const normTarget = currentItem.orderId.trim().toLowerCase().replace(/^[#_-\s]+/, '');
+
       // 1. Check local completed queue
       const localDuplicate = allItems.some(
         (it) =>
           it.id !== currentItem.id &&
-          it.orderId.trim().toLowerCase() === currentItem.orderId.trim().toLowerCase() &&
+          it.orderId.trim().toLowerCase().replace(/^[#_-\s]+/, '') === normTarget &&
           it.status === 'completed'
       );
 
       // 2. Check remote Google Sheet / Drive records
-      let remoteDuplicate = false;
+      let remoteDuplicate: any = null;
       if (!localDuplicate) {
         try {
-          const dupRes = await checkDuplicate({
+          remoteDuplicate = await checkDuplicate({
             orderId: currentItem.orderId,
             platform: currentItem.platform,
             recordingType: currentItem.recordingType,
           });
-          if (dupRes) {
-            remoteDuplicate = true;
-          }
         } catch (e) {
-          // If network check fails, proceed
+          console.warn('Remote duplicate check note:', e);
         }
       }
 
@@ -177,7 +176,9 @@ export async function triggerUploadWorker(): Promise<void> {
         currentItem.isDuplicate = true;
         currentItem.stage = `Blocked: Duplicate Order ID (${currentItem.orderId})`;
         currentItem.error = `Duplicate Order ID: Order "${currentItem.orderId}" has already been uploaded to Google Drive. Duplicate upload was prevented.`;
-        currentItem.duplicateReason = `Order ${currentItem.orderId} already exists in Google Drive / OrderLog.`;
+        currentItem.duplicateReason = `Order ${currentItem.orderId} already exists in Google Drive / OrderLog (Timestamp: ${
+          remoteDuplicate?.timestamp || 'Previous Record'
+        }).`;
 
         await dbPutQueue(currentItem);
         updateState({
