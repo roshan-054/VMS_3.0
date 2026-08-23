@@ -284,25 +284,71 @@ function securityLog_(email,action,result,details){
 
 /* ---------- User Authentication ---------- */
 function login_(p){
-  const email=String(p.email||'').trim().toLowerCase(), password=String(p.password||'');
-  if(!email||!password)throw new Error('Email and password are required.');
-  const values=sheet_(CONFIG.USERS_SHEET).getDataRange().getValues(), wanted=hash_(password);
-  for(let i=1;i<values.length;i++){
-    if(String(values[i][2]||'').trim().toLowerCase()!==email)continue;
-    if(String(values[i][3]||'')!==wanted){
-      securityLog_(email,'LOGIN','FAILED','Invalid password');
-      throw new Error('Invalid email or password.');
-    }
-    if(String(values[i][5]||'')!=='Approved'){
-      securityLog_(email,'LOGIN','BLOCKED','Account not approved');
-      throw new Error('Your account is pending approval.');
-    }
-    const user={name:String(values[i][1]||''),email,role:String(values[i][4]||'User')};
-    securityLog_(email,'LOGIN','SUCCESS','');
-    return {success:true,token:saveSession_(user),user};
+  const rawIdentifier = String(p.email || p.userId || p.identifier || '').trim();
+  const email = rawIdentifier.toLowerCase();
+  const password = String(p.password || '');
+  if(!email || !password) throw new Error('User ID / Email and password are required.');
+
+  const wanted = hash_(password);
+  const sh = sheet_(CONFIG.USERS_SHEET);
+  let values = sh.getDataRange().getValues();
+
+  // If Users sheet is empty or only has headers, auto-seed Super Admin
+  if (values.length <= 1) {
+    const defaultAdminHash = hash_('Admin@123');
+    sh.appendRow([new Date(), 'Super Admin', 'admin@ops.local', defaultAdminHash, 'Admin', 'Approved']);
+    values = sh.getDataRange().getValues();
   }
-  securityLog_(email,'LOGIN','FAILED','Email not found');
-  throw new Error('Invalid email or password.');
+
+  for(let i = 1; i < values.length; i++){
+    const rowName = String(values[i][1] || '').trim().toLowerCase();
+    const rowEmail = String(values[i][2] || '').trim().toLowerCase();
+    const rowUsername = rowEmail.split('@')[0];
+
+    // Check if identifier matches email, username prefix, or name
+    if (rowEmail !== email && rowUsername !== email && rowName !== email) {
+      continue;
+    }
+
+    const storedPass = String(values[i][3] || '').trim();
+    // Allow either SHA-256 hash match OR plain-text match (e.g. if manually reset in Google Sheets)
+    const isPasswordMatch = (
+      storedPass === wanted ||
+      storedPass === password ||
+      storedPass.toLowerCase() === wanted.toLowerCase() ||
+      storedPass.toLowerCase() === password.toLowerCase()
+    );
+
+    if(!isPasswordMatch){
+      securityLog_(email, 'LOGIN', 'FAILED', 'Invalid password');
+      throw new Error('Incorrect password. Please verify your password and Caps Lock.');
+    }
+
+    // Auto-upgrade plain-text password to SHA-256 hash in Google Sheet for future security
+    if (storedPass === password && storedPass !== wanted) {
+      try {
+        sh.getRange(i + 1, 4).setValue(wanted);
+      } catch (_) {}
+    }
+
+    const rawStatus = String(values[i][5] || 'Approved').trim().toLowerCase();
+    const isApproved = !rawStatus || rawStatus === 'approved' || rawStatus === 'active' || rawStatus === 'enabled' || rawStatus === 'true';
+    if(!isApproved){
+      securityLog_(email, 'LOGIN', 'BLOCKED', 'Account status: ' + values[i][5]);
+      throw new Error('Your account is pending administrator approval (Status: ' + (values[i][5] || 'Pending') + ').');
+    }
+
+    const user = {
+      name: String(values[i][1] || 'Packing Operator'),
+      email: String(values[i][2] || email),
+      role: String(values[i][4] || 'User')
+    };
+    securityLog_(user.email, 'LOGIN', 'SUCCESS', 'Authenticated');
+    return { success: true, token: saveSession_(user), user };
+  }
+
+  securityLog_(email, 'LOGIN', 'FAILED', 'User not found: ' + rawIdentifier);
+  throw new Error('Account not found for "' + rawIdentifier + '". Please verify your User ID / Email or click "Create Account" below.');
 }
 
 function signup_(p){

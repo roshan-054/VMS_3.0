@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   Camera,
+  CameraOff,
   Video,
   StopCircle,
   Play,
@@ -965,13 +966,13 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                   )}
 
                   <button
-                    id="stop-recording-secondary-btn"
-                    onClick={stopRecording}
-                    className="px-3.5 py-2.5 bg-red-100 hover:bg-red-200 text-red-700 text-sm rounded-lg font-semibold transition inline-flex items-center gap-1.5 border border-red-300 shadow-xs"
-                    title="Stop active order recording"
+                    id="off-camera-btn"
+                    onClick={handleToggleCamera}
+                    className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm rounded-lg font-semibold transition inline-flex items-center gap-1.5 border border-slate-300 shadow-xs"
+                    title="Turn off live camera stream"
                   >
-                    <StopCircle className="w-4 h-4 text-red-600" />
-                    Stop Recording
+                    <CameraOff className="w-4 h-4 text-slate-600" />
+                    Off Camera
                   </button>
 
                   <button
