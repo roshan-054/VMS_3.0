@@ -11,6 +11,7 @@ import {
   UploadCloud,
   CheckCircle2,
   AlertCircle,
+  AlertTriangle,
   Layers,
   Maximize2,
   Minimize2,
@@ -20,7 +21,14 @@ import {
   FolderSync,
   Focus,
   Crosshair,
-  Sparkle
+  Sparkle,
+  Target,
+  Box,
+  Grid3X3,
+  PackageCheck,
+  ShieldAlert,
+  ExternalLink,
+  RefreshCw
 } from 'lucide-react';
 import { PlatformType, RecordingType, QueueItem } from '../types';
 import { dbPutQueue, dbGetAllQueue } from '../lib/storage';
@@ -55,6 +63,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   const [recSeconds, setRecSeconds] = useState(0);
   const [estimatedSizeMb, setEstimatedSizeMb] = useState(0);
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'info' | 'success' | 'error' } | null>(null);
+  const [cameraPermissionError, setCameraPermissionError] = useState<string | null>(null);
   const [isBarcodeMode, setIsBarcodeMode] = useState(false);
   const [isDuplicateChecking, setIsDuplicateChecking] = useState(false);
   const [detectedDuplicate, setDetectedDuplicate] = useState<any | null>(null);
@@ -66,6 +75,15 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     recordingType: string;
     existing: any;
   } | null>(null);
+
+  // AI Virtual Packing Framing & Focus Zone
+  const [showAiPackingZone, setShowAiPackingZone] = useState<boolean>(() => {
+    return localStorage.getItem('vms_ai_packing_zone') !== 'false';
+  });
+  const [packingZonePreset, setPackingZonePreset] = useState<'standard' | 'flyer' | 'carton' | 'grid'>(() => {
+    return (localStorage.getItem('vms_ai_zone_preset') as any) || 'standard';
+  });
+  const [focusClickPoint, setFocusClickPoint] = useState<{ x: number; y: number } | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -230,20 +248,56 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   }, [isCameraActive, isRecording, orderId, effectivePlatform, recordingType, currentUser]);
 
   // Discover connected camera devices
-  useEffect(() => {
-    async function loadDevices() {
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoInputs = devices.filter((d) => d.kind === 'videoinput');
-        setCameraDevices(videoInputs);
-        if (videoInputs.length > 0 && !selectedDeviceId) {
+  const loadDevices = async () => {
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.enumerateDevices !== 'function') return;
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoInputs = devices.filter((d) => d.kind === 'videoinput');
+      setCameraDevices(videoInputs);
+      if (videoInputs.length > 0) {
+        const exists = videoInputs.some((d) => d.deviceId && d.deviceId === selectedDeviceId);
+        if (!exists && videoInputs[0].deviceId) {
           setSelectedDeviceId(videoInputs[0].deviceId);
         }
-      } catch (err) {
-        console.warn('Unable to enumerate devices:', err);
       }
+    } catch (err) {
+      console.warn('Unable to enumerate devices:', err);
     }
+  };
+
+  useEffect(() => {
     loadDevices();
+
+    if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === 'function') {
+      navigator.mediaDevices.addEventListener('devicechange', loadDevices);
+      return () => {
+        navigator.mediaDevices.removeEventListener('devicechange', loadDevices);
+      };
+    }
+  }, [selectedDeviceId]);
+
+  // Monitor permission state changes if supported
+  useEffect(() => {
+    if (navigator.permissions && typeof navigator.permissions.query === 'function') {
+      navigator.permissions
+        .query({ name: 'camera' as any })
+        .then((permStatus) => {
+          if (permStatus.state === 'granted') {
+            setCameraPermissionError(null);
+          } else if (permStatus.state === 'denied') {
+            setCameraPermissionError('Camera access is blocked by your browser settings.');
+          }
+          permStatus.onchange = () => {
+            if (permStatus.state === 'granted') {
+              setCameraPermissionError(null);
+              loadDevices();
+            } else if (permStatus.state === 'denied') {
+              setCameraPermissionError('Camera access is blocked by your browser settings.');
+            }
+          };
+        })
+        .catch(() => {});
+    }
   }, []);
 
   // Listen for physical barcode scanner rapid keystrokes
@@ -337,6 +391,13 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   }, [orderId, effectivePlatform, recordingType, currentUser]);
 
   const startCamera = async (deviceId?: string) => {
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+      setStatusMessage({ text: 'MediaDevices API not supported in this browser context.', type: 'error' });
+      setCameraPermissionError('Your browser or iframe environment does not support camera capture.');
+      return;
+    }
+
+    setCameraPermissionError(null);
     setStatusMessage({ text: 'Initializing high-definition camera stream with auto-focus…', type: 'info' });
     try {
       if (streamRef.current) {
@@ -345,38 +406,45 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
 
       let newStream: MediaStream | null = null;
       let lastErr: any = null;
+      const targetDevId = deviceId || selectedDeviceId;
 
-      // Stage 1: Ultra-HD / 1080p-4K resolution with continuous autofocus & audio
+      // Stage 1: Ultra-HD / 1080p-4K resolution with continuous autofocus
       try {
-        const stage1Constraints = {
+        const stage1Constraints: MediaStreamConstraints = {
           video: {
-            deviceId: deviceId ? { exact: deviceId } : undefined,
-            facingMode: deviceId ? undefined : { ideal: 'environment' },
+            deviceId: targetDevId ? { ideal: targetDevId } : undefined,
+            facingMode: targetDevId ? undefined : { ideal: 'environment' },
             width: { ideal: 1920, max: 3840 },
             height: { ideal: 1080, max: 2160 },
             frameRate: { ideal: 30, max: 60 },
-            focusMode: { ideal: 'continuous' },
             advanced: [
               { focusMode: 'continuous' },
               { exposureMode: 'continuous' },
               { whiteBalanceMode: 'continuous' }
             ]
           } as any,
-          audio: audioEnabled,
+          audio: false, // Keep video request isolated from microphone permission
         };
         newStream = await navigator.mediaDevices.getUserMedia(stage1Constraints);
-      } catch (err1) {
+      } catch (err1: any) {
         lastErr = err1;
-        console.warn('Stage 1 Ultra-HD camera init failed, trying 1080p video-only:', err1);
+        // If permission explicitly denied, do not try unnecessary stages
+        if (
+          err1?.name === 'NotAllowedError' ||
+          err1?.name === 'PermissionDeniedError' ||
+          String(err1?.message || '').toLowerCase().includes('permission denied')
+        ) {
+          throw err1;
+        }
       }
 
       // Stage 2: 1080p Video-only with autofocus constraints
       if (!newStream) {
         try {
-          const stage2Constraints = {
+          const stage2Constraints: MediaStreamConstraints = {
             video: {
-              deviceId: deviceId ? { exact: deviceId } : undefined,
-              facingMode: deviceId ? undefined : { ideal: 'environment' },
+              deviceId: targetDevId ? { ideal: targetDevId } : undefined,
+              facingMode: targetDevId ? undefined : { ideal: 'environment' },
               width: { ideal: 1920, min: 1280 },
               height: { ideal: 1080, min: 720 },
               advanced: [{ focusMode: 'continuous' }]
@@ -384,9 +452,15 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
             audio: false,
           };
           newStream = await navigator.mediaDevices.getUserMedia(stage2Constraints);
-        } catch (err2) {
+        } catch (err2: any) {
           lastErr = err2;
-          console.warn('Stage 2 camera init failed, trying basic video:', err2);
+          if (
+            err2?.name === 'NotAllowedError' ||
+            err2?.name === 'PermissionDeniedError' ||
+            String(err2?.message || '').toLowerCase().includes('permission denied')
+          ) {
+            throw err2;
+          }
         }
       }
 
@@ -396,12 +470,24 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
           newStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
         } catch (err3) {
           lastErr = err3;
-          console.error('Stage 3 basic camera init failed:', err3);
         }
       }
 
       if (!newStream) {
         throw lastErr || new Error('No camera stream could be acquired');
+      }
+
+      // If audio is enabled, attempt to attach microphone audio track non-blockingly
+      if (audioEnabled) {
+        try {
+          const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const audioTrack = audioStream.getAudioTracks()[0];
+          if (audioTrack) {
+            newStream.addTrack(audioTrack);
+          }
+        } catch (micErr) {
+          console.warn('Microphone audio track optional init notice:', micErr);
+        }
       }
 
       // Apply and lock Continuous Auto-Focus on camera hardware track
@@ -433,6 +519,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
 
       streamRef.current = newStream;
       setIsCameraActive(true);
+      setCameraPermissionError(null);
 
       if (videoRef.current) {
         videoRef.current.srcObject = newStream;
@@ -446,15 +533,36 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
         }
       }
 
+      // Refresh camera devices list with actual device labels now that permission is active
+      loadDevices();
+
       setStatusMessage({ text: 'High-definition camera active with continuous auto-focus.', type: 'success' });
     } catch (err: any) {
       console.error('Camera open failed:', err);
       setIsCameraActive(false);
-      setStatusMessage({
-        text: `Camera access note: ${err.message || 'Please allow camera permission in browser.'}`,
-        type: 'error',
-      });
-      onShowToast('Could not access camera. Please check camera permissions.', 'error');
+
+      const isPermissionErr =
+        err?.name === 'NotAllowedError' ||
+        err?.name === 'PermissionDeniedError' ||
+        String(err?.message || '').toLowerCase().includes('permission denied') ||
+        String(err?.message || '').toLowerCase().includes('notallowed');
+
+      if (isPermissionErr) {
+        setCameraPermissionError(
+          'Camera access was blocked by your browser. Please allow camera access in your browser address bar to record packing videos.'
+        );
+        setStatusMessage({
+          text: 'Camera Permission Denied. Please allow camera in your browser address bar (lock/camera icon).',
+          type: 'error',
+        });
+        onShowToast('Camera permission was blocked. Please click Allow in your browser.', 'error');
+      } else {
+        setStatusMessage({
+          text: `Camera access note: ${err.message || 'Please connect a webcam.'}`,
+          type: 'error',
+        });
+        onShowToast(`Could not access camera: ${err.message || 'Unknown error'}`, 'error');
+      }
     }
   };
 
@@ -504,6 +612,66 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       onShowToast('Auto-focus refreshed', 'info');
     } finally {
       setTimeout(() => setIsFocusing(false), 500);
+    }
+  };
+
+  const handleVideoContainerClick = async (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isCameraActive || !streamRef.current) return;
+    
+    // Ignore clicks on buttons/controls inside the container
+    const target = e.target as HTMLElement;
+    if (target.closest('button') || target.closest('select') || target.closest('.no-focus-trigger')) {
+      return;
+    }
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+    const percentX = Math.max(0, Math.min(1, clickX / rect.width));
+    const percentY = Math.max(0, Math.min(1, clickY / rect.height));
+
+    // Show temporary focus target animation
+    setFocusClickPoint({ x: clickX, y: clickY });
+    setTimeout(() => setFocusClickPoint(null), 1200);
+
+    // Apply hardware point of interest focus
+    try {
+      const track = streamRef.current.getVideoTracks()[0];
+      if (track && typeof track.applyConstraints === 'function') {
+        const caps: any = typeof track.getCapabilities === 'function' ? track.getCapabilities() : {};
+        const adv: any = {};
+        if (caps.pointsOfInterest) {
+          adv.pointsOfInterest = [{ x: percentX, y: percentY }];
+        }
+        if (caps.focusMode && Array.isArray(caps.focusMode)) {
+          if (caps.focusMode.includes('single-shot')) {
+            adv.focusMode = 'single-shot';
+          } else if (caps.focusMode.includes('continuous')) {
+            adv.focusMode = 'continuous';
+          }
+        }
+        if (Object.keys(adv).length > 0) {
+          await track.applyConstraints({ advanced: [adv] } as any);
+        }
+      }
+    } catch (err) {
+      console.warn('Point of interest focus notice:', err);
+    }
+  };
+
+  const toggleAiPackingZone = () => {
+    const nextState = !showAiPackingZone;
+    setShowAiPackingZone(nextState);
+    localStorage.setItem('vms_ai_packing_zone', String(nextState));
+    onShowToast(nextState ? 'AI Virtual Packing Guide enabled' : 'AI Packing Guide hidden', 'info');
+  };
+
+  const handleSelectZonePreset = (preset: 'standard' | 'flyer' | 'carton' | 'grid') => {
+    setPackingZonePreset(preset);
+    localStorage.setItem('vms_ai_zone_preset', preset);
+    if (!showAiPackingZone) {
+      setShowAiPackingZone(true);
+      localStorage.setItem('vms_ai_packing_zone', 'true');
     }
   };
 
@@ -854,7 +1022,11 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
           {/* Viewport Box */}
           <div
             id="camera-video-container"
-            className="relative bg-slate-950 flex items-center justify-center overflow-hidden aspect-video min-h-[480px]"
+            onClick={handleVideoContainerClick}
+            className={`relative bg-slate-950 flex items-center justify-center overflow-hidden aspect-video min-h-[480px] ${
+              isCameraActive ? 'cursor-crosshair select-none' : ''
+            }`}
+            title={isCameraActive ? 'Click anywhere on the preview to focus camera on that spot' : undefined}
           >
             {/* Hidden Canvas for Timestamp Stamping & Recording Capture */}
             <canvas ref={canvasRef} className="hidden" />
@@ -868,7 +1040,58 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
               className={`w-full h-full object-cover ${!isCameraActive ? 'hidden' : ''}`}
             />
 
-            {!isCameraActive && (
+            {!isCameraActive && cameraPermissionError && (
+              <div id="camera-permission-blocked-guide" className="p-6 sm:p-8 text-center flex flex-col items-center justify-center max-w-md bg-slate-900/95 border border-amber-500/40 rounded-2xl m-4 shadow-2xl backdrop-blur-md z-20">
+                <div className="w-14 h-14 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mb-3 shadow-inner text-amber-400">
+                  <ShieldAlert className="w-7 h-7 text-amber-400 animate-pulse" />
+                </div>
+                <h4 className="text-base font-semibold text-white mb-1.5 flex items-center gap-2">
+                  Camera Permission Required
+                </h4>
+                <p className="text-xs text-slate-300 leading-relaxed mb-4 text-center">
+                  Your browser has blocked camera access for this page. Follow these quick steps to unblock:
+                </p>
+
+                <div className="w-full bg-slate-950/90 rounded-xl p-3.5 border border-slate-800 text-left space-y-2 mb-5 text-xs text-slate-300 font-sans shadow-inner">
+                  <div className="flex items-start gap-2.5">
+                    <span className="w-5 h-5 rounded-full bg-amber-500/20 text-amber-400 text-[11px] font-bold flex items-center justify-center shrink-0 mt-0.5">1</span>
+                    <span>Click the <strong>🔒 Lock</strong> or <strong>📹 Camera</strong> icon next to the URL in your browser address bar.</span>
+                  </div>
+                  <div className="flex items-start gap-2.5">
+                    <span className="w-5 h-5 rounded-full bg-amber-500/20 text-amber-400 text-[11px] font-bold flex items-center justify-center shrink-0 mt-0.5">2</span>
+                    <span>Switch <strong>Camera</strong> permission to <strong>Allow</strong>.</span>
+                  </div>
+                  <div className="flex items-start gap-2.5">
+                    <span className="w-5 h-5 rounded-full bg-amber-500/20 text-amber-400 text-[11px] font-bold flex items-center justify-center shrink-0 mt-0.5">3</span>
+                    <span>Click <strong>"Try Allowing Camera Again"</strong> below.</span>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-center gap-2.5">
+                  <button
+                    id="retry-camera-perm-btn"
+                    onClick={() => startCamera(selectedDeviceId)}
+                    className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-md transition inline-flex items-center gap-2 cursor-pointer"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    Try Allowing Camera Again
+                  </button>
+
+                  <a
+                    href={window.location.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium border border-slate-700 transition inline-flex items-center gap-1.5"
+                    title="Open app in a standalone tab if iframe preview is blocking permissions"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    Open in New Tab
+                  </a>
+                </div>
+              </div>
+            )}
+
+            {!isCameraActive && !cameraPermissionError && (
               <div id="camera-idle-placeholder" className="p-8 text-center flex flex-col items-center justify-center max-w-sm">
                 <div className="w-16 h-16 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center mb-3 shadow-inner">
                   <Camera className="w-8 h-8 text-slate-500" />
@@ -888,9 +1111,84 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
               </div>
             )}
 
+            {/* Click-to-Focus Target Animation Ring */}
+            {focusClickPoint && isCameraActive && (
+              <div
+                className="absolute pointer-events-none -translate-x-1/2 -translate-y-1/2 z-30 transition-all duration-300"
+                style={{ left: focusClickPoint.x, top: focusClickPoint.y }}
+              >
+                <div className="w-12 h-12 rounded-full border-2 border-emerald-400 animate-ping opacity-75" />
+                <div className="absolute inset-0 w-12 h-12 rounded-full border-2 border-amber-300 flex items-center justify-center bg-black/30 backdrop-blur-xs">
+                  <Crosshair className="w-6 h-6 text-amber-300 animate-spin" />
+                </div>
+                <span className="absolute top-14 left-1/2 -translate-x-1/2 text-[9px] font-mono bg-black/90 text-emerald-300 px-1.5 py-0.5 rounded whitespace-nowrap border border-emerald-500/40 shadow-sm">
+                  CALIBRATING FOCUS
+                </span>
+              </div>
+            )}
+
+            {/* AI Smart Packing Framing & Virtual Focus Zone Overlay */}
+            {isCameraActive && showAiPackingZone && (
+              <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-10 p-4">
+                <div
+                  className={`relative transition-all duration-300 border border-dashed border-emerald-400/50 bg-emerald-400/[0.03] rounded-xl flex items-center justify-center shadow-[0_0_20px_rgba(16,185,129,0.12)] ${
+                    packingZonePreset === 'flyer'
+                      ? 'w-[54%] h-[54%]'
+                      : packingZonePreset === 'carton'
+                      ? 'w-[88%] h-[84%]'
+                      : packingZonePreset === 'grid'
+                      ? 'w-[92%] h-[88%]'
+                      : 'w-[72%] h-[72%]'
+                  }`}
+                >
+                  {/* High Precision Corner Brackets */}
+                  <div className="absolute -top-1 -left-1 w-6 h-6 border-t-3 border-l-3 border-emerald-400 rounded-tl-sm shadow-xs" />
+                  <div className="absolute -top-1 -right-1 w-6 h-6 border-t-3 border-r-3 border-emerald-400 rounded-tr-sm shadow-xs" />
+                  <div className="absolute -bottom-1 -left-1 w-6 h-6 border-b-3 border-l-3 border-emerald-400 rounded-bl-sm shadow-xs" />
+                  <div className="absolute -bottom-1 -right-1 w-6 h-6 border-b-3 border-r-3 border-emerald-400 rounded-br-sm shadow-xs" />
+
+                  {/* Top Guide Pill Badge */}
+                  <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 bg-slate-950/90 text-emerald-400 text-[10px] font-mono font-semibold px-2.5 py-0.5 rounded-full border border-emerald-500/50 shadow-md flex items-center gap-1.5 whitespace-nowrap">
+                    <Sparkles className="w-3 h-3 text-emerald-400 animate-pulse" />
+                    AI OPTIMAL PACKING ZONE
+                  </div>
+
+                  {/* Center Target Reticle Crosshair */}
+                  <div className="relative flex items-center justify-center pointer-events-none opacity-60">
+                    <div className="w-8 h-8 rounded-full border border-emerald-400/60 flex items-center justify-center">
+                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                    </div>
+                    <div className="absolute w-12 h-px bg-emerald-400/60" />
+                    <div className="absolute h-12 w-px bg-emerald-400/60" />
+                  </div>
+
+                  {/* Rule-of-Thirds Grid Overlay (when Grid preset selected) */}
+                  {packingZonePreset === 'grid' && (
+                    <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 pointer-events-none">
+                      <div className="border-r border-b border-dashed border-cyan-400/30" />
+                      <div className="border-r border-b border-dashed border-cyan-400/30" />
+                      <div className="border-b border-dashed border-cyan-400/30" />
+                      <div className="border-r border-b border-dashed border-cyan-400/30" />
+                      <div className="border-r border-b border-dashed border-cyan-400/30" />
+                      <div className="border-b border-dashed border-cyan-400/30" />
+                      <div className="border-r border-dashed border-cyan-400/30" />
+                      <div className="border-r border-dashed border-cyan-400/30" />
+                      <div />
+                    </div>
+                  )}
+
+                  {/* Bottom Guidance Note */}
+                  <div className="absolute -bottom-3.5 left-1/2 -translate-x-1/2 bg-black/85 backdrop-blur-xs text-slate-200 text-[9px] font-mono px-2.5 py-0.5 rounded-full border border-white/15 shadow-md whitespace-nowrap flex items-center gap-1.5">
+                    <Target className="w-3 h-3 text-amber-400" />
+                    <span>Place Parcel & Barcodes Here • Tap to Focus</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* In-Video Recording HUD (Authentic Camera OSD) */}
             {isCameraActive && (
-              <div id="camera-active-hud" className="absolute top-3 left-3 right-3 flex items-start justify-between pointer-events-none text-[11px] sm:text-xs font-mono font-medium">
+              <div id="camera-active-hud" className="absolute top-3 left-3 right-3 flex items-start justify-between pointer-events-none text-[11px] sm:text-xs font-mono font-medium z-20">
                 {/* Top-Left: Metadata Box */}
                 <div className="bg-black/60 backdrop-blur-xs text-white px-2.5 py-1.5 rounded space-y-0.5 shadow-sm border border-white/10">
                   <div className="text-white font-semibold tracking-wide">
@@ -985,6 +1283,21 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                     <Crosshair className={`w-4 h-4 text-amber-600 ${isFocusing ? 'animate-spin' : ''}`} />
                     {isFocusing ? 'Focusing Lens…' : 'Auto-Focus Lens'}
                   </button>
+
+                  <button
+                    id="toggle-ai-zone-btn"
+                    type="button"
+                    onClick={toggleAiPackingZone}
+                    className={`px-3.5 py-2.5 border text-sm rounded-lg font-semibold transition inline-flex items-center gap-1.5 shadow-xs ${
+                      showAiPackingZone
+                        ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-900'
+                        : 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700'
+                    }`}
+                    title="Toggle AI Smart Packing Framing & Guide Box"
+                  >
+                    <Sparkles className={`w-4 h-4 ${showAiPackingZone ? 'text-emerald-600' : 'text-slate-500'}`} />
+                    {showAiPackingZone ? 'AI Guide: Active' : 'Enable AI Guide'}
+                  </button>
                 </>
               )}
             </div>
@@ -1032,6 +1345,92 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
               <span>{statusMessage.text}</span>
             </div>
           )}
+
+          {/* AI Virtual Packing Guide Controls - Available Below Buttons */}
+          <div id="ai-guide-options-bar" className="bg-slate-900 border-t border-slate-800 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 text-slate-200 font-semibold">
+                <Sparkles className="w-4 h-4 text-emerald-400" />
+                <span>AI Packing Zone Guide:</span>
+              </div>
+              <span className="text-[11px] text-slate-400 font-sans">
+                (Visual assistant only — not recorded in output video)
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="inline-flex rounded-lg bg-slate-950 p-1 border border-slate-800 shadow-inner">
+                <button
+                  type="button"
+                  onClick={() => handleSelectZonePreset('standard')}
+                  className={`px-3 py-1 text-xs rounded-md transition font-medium cursor-pointer ${
+                    showAiPackingZone && packingZonePreset === 'standard'
+                      ? 'bg-emerald-500 text-slate-950 font-bold shadow-xs'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                  }`}
+                  title="Standard Box / Medium Parcel (72%)"
+                >
+                  Standard (72%)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSelectZonePreset('flyer')}
+                  className={`px-3 py-1 text-xs rounded-md transition font-medium cursor-pointer ${
+                    showAiPackingZone && packingZonePreset === 'flyer'
+                      ? 'bg-emerald-500 text-slate-950 font-bold shadow-xs'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                  }`}
+                  title="Flyer / Polybag / Small Items (54%)"
+                >
+                  Flyer (54%)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSelectZonePreset('carton')}
+                  className={`px-3 py-1 text-xs rounded-md transition font-medium cursor-pointer ${
+                    showAiPackingZone && packingZonePreset === 'carton'
+                      ? 'bg-emerald-500 text-slate-950 font-bold shadow-xs'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                  }`}
+                  title="Large Carton / Bulk Shipment (88%)"
+                >
+                  Carton (88%)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSelectZonePreset('grid')}
+                  className={`px-3 py-1 text-xs rounded-md transition font-medium cursor-pointer ${
+                    showAiPackingZone && packingZonePreset === 'grid'
+                      ? 'bg-emerald-500 text-slate-950 font-bold shadow-xs'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                  }`}
+                  title="3x3 Alignment Grid"
+                >
+                  3×3 Grid
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={toggleAiPackingZone}
+                className={`px-3 py-1 text-xs font-semibold rounded-md border transition cursor-pointer inline-flex items-center gap-1.5 ${
+                  showAiPackingZone
+                    ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/25'
+                    : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200 hover:bg-slate-700'
+                }`}
+                title={showAiPackingZone ? 'Hide Guide Frame' : 'Show Guide Frame'}
+              >
+                {showAiPackingZone ? (
+                  <>
+                    <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                    Hide Frame
+                  </>
+                ) : (
+                  'Show Frame'
+                )}
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Order Information Column (2 Cols on LG) */}
