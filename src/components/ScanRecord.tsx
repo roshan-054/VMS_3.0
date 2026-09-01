@@ -203,27 +203,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
         ctx.fillStyle = '#FFFFFF';
         ctx.fillText(fullDateTimeStr, timeBoxX + paddingX, timeBoxY + paddingY);
 
-        // --- TOP LEFT: Order ID & Tracking OSD ---
-        const currentOrder = orderId.trim() || 'UNASSIGNED';
-        const metaLine1 = `ORD: ${currentOrder}`;
-        const metaLine2 = `${effectivePlatform.toUpperCase()} [${recordingType.toUpperCase()}]`;
-
-        const metaLine1Width = ctx.measureText(metaLine1).width;
-        const metaLine2Width = ctx.measureText(metaLine2).width;
-        const infoBoxWidth = Math.max(metaLine1Width, metaLine2Width) + paddingX * 2;
-        const lineHeight = fontSize + Math.round(4 * scale);
-        const infoBoxHeight = lineHeight * 2 + paddingY * 2 - Math.round(4 * scale);
-        const infoBoxX = margin;
-        const infoBoxY = margin;
-
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
-        ctx.fillRect(infoBoxX, infoBoxY, infoBoxWidth, infoBoxHeight);
-
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fillText(metaLine1, infoBoxX + paddingX, infoBoxY + paddingY);
-        ctx.fillStyle = '#CBD5E1';
-        ctx.fillText(metaLine2, infoBoxX + paddingX, infoBoxY + paddingY + lineHeight);
-
         // --- BOTTOM RIGHT (If Recording): Clean REC indicator ---
         if (isRecording) {
           const recText = '● REC';
@@ -1259,7 +1238,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                   </div>
 
                   {/* Camera Barcode Active Red Scanning Laser when Camera Scanner is ON */}
-                  {cameraScannerEnabled && !isRecording && (
+                  {isBarcodeMode && !isRecording && (
                     <div className="absolute inset-x-6 h-0.5 bg-gradient-to-r from-transparent via-red-500 to-transparent shadow-[0_0_12px_rgba(239,68,68,0.8)] animate-bounce" />
                   )}
 
@@ -1313,17 +1292,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
 
             {/* In-Video Recording HUD (Authentic Camera OSD) */}
             {isCameraActive && (
-              <div id="camera-active-hud" className="absolute top-3 left-3 right-3 flex items-start justify-between pointer-events-none text-[11px] sm:text-xs font-mono font-medium z-20">
-                {/* Top-Left: Metadata Box */}
-                <div className="bg-black/60 backdrop-blur-xs text-white px-2.5 py-1.5 rounded space-y-0.5 shadow-sm border border-white/10">
-                  <div className="text-white font-semibold tracking-wide">
-                    ORD: {orderId.trim() || 'UNASSIGNED'}
-                  </div>
-                  <div className="text-slate-300 text-[10px]">
-                    {effectivePlatform.toUpperCase()} [{recordingType.toUpperCase()}]
-                  </div>
-                </div>
-
+              <div id="camera-active-hud" className="absolute top-3 right-3 flex items-start justify-end pointer-events-none text-[11px] sm:text-xs font-mono font-medium z-20">
                 {/* Top-Right: Timestamp, Resolution & Auto-Focus */}
                 <div className="flex flex-col items-end gap-1.5">
                   <div className="bg-black/60 backdrop-blur-xs text-white px-2.5 py-1.5 rounded shadow-sm border border-white/10 tracking-wider">

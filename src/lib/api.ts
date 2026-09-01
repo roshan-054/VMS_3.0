@@ -140,6 +140,14 @@ export async function applySheetConditionalFormatting(): Promise<ApiResponse> {
   return requestApi('applyConditionalFormatting', {});
 }
 
+export async function repairSheetPlaybackUrls(): Promise<ApiResponse & { fixedRows?: number }> {
+  return requestApi('repairPlaybackUrls', {});
+}
+
+export async function runSystemSetup(): Promise<ApiResponse> {
+  return requestApi('setup', {});
+}
+
 export async function fetchUploadLogs(params: {
   status?: string;
   orderId?: string;

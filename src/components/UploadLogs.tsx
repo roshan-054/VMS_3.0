@@ -1680,7 +1680,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
                   What will be permanently removed:
                 </p>
                 <ul className="list-disc list-inside space-y-1 pl-1 text-rose-950/80">
-                  <li>Matching rows in <strong>OrderLog</strong> & <strong>UploadLog</strong> Google Sheets</li>
+                  <li>Matching rows in <strong>OrderLog</strong>, <strong>ReturnLog</strong> & <strong>UploadLog</strong> Google Sheets</li>
                   <li>Duplicate lock cleared so order can be re-recorded</li>
                   <li>Local station IndexedDB upload queue cache</li>
                 </ul>

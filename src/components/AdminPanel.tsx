@@ -31,7 +31,7 @@ import {
   Lock
 } from 'lucide-react';
 import { User, UserRole, UserStatus, AdminPermissions } from '../types';
-import { requestApi, checkBackendHealth, uploadBrandingImage } from '../lib/api';
+import { requestApi, checkBackendHealth, uploadBrandingImage, repairSheetPlaybackUrls, runSystemSetup } from '../lib/api';
 import {
   isMasterAdmin,
   getUserPermissions,
@@ -117,6 +117,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
   const [autoResumeInput, setAutoResumeInput] = useState<boolean>(getStoredAutoResume());
   const [clearingCache, setClearingCache] = useState(false);
   const [testingHealth, setTestingHealth] = useState(false);
+  const [repairingUrls, setRepairingUrls] = useState(false);
+  const [runningSetup, setRunningSetup] = useState(false);
   const [healthStatus, setHealthStatus] = useState<{
     tested: boolean;
     online: boolean;
@@ -202,6 +204,38 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
       `Drive & Apps Script configuration saved! Chunk size set to ${chunkSizeMbInput} MB.`,
       'success'
     );
+  };
+
+  const handleRepairPlaybackUrls = async () => {
+    setRepairingUrls(true);
+    try {
+      const res = await repairSheetPlaybackUrls();
+      if (res.success) {
+        onShowToast(res.message || 'Playback URLs repaired in Google Sheet! Column F links are now clickable.', 'success');
+      } else {
+        onShowToast(res.error || 'Failed to repair URLs', 'error');
+      }
+    } catch (err: any) {
+      onShowToast(err?.message || 'Repair request failed', 'error');
+    } finally {
+      setRepairingUrls(false);
+    }
+  };
+
+  const handleRunGoogleSheetSetup = async () => {
+    setRunningSetup(true);
+    try {
+      const res = await runSystemSetup();
+      if (res.success) {
+        onShowToast(res.message || 'Google Sheet setup completed & ReturnLog tab synchronized!', 'success');
+      } else {
+        onShowToast(res.error || 'Setup failed', 'error');
+      }
+    } catch (err: any) {
+      onShowToast(err?.message || 'Setup request failed', 'error');
+    } finally {
+      setRunningSetup(false);
+    }
   };
 
   const fetchUsers = async () => {
@@ -773,11 +807,66 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                 </div>
               </div>
 
-              {/* 5. Cache & Storage Management */}
+              {/* 5. Google Sheet Maintenance & Playback Links Repair */}
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
+                <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+                  <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-xs">
+                    5
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900">Google Sheet Maintenance & Repair</h4>
+                    <p className="text-[11px] text-slate-500">Auto-fix playback URLs in ReturnLog/OrderLog & sync sheet tabs</p>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+                    <div>
+                      <span className="text-xs font-semibold text-slate-800 block">
+                        Fix Non-Clickable Playback URLs (Column F)
+                      </span>
+                      <span className="text-[11px] text-slate-500">
+                        Scans OrderLog & ReturnLog sheets, converting plain file names in Column F to clickable Google Drive preview links
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={repairingUrls}
+                      onClick={handleRepairPlaybackUrls}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0 ml-3"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${repairingUrls ? 'animate-spin' : ''}`} />
+                      {repairingUrls ? 'Repairing…' : 'Repair Links Now'}
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+                    <div>
+                      <span className="text-xs font-semibold text-slate-800 block">
+                        Run Sheet Setup & Create ReturnLog Tab
+                      </span>
+                      <span className="text-[11px] text-slate-500">
+                        Initializes or updates Google Sheet headers, adds ReturnLog tab, and applies duplicate highlights
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={runningSetup}
+                      onClick={handleRunGoogleSheetSetup}
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0 ml-3"
+                    >
+                      <Server className={`w-3.5 h-3.5 ${runningSetup ? 'animate-spin' : ''}`} />
+                      {runningSetup ? 'Running…' : 'Run Setup'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* 6. Cache & Storage Management */}
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
                 <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
                   <div className="w-7 h-7 rounded-lg bg-red-50 text-red-600 flex items-center justify-center font-bold text-xs">
-                    5
+                    6
                   </div>
                   <div>
                     <h4 className="text-xs font-bold text-slate-900">Cache & Storage Management</h4>

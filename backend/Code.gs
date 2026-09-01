@@ -28,6 +28,7 @@ const CONFIG = {
   // Sheet tab names
   USERS_SHEET: 'Users',
   ORDER_LOG_SHEET: 'OrderLog',
+  RETURN_LOG_SHEET: 'ReturnLog',
   DOWNLOAD_LOG_SHEET: 'DownloadLog',
   UPLOAD_LOG_SHEET: 'UploadLog',
   SECURITY_LOG_SHEET: 'SecurityLog',
@@ -64,6 +65,8 @@ function doPost(e) {
     switch(a) {
       case 'health': return output_({success:true, status:'online', version:'3.0.0', service:'Order Packing Video System (VMS 3.0)'});
       case 'setup': return output_(setupSystem());
+      case 'repairPlaybackUrls': return output_(repairPlaybackUrls());
+      case 'migrateReturns': return output_(migrateExistingReturns());
       case 'login': return output_(login_(p));
       case 'signup': return output_(signup_(p));
       case 'validateSession': return output_(validateSession_(p));
@@ -191,9 +194,55 @@ function applyDuplicateConditionalFormatting_(sh) {
 }
 
 function applyFormattingEndpoint_() {
-  const sh = sheet_(CONFIG.ORDER_LOG_SHEET);
-  applyDuplicateConditionalFormatting_(sh);
-  return { success: true, message: 'Conditional formatting applied to Google Sheet for duplicate Order IDs.' };
+  const orderSh = sheet_(CONFIG.ORDER_LOG_SHEET);
+  const returnSh = sheet_(CONFIG.RETURN_LOG_SHEET);
+  applyDuplicateConditionalFormatting_(orderSh);
+  applyDuplicateConditionalFormatting_(returnSh);
+  repairPlaybackUrls();
+  return { success: true, message: 'Conditional formatting and playback hyperlinks repaired in Google Sheets.' };
+}
+
+/**
+ * Repairs Column F ("Video Playback URL") in both OrderLog and ReturnLog.
+ * If Column F contains a plain file name (e.g. 407-..._Amazon_Return.mp4) instead of a clickable URL,
+ * this function reads the Google Drive ID in Column E and converts Column F into a live clickable link!
+ */
+function repairPlaybackUrls() {
+  const ss = ss_();
+  const sheets = [CONFIG.RETURN_LOG_SHEET, CONFIG.ORDER_LOG_SHEET];
+  let fixedCount = 0;
+
+  sheets.forEach(function(sName) {
+    const sh = ss.getSheetByName(sName);
+    if (!sh) return;
+    const data = sh.getDataRange().getValues();
+    if (data.length <= 1) return;
+
+    for (let i = 1; i < data.length; i++) {
+      let fid = String(data[i][4] || '').trim();
+      let playback = String(data[i][5] || '').trim();
+
+      // Check if Column E and Column F were swapped
+      if (!fid && playback && playback.length > 15 && playback.indexOf('.mp4') === -1 && playback.indexOf('.webm') === -1) {
+        fid = playback;
+        sh.getRange(i + 1, 5).setValue(fid);
+      }
+
+      // If Column E has a valid Drive ID but Column F is a filename or not a URL
+      if (fid && fid.length > 8 && (!playback || !playback.startsWith('http') || playback.endsWith('.mp4') || playback.endsWith('.webm'))) {
+        const fullUrl = 'https://drive.google.com/file/d/' + fid + '/preview';
+        sh.getRange(i + 1, 6).setValue(fullUrl);
+        fixedCount++;
+      }
+    }
+  });
+
+  SpreadsheetApp.flush();
+  return {
+    success: true,
+    fixedRows: fixedCount,
+    message: `Repaired ${fixedCount} rows. Video Playback URLs in Column F are now clickable links!`
+  };
 }
 
 function setupSystem() {
@@ -202,6 +251,7 @@ function setupSystem() {
   const specs = [
     [CONFIG.USERS_SHEET,['Timestamp','Full Name','Email','Password','Role','Status']],
     [CONFIG.ORDER_LOG_SHEET,['Timestamp','Order ID','Platform','Packer Email','Video Drive ID','Video Playback URL','Package Weight','Status','Recording Type','Queue Job ID','Video MIME Type','Playback Status']],
+    [CONFIG.RETURN_LOG_SHEET,['Timestamp','Order ID','Platform','Packer Email','Video Drive ID','Video Playback URL','Package Weight','Status','Recording Type','Queue Job ID','Video MIME Type','Playback Status']],
     [CONFIG.DOWNLOAD_LOG_SHEET,['Timestamp','Order ID','Platform','User Email','File Name','File Size','Download Type','Recording Type']],
     [CONFIG.UPLOAD_LOG_SHEET,['Timestamp','Order ID','Platform','Packer Email','File Name','File Size','Upload ID','Stage','Progress','Drive File ID','Status','Error','Recording Type','Source','Queue Job ID']],
     [CONFIG.SECURITY_LOG_SHEET,['Timestamp','Email','Action','Result','Details']],
@@ -225,11 +275,18 @@ function setupSystem() {
     brandSh.appendRow(['BrandingFolderId', '', new Date(), 'Google Drive Folder for Brand Assets']);
   }
 
-  // Apply conditional formatting on OrderLog
+  // Apply conditional formatting on OrderLog & ReturnLog
   const orderSh = ss.getSheetByName(CONFIG.ORDER_LOG_SHEET);
   if (orderSh) {
     applyDuplicateConditionalFormatting_(orderSh);
   }
+  const returnSh = ss.getSheetByName(CONFIG.RETURN_LOG_SHEET);
+  if (returnSh) {
+    applyDuplicateConditionalFormatting_(returnSh);
+  }
+
+  // Run repair for any existing rows where Column F has plain filename instead of clickable URL
+  repairPlaybackUrls();
 
   // Seed default admin user if Users sheet is empty
   const userSh = ss.getSheetByName(CONFIG.USERS_SHEET);
@@ -550,11 +607,16 @@ function reserve_(order,platform,type,user){
 function releaseReservation_(k){if(k)PropertiesService.getScriptProperties().deleteProperty(k)}
 function setReservationUpload_(k,id){if(!k)return;const p=PropertiesService.getScriptProperties(),raw=p.getProperty(k);if(!raw)return;const o=JSON.parse(raw);o.uploadId=id;p.setProperty(k,JSON.stringify(o))}
 
+function cleanAlphanumeric_(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
 /* ---------- Search ---------- */
 function advancedSearch_(p){
   const user=session_(p.token), isAdmin=normalize_(user.role)==='admin', email=normalize_(user.email);
   const rawOrder = String(p.orderId || '').trim();
   const order = normalizeOrderId_(rawOrder);
+  const cleanOrder = cleanAlphanumeric_(rawOrder);
   const platform = normalize_(p.platform);
   const type = normalize_(p.recordingType);
   const status = normalize_(p.status);
@@ -569,49 +631,68 @@ function advancedSearch_(p){
   const rows = [];
   const seenFids = {};
 
-  // 1. Scan OrderLog Sheet
-  try {
-    const v = sheet_(CONFIG.ORDER_LOG_SHEET).getDataRange().getValues();
-    for (let i = v.length - 1; i >= 1; i--) {
-      const ts = v[i][0] instanceof Date ? v[i][0] : new Date(v[i][0]);
-      const oid = String(v[i][1] || '').trim();
-      const normOid = normalizeOrderId_(oid);
-      const pf = String(v[i][2] || '').trim();
-      const pe = String(v[i][3] || '').trim();
-      const fid = String(v[i][4] || '').trim();
-      const st = String(v[i][7] || 'Completed').trim();
-      const rt = String(v[i][8] || 'Forward').trim();
+  const sheetsToScan = [
+    { name: CONFIG.ORDER_LOG_SHEET, defaultType: 'Forward' },
+    { name: CONFIG.RETURN_LOG_SHEET, defaultType: 'Return' }
+  ];
 
-      if (!isAdmin && normalize_(pe) !== email) continue;
-      if (order && !normOid.includes(order) && !normalize_(oid).includes(normalize_(rawOrder))) continue;
-      if (platform && platform !== 'all' && platform !== 'custom' && normalize_(pf) !== platform) continue;
-      if (platform === 'custom' && CONFIG.ALLOWED_PLATFORMS.map(normalize_).includes(normalize_(pf))) continue;
-      if (type && type !== 'all' && normalize_(rt) !== type) continue;
-      if (status && status !== 'all' && normalize_(st) !== status) continue;
-      if (packer && !(normalize_(pe).includes(packer) || normalize_(String(v[i][3]||'')).includes(packer))) continue;
-      if (from && ts < from) continue;
-      if (to && ts > to) continue;
+  // 1. Scan OrderLog and ReturnLog Sheets
+  sheetsToScan.forEach(target => {
+    try {
+      const sh = ss_().getSheetByName(target.name);
+      if (!sh) return;
+      const v = sh.getDataRange().getValues();
+      for (let i = v.length - 1; i >= 1; i--) {
+        const ts = v[i][0] instanceof Date ? v[i][0] : new Date(v[i][0]);
+        const oid = String(v[i][1] || '').trim();
+        const normOid = normalizeOrderId_(oid);
+        const cleanOid = cleanAlphanumeric_(oid);
+        const pf = String(v[i][2] || '').trim();
+        const pe = String(v[i][3] || '').trim();
+        const fid = String(v[i][4] || '').trim();
+        const st = String(v[i][7] || 'Completed').trim();
+        const rt = String(v[i][8] || target.defaultType).trim();
 
-      if (fid) seenFids[fid] = true;
+        if (!isAdmin && normalize_(pe) !== email) continue;
 
-      rows.push({
-        timestamp: ts instanceof Date && !isNaN(ts.getTime()) ? ts.toISOString() : String(v[i][0]||''),
-        orderId: oid,
-        platform: pf,
-        packerEmail: pe,
-        fileId: fid,
-        fileName: oid + '_' + pf + '_' + rt + '.mp4',
-        playbackUrl: String(v[i][5] || (fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : '')),
-        downloadUrl: fid ? 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid) : '',
-        status: st || 'Completed',
-        recordingType: rt
-      });
+        if (rawOrder) {
+          const isOrderMatch = normOid.includes(order) || 
+                               normalize_(oid).includes(normalize_(rawOrder)) || 
+                               (cleanOrder.length > 2 && cleanOid.includes(cleanOrder)) ||
+                               (cleanOid.length > 2 && cleanOrder.includes(cleanOid));
+          if (!isOrderMatch) continue;
+        }
 
-      if (rows.length >= limit) break;
+        if (platform && platform !== 'all' && platform !== 'custom' && normalize_(pf) !== platform) continue;
+        if (platform === 'custom' && CONFIG.ALLOWED_PLATFORMS.map(normalize_).includes(normalize_(pf))) continue;
+        if (type && type !== 'all' && normalize_(rt) !== type) continue;
+        if (status && status !== 'all' && normalize_(st) !== status) continue;
+        if (packer && !(normalize_(pe).includes(packer) || normalize_(String(v[i][3]||'')).includes(packer))) continue;
+        if (from && ts < from) continue;
+        if (to && ts > to) continue;
+
+        if (fid) seenFids[fid] = true;
+
+        rows.push({
+          timestamp: ts instanceof Date && !isNaN(ts.getTime()) ? ts.toISOString() : String(v[i][0]||''),
+          orderId: oid,
+          platform: pf,
+          packerEmail: pe,
+          fileId: fid,
+          fileName: oid + '_' + pf + '_' + rt + '.mp4',
+          playbackUrl: String(v[i][5] || (fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : '')),
+          downloadUrl: fid ? 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid) : '',
+          status: st || 'Completed',
+          recordingType: rt,
+          sheet: target.name
+        });
+
+        if (rows.length >= limit) break;
+      }
+    } catch (e) {
+      console.warn(target.name + ' search note:', e);
     }
-  } catch (e) {
-    console.warn('OrderLog search note:', e);
-  }
+  });
 
   // 2. Scan UploadLog Sheet for any additional or in-progress/uploaded records
   try {
@@ -621,6 +702,7 @@ function advancedSearch_(p){
         const ts = u[i][0] instanceof Date ? u[i][0] : new Date(u[i][0]);
         const oid = String(u[i][1] || '').trim();
         const normOid = normalizeOrderId_(oid);
+        const cleanOid = cleanAlphanumeric_(oid);
         const pf = String(u[i][2] || '').trim();
         const pe = String(u[i][3] || '').trim();
         const fn = String(u[i][4] || '').trim();
@@ -628,14 +710,25 @@ function advancedSearch_(p){
         const st = String(u[i][10] || 'Completed').trim();
         const rt = String(u[i][12] || 'Forward').trim();
 
-        if (fid && seenFids[fid]) continue; // already recorded from OrderLog
+        if (fid && seenFids[fid]) continue; // already recorded
         if (!isAdmin && normalize_(pe) !== email) continue;
-        if (order && !normOid.includes(order) && !normalize_(oid).includes(normalize_(rawOrder)) && !normalize_(fn).includes(normalize_(rawOrder))) continue;
+
+        if (rawOrder) {
+          const isOrderMatch = normOid.includes(order) || 
+                               normalize_(oid).includes(normalize_(rawOrder)) || 
+                               normalize_(fn).includes(normalize_(rawOrder)) ||
+                               (cleanOrder.length > 2 && cleanOid.includes(cleanOrder)) ||
+                               (cleanOrder.length > 2 && cleanAlphanumeric_(fn).includes(cleanOrder));
+          if (!isOrderMatch) continue;
+        }
+
         if (platform && platform !== 'all' && normalize_(pf) !== platform) continue;
         if (type && type !== 'all' && normalize_(rt) !== type) continue;
         if (packer && !normalize_(pe).includes(packer)) continue;
         if (from && ts < from) continue;
         if (to && ts > to) continue;
+
+        if (fid) seenFids[fid] = true;
 
         rows.push({
           timestamp: ts instanceof Date && !isNaN(ts.getTime()) ? ts.toISOString() : String(u[i][0]||''),
@@ -647,7 +740,8 @@ function advancedSearch_(p){
           playbackUrl: fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : '',
           downloadUrl: fid ? 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid) : '',
           status: st || 'Completed',
-          recordingType: rt
+          recordingType: rt,
+          sheet: CONFIG.UPLOAD_LOG_SHEET
         });
 
         if (rows.length >= limit) break;
@@ -657,9 +751,50 @@ function advancedSearch_(p){
     console.warn('UploadLog search note:', e);
   }
 
+  // 3. Fallback: If searching for a specific order and 0 rows found in sheets, search Google Drive files directly
+  if (rawOrder && rows.length === 0) {
+    try {
+      const sanitized = rawOrder.replace(/['\\]/g, '');
+      const query = "title contains '" + sanitized + "' and trashed = false";
+      const files = DriveApp.searchFiles(query);
+      let driveFound = 0;
+      while (files.hasNext() && driveFound < 10) {
+        const file = files.next();
+        const fName = file.getName();
+        const fid = file.getId();
+        if (seenFids[fid]) continue;
+
+        // Parse orderId, platform, type from fileName (e.g. 405-1167824-670856_Amazon_Return.mp4)
+        const parts = fName.replace(/\.[^/.]+$/, '').split('_');
+        const parsedOrder = parts[0] || rawOrder;
+        const parsedPf = parts[1] || 'Amazon';
+        const parsedType = parts[2] || (fName.toLowerCase().includes('return') ? 'Return' : 'Forward');
+
+        rows.push({
+          timestamp: file.getDateCreated() ? file.getDateCreated().toISOString() : new Date().toISOString(),
+          orderId: parsedOrder,
+          platform: parsedPf,
+          packerEmail: user.email || 'packer@vms.local',
+          fileId: fid,
+          fileName: fName,
+          playbackUrl: 'https://drive.google.com/file/d/' + fid + '/preview',
+          downloadUrl: 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid),
+          status: 'Completed',
+          recordingType: parsedType,
+          sheet: 'Google Drive (Direct)'
+        });
+        driveFound++;
+      }
+    } catch(dSearchErr) {
+      console.warn('Direct Drive search fallback note:', dSearchErr);
+    }
+  }
+
   if(p.sort==='oldest')rows.sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp));
-  if(p.sort==='orderAsc')rows.sort((a,b)=>a.orderId.localeCompare(b.orderId,undefined,{numeric:true}));
-  if(p.sort==='orderDesc')rows.sort((a,b)=>b.orderId.localeCompare(a.orderId,undefined,{numeric:true}));
+  else if(p.sort==='orderAsc')rows.sort((a,b)=>a.orderId.localeCompare(b.orderId,undefined,{numeric:true}));
+  else if(p.sort==='orderDesc')rows.sort((a,b)=>b.orderId.localeCompare(a.orderId,undefined,{numeric:true}));
+  else rows.sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp)); // Newest first default
+
   return {success:true,total:rows.length,results:rows};
 }
 
@@ -905,9 +1040,9 @@ function uploadChunk_(p){
         const lock = LockService.getScriptLock();
         lock.waitLock(20000);
         try {
-          const orderSh = sheet_(CONFIG.ORDER_LOG_SHEET);
-          orderSh.appendRow([new Date(), s.order, s.platform, s.packerEmail, fid, playback, '', 'Completed', s.type, s.queueJobId, s.mime, 'READY']);
-          applyDuplicateConditionalFormatting_(orderSh);
+          const targetLogSheet = getTargetLogSheet_(s.type);
+          targetLogSheet.appendRow([new Date(), s.order, s.platform, s.packerEmail, fid, playback, '', 'Completed', s.type, s.queueJobId, s.mime, 'READY']);
+          applyDuplicateConditionalFormatting_(targetLogSheet);
           try {
             sheet_(CONFIG.DOWNLOAD_LOG_SHEET).appendRow([
               new Date(), s.order, s.platform, s.packerEmail, s.name, s.size, 'Recording & Cloud Upload Complete', s.type
@@ -953,9 +1088,9 @@ function uploadChunk_(p){
     const lock = LockService.getScriptLock();
     lock.waitLock(20000);
     try {
-      const orderSh = sheet_(CONFIG.ORDER_LOG_SHEET);
-      orderSh.appendRow([new Date(), s.order, s.platform, s.packerEmail, fid, playback, '', 'Completed', s.type, s.queueJobId, s.mime, 'READY']);
-      applyDuplicateConditionalFormatting_(orderSh);
+      const targetLogSheet = getTargetLogSheet_(s.type);
+      targetLogSheet.appendRow([new Date(), s.order, s.platform, s.packerEmail, fid, playback, '', 'Completed', s.type, s.queueJobId, s.mime, 'READY']);
+      applyDuplicateConditionalFormatting_(targetLogSheet);
       try {
         sheet_(CONFIG.DOWNLOAD_LOG_SHEET).appendRow([
           new Date(), s.order, s.platform, s.packerEmail, s.name, s.size, 'Recording & Cloud Upload Complete', s.type
@@ -1018,9 +1153,9 @@ function uploadChunk_(p){
       const lock = LockService.getScriptLock();
       lock.waitLock(20000);
       try {
-        const orderSh = sheet_(CONFIG.ORDER_LOG_SHEET);
-        orderSh.appendRow([new Date(), s.order, s.platform, s.packerEmail, fid, playback, '', 'Completed', s.type, s.queueJobId, s.mime, 'READY']);
-        applyDuplicateConditionalFormatting_(orderSh);
+        const targetLogSheet = getTargetLogSheet_(s.type);
+        targetLogSheet.appendRow([new Date(), s.order, s.platform, s.packerEmail, fid, playback, '', 'Completed', s.type, s.queueJobId, s.mime, 'READY']);
+        applyDuplicateConditionalFormatting_(targetLogSheet);
         try {
           sheet_(CONFIG.DOWNLOAD_LOG_SHEET).appendRow([
             new Date(), s.order, s.platform, s.packerEmail, s.name, s.size, 'Recording & Cloud Upload Complete', s.type
@@ -1205,52 +1340,56 @@ function deleteLogEntry_(p){
   const hasSpecificId = Boolean((driveFileId && driveFileId.length > 5) || (uploadId && uploadId.length > 5) || (queueJobId && queueJobId.length > 5));
 
   try {
-    // 1. Delete matching entries from OrderLog sheet
-    try {
-      const orderSh = sheet_(CONFIG.ORDER_LOG_SHEET);
-      const orderData = orderSh.getDataRange().getValues();
-      // Headers: [Timestamp, Order ID, Platform, Packer Email, Video Drive ID, Video Playback URL, Package Weight, Status, Recording Type, Queue Job ID, Video MIME Type, Playback Status]
-      for (let i = orderData.length - 1; i >= 1; i--) {
-        const rowOrderId = String(orderData[i][1] || '').trim();
-        const rowDriveId = String(orderData[i][4] || '').trim();
-        const rowPlayback = String(orderData[i][5] || '').trim();
-        const rowJobId = String(orderData[i][9] || '').trim();
+    // 1. Delete matching entries from OrderLog and ReturnLog sheets
+    const logSheetsToClean = [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET];
+    logSheetsToClean.forEach(function(sheetName) {
+      try {
+        const targetSh = ss.getSheetByName(sheetName);
+        if (!targetSh) return;
+        const targetData = targetSh.getDataRange().getValues();
+        // Headers: [Timestamp, Order ID, Platform, Packer Email, Video Drive ID, Video Playback URL, Package Weight, Status, Recording Type, Queue Job ID, Video MIME Type, Playback Status]
+        for (let i = targetData.length - 1; i >= 1; i--) {
+          const rowOrderId = String(targetData[i][1] || '').trim();
+          const rowDriveId = String(targetData[i][4] || '').trim();
+          const rowPlayback = String(targetData[i][5] || '').trim();
+          const rowJobId = String(targetData[i][9] || '').trim();
 
-        let match = false;
-        if (hasSpecificId) {
-          // Strict specific match: only match the exact Drive ID, Upload ID, or Queue Job ID
-          if (driveFileId && rowDriveId && rowDriveId === driveFileId) match = true;
-          else if (driveFileId && rowPlayback && rowPlayback.indexOf(driveFileId) !== -1) match = true;
-          else if (uploadId && rowJobId && rowJobId === uploadId) match = true;
-          else if (queueJobId && rowJobId && rowJobId === queueJobId) match = true;
-        } else {
-          // Fallback only when no unique ID was available: match by order ID
-          if (orderId && rowOrderId && normalizeOrderId_(rowOrderId) === normalizeOrderId_(orderId)) match = true;
-        }
-
-        if (match) {
-          if (rowDriveId && rowDriveId.length > 5 && !discoveredDriveIds.includes(rowDriveId)) {
-            // Only add if no specific driveFileId was passed, to prevent trashing other files
-            if (!hasSpecificId) discoveredDriveIds.push(rowDriveId);
+          let match = false;
+          if (hasSpecificId) {
+            // Strict specific match: only match the exact Drive ID, Upload ID, or Queue Job ID
+            if (driveFileId && rowDriveId && rowDriveId === driveFileId) match = true;
+            else if (driveFileId && rowPlayback && rowPlayback.indexOf(driveFileId) !== -1) match = true;
+            else if (uploadId && rowJobId && rowJobId === uploadId) match = true;
+            else if (queueJobId && rowJobId && rowJobId === queueJobId) match = true;
+          } else {
+            // Fallback only when no unique ID was available: match by order ID
+            if (orderId && rowOrderId && normalizeOrderId_(rowOrderId) === normalizeOrderId_(orderId)) match = true;
           }
-          orderSh.deleteRow(i + 1);
-          orderLogsRemoved++;
-        }
-      }
 
-      // Prune completely empty ghost rows from OrderLog
-      const refreshedOrderData = orderSh.getDataRange().getValues();
-      for (let i = refreshedOrderData.length - 1; i >= 1; i--) {
-        const rowOrderId = String(refreshedOrderData[i][1] || '').trim();
-        const rowDriveId = String(refreshedOrderData[i][4] || '').trim();
-        const rowTimestamp = String(refreshedOrderData[i][0] || '').trim();
-        if (!rowOrderId && !rowDriveId && !rowTimestamp) {
-          orderSh.deleteRow(i + 1);
+          if (match) {
+            if (rowDriveId && rowDriveId.length > 5 && !discoveredDriveIds.includes(rowDriveId)) {
+              // Only add if no specific driveFileId was passed, to prevent trashing other files
+              if (!hasSpecificId) discoveredDriveIds.push(rowDriveId);
+            }
+            targetSh.deleteRow(i + 1);
+            orderLogsRemoved++;
+          }
         }
+
+        // Prune completely empty ghost rows
+        const refreshedTargetData = targetSh.getDataRange().getValues();
+        for (let i = refreshedTargetData.length - 1; i >= 1; i--) {
+          const rowOrderId = String(refreshedTargetData[i][1] || '').trim();
+          const rowDriveId = String(refreshedTargetData[i][4] || '').trim();
+          const rowTimestamp = String(refreshedTargetData[i][0] || '').trim();
+          if (!rowOrderId && !rowDriveId && !rowTimestamp) {
+            targetSh.deleteRow(i + 1);
+          }
+        }
+      } catch(e) {
+        console.warn('Note deleting from ' + sheetName + ':', e);
       }
-    } catch(e) {
-      console.warn('Note deleting from OrderLog:', e);
-    }
+    });
 
     // 2. Delete matching entries from UploadLog sheet
     try {
