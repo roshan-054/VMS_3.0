@@ -46,12 +46,19 @@ interface MobileScannerViewProps {
   onExit?: () => void;
 }
 
-export type ScanTriggerMode = 'tap_trigger' | 'auto_continuous' | 'hold_to_scan';
+export type ScanTriggerMode = 'auto_continuous' | 'tap_trigger' | 'hold_to_scan';
 export type ReticleType = 'linear_1d' | 'standard_box' | 'matrix_2d';
 export type BarcodeFilterPreset = 'all' | 'amazon' | 'd2c' | 'jiomart';
 
 export function MobileScannerView({ stationSessionId: initialSessionId, onExit }: MobileScannerViewProps) {
-  const [stationSessionId, setStationSessionId] = useState(initialSessionId || 'PK-1000');
+  const [stationSessionId, setStationSessionId] = useState(() => {
+    if (initialSessionId && initialSessionId !== 'STATION-1') return initialSessionId;
+    try {
+      const stored = localStorage.getItem('vms_phone_target_station') || localStorage.getItem('vms_station_session_id');
+      if (stored) return stored;
+    } catch {}
+    return initialSessionId || 'PK-1000';
+  });
   const [isEditingStation, setIsEditingStation] = useState(false);
   const [stationInput, setStationInput] = useState(initialSessionId || 'PK-1000');
 
@@ -68,11 +75,11 @@ export function MobileScannerView({ stationSessionId: initialSessionId, onExit }
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [hapticsEnabled, setHapticsEnabled] = useState(true);
 
-  // Precision Scanner Controls
-  const [triggerMode, setTriggerMode] = useState<ScanTriggerMode>('tap_trigger'); // Default to precision Tap-to-Scan for 100% precision
+  // Precision Scanner Controls - Auto-Continuous is default for instantaneous point-and-scan
+  const [triggerMode, setTriggerMode] = useState<ScanTriggerMode>('auto_continuous');
   const [isHoldingTrigger, setIsHoldingTrigger] = useState(false);
-  const [reticleType, setReticleType] = useState<ReticleType>('linear_1d'); // Default to 1D linear laser strip
-  const [minBarcodeLength, setMinBarcodeLength] = useState<number>(6); // Reject short noisy strings under 6 chars
+  const [reticleType, setReticleType] = useState<ReticleType>('standard_box');
+  const [minBarcodeLength, setMinBarcodeLength] = useState<number>(4);
   const [filterPreset, setFilterPreset] = useState<BarcodeFilterPreset>('all');
   const [ignoreRetailUpc, setIgnoreRetailUpc] = useState(false);
 
@@ -93,7 +100,16 @@ export function MobileScannerView({ stationSessionId: initialSessionId, onExit }
   const zxingReaderRef = useRef<MultiFormatReader | null>(null);
   const isProcessingFrameRef = useRef(false);
   const lastScannedRef = useRef<string | null>(null);
-  const candidateRef = useRef<{ code: string; count: number } | null>(null);
+  const lastScanTimeRef = useRef<number>(0);
+
+  // Keep target station persisted in phone storage
+  useEffect(() => {
+    if (stationSessionId) {
+      try {
+        localStorage.setItem('vms_phone_target_station', stationSessionId);
+      } catch {}
+    }
+  }, [stationSessionId]);
 
   // Initialize ZXing MultiFormatReader
   useEffect(() => {
@@ -226,9 +242,14 @@ export function MobileScannerView({ stationSessionId: initialSessionId, onExit }
       return;
     }
 
-    if (clean === lastScannedRef.current) return;
+    const now = Date.now();
+    // Cooldown check (1.8s) for identical barcode
+    if (clean === lastScannedRef.current && (now - lastScanTimeRef.current < 1800)) {
+      return;
+    }
 
     lastScannedRef.current = clean;
+    lastScanTimeRef.current = now;
     setLastScanned(clean);
     setScanCount(prev => prev + 1);
     setIsNetworkSending(true);
@@ -242,7 +263,7 @@ export function MobileScannerView({ stationSessionId: initialSessionId, onExit }
     playBeep();
 
     try {
-      await sendBarcodeFromPhone(stationSessionId, clean, 'Mobile Scanner (Precision)');
+      await sendBarcodeFromPhone(stationSessionId, clean, 'Mobile Scanner App');
     } catch (err) {
       console.warn('Send barcode error:', err);
     } finally {
@@ -339,7 +360,7 @@ export function MobileScannerView({ stationSessionId: initialSessionId, onExit }
     } catch {}
   };
 
-  // Single Frame Decoder Core (Extracts & decodes ONLY the laser reticle region)
+  // Single Frame Decoder Core (Extracts & decodes region of interest + full frame fallback)
   const decodeReticleRegion = useCallback(async (): Promise<string | null> => {
     const video = videoRef.current;
     const cropCanvas = cropCanvasRef.current;
@@ -349,19 +370,16 @@ export function MobileScannerView({ stationSessionId: initialSessionId, onExit }
     const vh = video.videoHeight;
     if (!vw || !vh) return null;
 
-    // Strict Region of Interest (ROI) Geometry
-    // Linear 1D Laser: 90% width, only 18% height (ultra-tight laser strip)
-    // Standard Box: 82% width, 32% height
-    // Matrix 2D QR: 65% width, 55% height
-    let roiWidthFactor = 0.90;
-    let roiHeightFactor = 0.18;
+    // Viewfinder geometry
+    let roiWidthFactor = 0.88;
+    let roiHeightFactor = 0.42;
 
-    if (reticleType === 'standard_box') {
-      roiWidthFactor = 0.82;
-      roiHeightFactor = 0.32;
+    if (reticleType === 'linear_1d') {
+      roiWidthFactor = 0.92;
+      roiHeightFactor = 0.26;
     } else if (reticleType === 'matrix_2d') {
-      roiWidthFactor = 0.68;
-      roiHeightFactor = 0.55;
+      roiWidthFactor = 0.72;
+      roiHeightFactor = 0.58;
     }
 
     const cropW = Math.floor(vw * roiWidthFactor);
@@ -375,12 +393,12 @@ export function MobileScannerView({ stationSessionId: initialSessionId, onExit }
     const ctx = cropCanvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return null;
 
-    // Draw strictly the cropped ROI slice
+    // Draw the cropped region into canvas
     ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
 
     let detectedCode: string | null = null;
 
-    // 1. Native Hardware BarcodeDetector API
+    // 1. Native Hardware BarcodeDetector API (Android Chrome & modern browsers)
     if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
       try {
         const detector = new (window as any).BarcodeDetector({
@@ -393,25 +411,25 @@ export function MobileScannerView({ stationSessionId: initialSessionId, onExit }
       } catch {}
     }
 
-    // 2. ZXing MultiFormatReader Fallback
+    // 2. High-performance ZXing MultiFormatReader (iOS Safari & universal fallback)
     if (!detectedCode && zxingReaderRef.current) {
       try {
         const imgData = ctx.getImageData(0, 0, cropW, cropH);
-        const luminanceSource = new RGBLuminanceSource(imgData.data, cropW, cropH);
+        // Pass Int32Array view of pixel buffer for 32-bit RGBLuminanceSource
+        const int32Buffer = new Int32Array(imgData.data.buffer);
+        const luminanceSource = new RGBLuminanceSource(int32Buffer, cropW, cropH);
         const binaryBitmap = new BinaryBitmap(new HybridBinarizer(luminanceSource));
         const result = zxingReaderRef.current.decode(binaryBitmap);
         if (result && result.getText()) {
           detectedCode = result.getText().trim();
         }
-      } catch {
-        // Not found in crop region
-      }
+      } catch {}
     }
 
     return detectedCode;
   }, [reticleType]);
 
-  // Execute Trigger Scan (for Tap-to-Scan manual trigger mode)
+  // Execute Manual Trigger Scan
   const handleTriggerManualScan = useCallback(async () => {
     setIsCapturingSingle(true);
     try {
@@ -419,18 +437,18 @@ export function MobileScannerView({ stationSessionId: initialSessionId, onExit }
       if (code) {
         handleProcessBarcode(code);
       } else {
-        setScanFeedbackMsg('No barcode in laser line. Aim closely & tap again.');
+        setScanFeedbackMsg('No barcode detected in laser reticle. Aim and tap again.');
         if (hapticsEnabled && typeof navigator !== 'undefined' && navigator.vibrate) {
           navigator.vibrate(35);
         }
-        setTimeout(() => setScanFeedbackMsg(null), 2500);
+        setTimeout(() => setScanFeedbackMsg(null), 2000);
       }
     } catch {} finally {
       setTimeout(() => setIsCapturingSingle(false), 200);
     }
   }, [decodeReticleRegion, handleProcessBarcode, hapticsEnabled]);
 
-  // Continuous Auto-Scan Loop (only active if mode is auto_continuous or holding trigger)
+  // High-Speed Continuous Auto-Scan Loop
   useEffect(() => {
     const isAutoActive = triggerMode === 'auto_continuous' || (triggerMode === 'hold_to_scan' && isHoldingTrigger);
     if (!isAutoActive) return;
@@ -442,23 +460,12 @@ export function MobileScannerView({ stationSessionId: initialSessionId, onExit }
       try {
         const code = await decodeReticleRegion();
         if (code && code.length >= minBarcodeLength) {
-          // Double-check stability in continuous mode to avoid spurious triggers
-          if (candidateRef.current && candidateRef.current.code === code) {
-            candidateRef.current.count += 1;
-            if (candidateRef.current.count >= 2) {
-              handleProcessBarcode(code);
-              candidateRef.current = null;
-            }
-          } else {
-            candidateRef.current = { code, count: 1 };
-          }
-        } else {
-          candidateRef.current = null;
+          handleProcessBarcode(code);
         }
       } catch {} finally {
         isProcessingFrameRef.current = false;
       }
-    }, 160);
+    }, 130); // ~7.7 frames/sec for instantaneous response
 
     return () => clearInterval(interval);
   }, [triggerMode, isHoldingTrigger, decodeReticleRegion, handleProcessBarcode, minBarcodeLength]);
