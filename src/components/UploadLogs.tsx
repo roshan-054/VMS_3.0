@@ -34,7 +34,7 @@ import {
   Share2
 } from 'lucide-react';
 import { User, UploadLogItem, QueueItem, PlatformType, RecordingType } from '../types';
-import { fetchUploadLogs, deleteLogEntry } from '../lib/api';
+import { fetchUploadLogs, deleteLogEntry, formatFileSize } from '../lib/api';
 import { dbGetAllQueue, dbPutQueue, dbDeleteQueueItem, getStoredDriveFolderId } from '../lib/storage';
 import { canUserDeleteData } from '../lib/permissions';
 import { retryUploadItem } from '../lib/uploadWorker';
@@ -56,7 +56,9 @@ function getStoredDeletedKeys(): Set<string> {
     const raw = localStorage.getItem(DELETED_LOGS_STORAGE_KEY);
     if (!raw) return new Set();
     const arr = JSON.parse(raw);
-    return new Set(Array.isArray(arr) ? arr : []);
+    // Only accept genuine unique specific IDs (e.g. Drive IDs, UUIDs with length >= 15), never order IDs
+    const valid = (Array.isArray(arr) ? arr : []).filter((k: string) => typeof k === 'string' && k.trim().length >= 15);
+    return new Set(valid);
   } catch (e) {
     return new Set();
   }
@@ -66,7 +68,10 @@ function saveDeletedKey(keys: string[]) {
   try {
     const current = getStoredDeletedKeys();
     keys.forEach((k) => {
-      if (k && k.trim()) current.add(k.trim().toLowerCase());
+      // Strictly prevent saving generic short order IDs into deleted key set
+      if (k && typeof k === 'string' && k.trim().length >= 15) {
+        current.add(k.trim().toLowerCase());
+      }
     });
     // Keep max 500 keys to avoid unlimited storage growth
     const arr = Array.from(current).slice(-500);
@@ -335,9 +340,10 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
 
       // 2. Persist deleted specific unique IDs (do NOT store generic orderId so other duplicates remain intact)
       const specificKey = targetDriveId || targetUploadId || targetQueueId;
-      const keysToRemember = (specificKey ? [specificKey] : [targetOrderId]).filter(Boolean) as string[];
-      saveDeletedKey(keysToRemember);
-      setDeletedKeys(getStoredDeletedKeys());
+      if (specificKey && specificKey.length >= 15) {
+        saveDeletedKey([specificKey]);
+        setDeletedKeys(getStoredDeletedKeys());
+      }
 
       // 3. Optimistically update local states immediately for ONLY the target item
       setCloudLogs((prev) =>
@@ -345,7 +351,10 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
           if (targetDriveId && (l.driveFileId === targetDriveId || (l.playbackUrl && l.playbackUrl.includes(targetDriveId)))) return false;
           if (targetUploadId && l.uploadId === targetUploadId) return false;
           if (targetQueueId && l.queueJobId === targetQueueId) return false;
-          if (!targetDriveId && !targetUploadId && !targetQueueId && targetOrderId && l.orderId === targetOrderId) return false;
+          if (!targetDriveId && !targetUploadId && !targetQueueId && targetOrderId && l.orderId === targetOrderId) {
+            if (logToDelete.timestamp && l.timestamp && l.timestamp !== logToDelete.timestamp) return true;
+            return false;
+          }
           return true;
         })
       );
@@ -377,7 +386,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
         setSelectedLog(null);
       }
 
-      // 4. Call Backend API to delete entry from Google Sheet OrderLog, UploadLog, DownloadLog, and Google Drive
+      // 4. Call Backend API to delete entry from Google Sheet OrderLog, ReturnLog, UploadLog, DownloadLog, and Google Drive
       let backendRes: any = null;
       try {
         backendRes = await deleteLogEntry({
@@ -385,6 +394,8 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
           uploadId: targetUploadId,
           driveFileId: targetDriveId,
           queueJobId: targetQueueId,
+          timestamp: logToDelete.timestamp,
+          recordingType: logToDelete.recordingType,
           deleteFromDrive: deleteDriveFileOption,
         });
       } catch (apiErr: any) {
@@ -434,7 +445,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
         platform: item.platform,
         packerEmail: 'Local Station Packer',
         fileName: item.fileName,
-        fileSize: item.fileSize ? `${(item.fileSize / (1024 * 1024)).toFixed(1)} MB` : (item.blob ? `${(item.blob.size / (1024 * 1024)).toFixed(1)} MB` : 'Unknown'),
+        fileSize: formatFileSize(item.fileSize || item.blob?.size),
         uploadId: item.uploadId || item.id,
         stage: item.stage || (item.status === 'completed' ? 'Uploaded to Google Drive' : 'Queued in Station Storage'),
         progress: item.progress || 0,
@@ -460,11 +471,22 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
     }
 
     // Unified: Combine cloud logs with active local logs that aren't logged in cloud yet
-    const cloudUploadIds = new Set(cloudLogs.map((l) => String(l.uploadId || '').trim()).filter(Boolean));
-    const cloudOrderDates = new Set(cloudLogs.map((l) => `${l.orderId}_${l.platform}_${l.recordingType}`));
+    const cloudUploadIds = new Set(cloudLogs.map((l) => String(l.uploadId || '').trim().toLowerCase()).filter(Boolean));
+    const cloudDriveIds = new Set(cloudLogs.map((l) => String(l.driveFileId || '').trim().toLowerCase()).filter(Boolean));
+    const cloudJobIds = new Set(cloudLogs.map((l) => String(l.queueJobId || '').trim().toLowerCase()).filter(Boolean));
 
     const uniqueLocal = localAsLogs.filter((loc) => {
-      if (loc.uploadId && cloudUploadIds.has(loc.uploadId)) return false;
+      const up = String(loc.uploadId || '').trim().toLowerCase();
+      const drv = String(loc.driveFileId || '').trim().toLowerCase();
+      const qj = String(loc.queueJobId || '').trim().toLowerCase();
+
+      if (up && cloudUploadIds.has(up)) return false;
+      if (drv && cloudDriveIds.has(drv)) return false;
+      if (qj && cloudJobIds.has(qj)) return false;
+
+      // If local queue item is marked Completed, but not present in cloud logs (e.g. deleted from cloud/sheet), don't resurrect it
+      if (loc.status === 'Completed') return false;
+
       return true;
     });
 
@@ -633,7 +655,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
       l.progress,
       `"${(l.stage || '').replace(/"/g, '""')}"`,
       `"${l.fileName.replace(/"/g, '""')}"`,
-      l.fileSize,
+      formatFileSize(l.fileSize),
       l.packerEmail,
       l.driveFileId,
       l.playbackUrl || (l.driveFileId ? `https://drive.google.com/file/d/${l.driveFileId}/preview` : ''),
@@ -1259,7 +1281,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
                           </span>
                         </div>
                         <div className="text-[10px] text-slate-500 font-mono mt-0.5 flex items-center gap-2">
-                          <span>{log.fileSize || '—'}</span>
+                          <span>{formatFileSize(log.fileSize) || '—'}</span>
                           {log.source && (
                             <span className="text-slate-400">· {log.source}</span>
                           )}
@@ -1792,7 +1814,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
 
                 <div>
                   <span className="text-slate-400 font-medium">File Size:</span>
-                  <span className="ml-2 font-mono text-slate-800">{selectedLog.fileSize}</span>
+                  <span className="ml-2 font-mono text-slate-800">{formatFileSize(selectedLog.fileSize)}</span>
                 </div>
 
                 <div>

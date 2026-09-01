@@ -25,7 +25,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { VideoRecord } from '../types';
-import { requestApi } from '../lib/api';
+import { requestApi, formatFileSize } from '../lib/api';
 
 interface SearchOrdersProps {
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
@@ -466,7 +466,7 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast }) => {
 
                   <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400 mt-2">
                     <span className="font-mono text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
-                      {r.fileSize || 'Standard HD'}
+                      {formatFileSize(r.fileSize) || 'Standard HD'}
                     </span>
                     <span>•</span>
                     <span className="flex items-center gap-1">
@@ -655,7 +655,7 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast }) => {
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
                     <span className="text-[10px] font-bold text-slate-400 uppercase">Video File Size</span>
                     <p className="text-xs font-mono font-medium text-slate-800">
-                      {selectedRecord.fileSize || 'Standard 1080p'}
+                      {formatFileSize(selectedRecord.fileSize) || 'Standard 1080p'}
                     </p>
                   </div>
 

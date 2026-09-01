@@ -225,6 +225,8 @@ export async function deleteLogEntry(params: {
   uploadId?: string;
   driveFileId?: string;
   queueJobId?: string;
+  timestamp?: string;
+  recordingType?: string;
   deleteFromDrive?: boolean;
 }): Promise<{
   success: boolean;
@@ -232,6 +234,7 @@ export async function deleteLogEntry(params: {
   orderLogsRemoved?: number;
   uploadLogsRemoved?: number;
   driveTrashed?: boolean;
+  driveTrashedCount?: number;
   notSupportedByBackend?: boolean;
 }> {
   try {
@@ -239,6 +242,7 @@ export async function deleteLogEntry(params: {
       orderLogsRemoved?: number;
       uploadLogsRemoved?: number;
       driveTrashed?: boolean;
+      driveTrashedCount?: number;
       message?: string;
     }>('deleteLogEntry', params);
     return {
@@ -256,6 +260,32 @@ export async function deleteLogEntry(params: {
     }
     throw err;
   }
+}
+
+export function formatFileSize(bytes: number | string | undefined | null): string {
+  if (bytes === undefined || bytes === null || bytes === '') return '—';
+
+  if (typeof bytes === 'string') {
+    const s = bytes.trim();
+    if (!s || s === '—' || s === 'Unknown' || s === 'Standard HD' || s === 'Standard 1080p') return s || '—';
+    if (s.endsWith('MB') || s.endsWith('KB') || s.endsWith('GB') || s.endsWith('B')) {
+      return s;
+    }
+    const num = parseFloat(s);
+    if (isNaN(num)) return s;
+    bytes = num;
+  }
+
+  if (typeof bytes === 'number') {
+    if (bytes <= 0) return '0 MB';
+    const mb = bytes / (1024 * 1024);
+    if (mb < 0.1) {
+      return `${(bytes / 1024).toFixed(1)} KB`;
+    }
+    return `${mb.toFixed(2)} MB`;
+  }
+
+  return String(bytes);
 }
 
 export function bytesToBase64(bytes: Uint8Array): string {

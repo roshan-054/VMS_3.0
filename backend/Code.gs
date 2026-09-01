@@ -1318,6 +1318,8 @@ function deleteLogEntry_(p){
   const uploadId = String(p.uploadId || '').trim();
   let driveFileId = String(p.driveFileId || '').trim();
   const queueJobId = String(p.queueJobId || p.jobId || '').trim();
+  const targetTimestampStr = String(p.timestamp || '').trim();
+  const targetType = String(p.recordingType || '').trim();
   const deleteFromDrive = p.deleteFromDrive !== false;
 
   if (!orderId && !uploadId && !driveFileId && !queueJobId) {
@@ -1349,9 +1351,11 @@ function deleteLogEntry_(p){
         const targetData = targetSh.getDataRange().getValues();
         // Headers: [Timestamp, Order ID, Platform, Packer Email, Video Drive ID, Video Playback URL, Package Weight, Status, Recording Type, Queue Job ID, Video MIME Type, Playback Status]
         for (let i = targetData.length - 1; i >= 1; i--) {
+          const rowTimestamp = targetData[i][0] instanceof Date ? targetData[i][0].toISOString() : String(targetData[i][0] || '').trim();
           const rowOrderId = String(targetData[i][1] || '').trim();
           const rowDriveId = String(targetData[i][4] || '').trim();
           const rowPlayback = String(targetData[i][5] || '').trim();
+          const rowType = String(targetData[i][8] || '').trim();
           const rowJobId = String(targetData[i][9] || '').trim();
 
           let match = false;
@@ -1362,13 +1366,25 @@ function deleteLogEntry_(p){
             else if (uploadId && rowJobId && rowJobId === uploadId) match = true;
             else if (queueJobId && rowJobId && rowJobId === queueJobId) match = true;
           } else {
-            // Fallback only when no unique ID was available: match by order ID
-            if (orderId && rowOrderId && normalizeOrderId_(rowOrderId) === normalizeOrderId_(orderId)) match = true;
+            // Fallback: match by order ID, and if timestamp or recordingType is provided, refine to that specific entry
+            if (orderId && rowOrderId && normalizeOrderId_(rowOrderId) === normalizeOrderId_(orderId)) {
+              if (targetType && rowType && normalize_(targetType) !== normalize_(rowType)) {
+                match = false;
+              } else if (targetTimestampStr && rowTimestamp) {
+                const diffMs = Math.abs(new Date(rowTimestamp).getTime() - new Date(targetTimestampStr).getTime());
+                if (!isNaN(diffMs) && diffMs < 120000) {
+                  match = true;
+                } else if (isNaN(diffMs) && (rowTimestamp.includes(targetTimestampStr.substring(0, 10)) || targetTimestampStr.includes(rowTimestamp.substring(0, 10)))) {
+                  match = true;
+                }
+              } else {
+                match = true;
+              }
+            }
           }
 
           if (match) {
             if (rowDriveId && rowDriveId.length > 5 && !discoveredDriveIds.includes(rowDriveId)) {
-              // Only add if no specific driveFileId was passed, to prevent trashing other files
               if (!hasSpecificId) discoveredDriveIds.push(rowDriveId);
             }
             targetSh.deleteRow(i + 1);
@@ -1397,9 +1413,11 @@ function deleteLogEntry_(p){
       const uploadData = uploadSh.getDataRange().getValues();
       // Headers: [Timestamp, Order ID, Platform, Packer Email, File Name, File Size, Upload ID, Stage, Progress, Drive File ID, Status, Error, Recording Type, Source, Queue Job ID]
       for (let i = uploadData.length - 1; i >= 1; i--) {
+        const rowTimestamp = uploadData[i][0] instanceof Date ? uploadData[i][0].toISOString() : String(uploadData[i][0] || '').trim();
         const rowOrderId = String(uploadData[i][1] || '').trim();
         const rowUploadId = String(uploadData[i][6] || '').trim();
         const rowDriveId = String(uploadData[i][9] || '').trim();
+        const rowType = String(uploadData[i][12] || '').trim();
         const rowJobId = String(uploadData[i][14] || '').trim();
 
         let match = false;
@@ -1411,8 +1429,21 @@ function deleteLogEntry_(p){
           else if (queueJobId && rowJobId && rowJobId === queueJobId) match = true;
           else if (queueJobId && rowUploadId && rowUploadId === queueJobId) match = true;
         } else {
-          // Fallback only when no unique ID was available: match by order ID
-          if (orderId && rowOrderId && normalizeOrderId_(rowOrderId) === normalizeOrderId_(orderId)) match = true;
+          // Fallback: match by order ID, and if timestamp or recordingType is provided, refine to that specific entry
+          if (orderId && rowOrderId && normalizeOrderId_(rowOrderId) === normalizeOrderId_(orderId)) {
+            if (targetType && rowType && normalize_(targetType) !== normalize_(rowType)) {
+              match = false;
+            } else if (targetTimestampStr && rowTimestamp) {
+              const diffMs = Math.abs(new Date(rowTimestamp).getTime() - new Date(targetTimestampStr).getTime());
+              if (!isNaN(diffMs) && diffMs < 120000) {
+                match = true;
+              } else if (isNaN(diffMs) && (rowTimestamp.includes(targetTimestampStr.substring(0, 10)) || targetTimestampStr.includes(rowTimestamp.substring(0, 10)))) {
+                match = true;
+              }
+            } else {
+              match = true;
+            }
+          }
         }
 
         if (match) {
@@ -1438,8 +1469,8 @@ function deleteLogEntry_(p){
       console.warn('Note deleting from UploadLog:', e);
     }
 
-    // 3. Delete matching entries from DownloadLog sheet if matching orderId and no specific ID was given
-    if (orderId && !hasSpecificId) {
+    // 3. Delete matching entries from DownloadLog sheet if matching orderId
+    if (orderId) {
       try {
         const dlSh = sheet_(CONFIG.DOWNLOAD_LOG_SHEET);
         const dlData = dlSh.getDataRange().getValues();
