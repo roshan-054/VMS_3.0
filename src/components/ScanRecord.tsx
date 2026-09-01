@@ -40,8 +40,6 @@ import { PlatformType, RecordingType, QueueItem } from '../types';
 import { dbPutQueue, dbGetAllQueue, getStoredDuplicatePolicy, DuplicatePolicy } from '../lib/storage';
 import { checkDuplicate, requestApi, normalizeOrderId } from '../lib/api';
 import { triggerUploadWorker } from '../lib/uploadWorker';
-import { PhoneScannerModal } from './PhoneScannerModal';
-import { getOrCreateStationSession, subscribeToPhoneScans, sendStationPing } from '../lib/phoneSync';
 
 interface ScanRecordProps {
   onQueueUpdated: () => void;
@@ -92,12 +90,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     return (localStorage.getItem('vms_ai_zone_preset') as any) || 'standard';
   });
   const [focusClickPoint, setFocusClickPoint] = useState<{ x: number; y: number } | null>(null);
-
-  // Wireless Phone Barcode Scanner State
-  const [isPhoneScannerModalOpen, setIsPhoneScannerModalOpen] = useState(false);
-  const [stationSessionId] = useState<string>(() => getOrCreateStationSession());
-  const [isPhoneConnected, setIsPhoneConnected] = useState(false);
-  const [lastPhoneScanFeedback, setLastPhoneScanFeedback] = useState<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -401,39 +393,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [onShowToast]);
-
-  // Subscribe to Wireless Phone Barcode Scans from Mobile Companion App
-  useEffect(() => {
-    // Initial desktop ping
-    sendStationPing(stationSessionId, 'desktop', 'Desktop Packing Workstation');
-
-    const pingTimer = setInterval(() => {
-      sendStationPing(stationSessionId, 'desktop', 'Desktop Packing Workstation');
-    }, 4000);
-
-    const unsubscribe = subscribeToPhoneScans(
-      stationSessionId, 
-      (scannedCode) => {
-        const cleaned = cleanBarcode(scannedCode);
-        if (cleaned) {
-          setOrderId(cleaned);
-          detectPlatformAndType(cleaned);
-          setIsPhoneConnected(true);
-          setLastPhoneScanFeedback(cleaned);
-          onShowToast(`Phone Scanned Order: ${cleaned}`, 'success');
-          setTimeout(() => setLastPhoneScanFeedback(null), 3000);
-        }
-      },
-      (isPhoneActive) => {
-        setIsPhoneConnected(isPhoneActive);
-      }
-    );
-
-    return () => {
-      clearInterval(pingTimer);
-      unsubscribe();
-    };
-  }, [stationSessionId, onShowToast]);
 
   // Debounced real-time duplicate check whenever Order ID, platform, or recording type changes
   useEffect(() => {
@@ -1307,20 +1266,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
               </div>
             )}
 
-            {/* Instant Phone Barcode Scan Feedback Toast (Viewport Center Pop) */}
-            {lastPhoneScanFeedback && isCameraActive && (
-              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 pointer-events-none animate-in zoom-in-90 fade-in duration-200">
-                <div className="bg-emerald-600/95 text-white px-4 py-2.5 rounded-xl shadow-2xl border border-emerald-400 flex items-center gap-2.5 backdrop-blur-md">
-                  <Smartphone className="w-5 h-5 text-emerald-200 animate-bounce" />
-                  <div>
-                    <div className="text-[10px] font-mono uppercase tracking-wider text-emerald-100">
-                      SCANNED VIA PAIRED PHONE
-                    </div>
-                    <div className="text-sm font-mono font-bold">{lastPhoneScanFeedback}</div>
-                  </div>
-                </div>
-              </div>
-            )}
 
             {/* In-Video Recording HUD (Authentic Camera OSD) */}
             {isCameraActive && (
@@ -1446,19 +1391,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                     {isFocusing ? 'Focusing Lens…' : 'Auto-Focus Lens'}
                   </button>
 
-                  <button
-                    id="open-phone-scanner-btn"
-                    type="button"
-                    onClick={() => setIsPhoneScannerModalOpen(true)}
-                    className="px-3.5 py-2.5 bg-blue-50 hover:bg-blue-100 border border-blue-300 text-blue-900 text-sm rounded-lg font-semibold transition inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
-                    title="Connect mobile phone as wireless handheld barcode scanner"
-                  >
-                    <Smartphone className="w-4 h-4 text-blue-600" />
-                    <span>Pair Phone Scanner</span>
-                    {isPhoneConnected && (
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse ml-0.5" />
-                    )}
-                  </button>
 
                   <button
                     id="toggle-ai-zone-btn"
@@ -1586,15 +1518,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                 </button>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setIsPhoneScannerModalOpen(true)}
-                className="px-3 py-1 text-xs font-semibold rounded-md border border-blue-500/50 bg-blue-500/20 text-blue-300 hover:bg-blue-500/30 transition cursor-pointer inline-flex items-center gap-1.5"
-                title="Connect Smartphone as Barcode Scanner"
-              >
-                <Smartphone className="w-3.5 h-3.5 text-blue-400" />
-                <span>Pair Phone Scanner</span>
-              </button>
 
               <button
                 type="button"
@@ -1633,21 +1556,10 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <label htmlFor="orderIdInput" className="text-xs font-semibold text-slate-700">Order ID / Tracking Number</label>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setIsPhoneScannerModalOpen(true)}
-                    className="text-[11px] flex items-center gap-1 font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-0.5 rounded transition cursor-pointer"
-                    title="Pair phone to scan barcodes wirelessly"
-                  >
-                    <Smartphone className="w-3 h-3 text-blue-600" />
-                    <span>Phone Scanner: {stationSessionId}</span>
-                  </button>
-                  <span className="text-[11px] text-slate-500 flex items-center gap-1">
-                    <Barcode className="w-3.5 h-3.5 text-blue-600" />
-                    USB Scanner
-                  </span>
-                </div>
+                <span className="text-[11px] text-slate-500 flex items-center gap-1">
+                  <Barcode className="w-3.5 h-3.5 text-blue-600" />
+                  USB Scanner
+                </span>
               </div>
               <div className="relative">
                 <input
@@ -1933,13 +1845,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       })()}
 
 
-      {/* Wireless Phone Scanner Pairing QR Modal */}
-      <PhoneScannerModal
-        isOpen={isPhoneScannerModalOpen}
-        onClose={() => setIsPhoneScannerModalOpen(false)}
-        stationSessionId={stationSessionId}
-        isPhoneConnected={isPhoneConnected}
-      />
+
 
     </div>
   );
