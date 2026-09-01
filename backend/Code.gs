@@ -553,25 +553,110 @@ function setReservationUpload_(k,id){if(!k)return;const p=PropertiesService.getS
 /* ---------- Search ---------- */
 function advancedSearch_(p){
   const user=session_(p.token), isAdmin=normalize_(user.role)==='admin', email=normalize_(user.email);
-  const order=normalize_(p.orderId), platform=normalize_(p.platform), type=normalize_(p.recordingType), status=normalize_(p.status), packer=normalize_(p.packer), video=normalize_(p.video);
-  const from=p.fromDate?new Date(p.fromDate+'T00:00:00'):null, to=p.toDate?new Date(p.toDate+'T23:59:59'):null;
-  const limit=Math.min(200,Math.max(1,Number(p.limit||50))), v=sheet_(CONFIG.ORDER_LOG_SHEET).getDataRange().getValues(), rows=[];
-  for(let i=v.length-1;i>=1;i--){
-    const ts=v[i][0] instanceof Date?v[i][0]:new Date(v[i][0]), oid=String(v[i][1]||''), pf=String(v[i][2]||''), pe=String(v[i][3]||''), fid=String(v[i][4]||''), st=String(v[i][7]||''), rt=String(v[i][8]||'Forward');
-    if(!isAdmin&&normalize_(pe)!==email)continue;
-    if(order&&!normalize_(oid).includes(order))continue;
-    if(platform&&platform!=='custom'&&normalize_(pf)!==platform)continue;
-    if(platform==='custom'&&CONFIG.ALLOWED_PLATFORMS.map(normalize_).includes(normalize_(pf)))continue;
-    if(type&&normalize_(rt)!==type)continue;
-    if(status&&normalize_(st)!==status)continue;
-    if(packer&&!(normalize_(pe).includes(packer)||normalize_(String(v[i][3]||'')).includes(packer)))continue;
-    if(from&&ts<from)continue;if(to&&ts>to)continue;
-    const available=!!fid&&driveExists_(fid);
-    if(video==='yes'&&!available)continue;if(video==='no'&&available)continue;
-    if(!available)continue;
-    rows.push({timestamp:ts.toISOString(),orderId:oid,platform:pf,packerEmail:pe,fileId:fid,playbackUrl:String(v[i][5]||'https://drive.google.com/file/d/'+fid+'/preview'),downloadUrl:'https://drive.google.com/uc?export=download&id='+encodeURIComponent(fid),status:st,recordingType:rt});
-    if(rows.length>=limit)break;
+  const rawOrder = String(p.orderId || '').trim();
+  const order = normalizeOrderId_(rawOrder);
+  const platform = normalize_(p.platform);
+  const type = normalize_(p.recordingType);
+  const status = normalize_(p.status);
+  const packer = normalize_(p.packer);
+  const video = normalize_(p.video);
+  const from = p.fromDate ? new Date(p.fromDate+'T00:00:00') : null;
+  const to = p.toDate ? new Date(p.toDate+'T23:59:59') : null;
+
+  // If specific order search is active, do not cap at 100 - scan all rows
+  const hasSpecificSearch = !!(rawOrder || packer || from || to);
+  const limit = hasSpecificSearch ? Math.min(10000, Math.max(1, Number(p.limit||5000))) : Math.min(1000, Math.max(1, Number(p.limit||100)));
+  const rows = [];
+  const seenFids = {};
+
+  // 1. Scan OrderLog Sheet
+  try {
+    const v = sheet_(CONFIG.ORDER_LOG_SHEET).getDataRange().getValues();
+    for (let i = v.length - 1; i >= 1; i--) {
+      const ts = v[i][0] instanceof Date ? v[i][0] : new Date(v[i][0]);
+      const oid = String(v[i][1] || '').trim();
+      const normOid = normalizeOrderId_(oid);
+      const pf = String(v[i][2] || '').trim();
+      const pe = String(v[i][3] || '').trim();
+      const fid = String(v[i][4] || '').trim();
+      const st = String(v[i][7] || 'Completed').trim();
+      const rt = String(v[i][8] || 'Forward').trim();
+
+      if (!isAdmin && normalize_(pe) !== email) continue;
+      if (order && !normOid.includes(order) && !normalize_(oid).includes(normalize_(rawOrder))) continue;
+      if (platform && platform !== 'all' && platform !== 'custom' && normalize_(pf) !== platform) continue;
+      if (platform === 'custom' && CONFIG.ALLOWED_PLATFORMS.map(normalize_).includes(normalize_(pf))) continue;
+      if (type && type !== 'all' && normalize_(rt) !== type) continue;
+      if (status && status !== 'all' && normalize_(st) !== status) continue;
+      if (packer && !(normalize_(pe).includes(packer) || normalize_(String(v[i][3]||'')).includes(packer))) continue;
+      if (from && ts < from) continue;
+      if (to && ts > to) continue;
+
+      if (fid) seenFids[fid] = true;
+
+      rows.push({
+        timestamp: ts instanceof Date && !isNaN(ts.getTime()) ? ts.toISOString() : String(v[i][0]||''),
+        orderId: oid,
+        platform: pf,
+        packerEmail: pe,
+        fileId: fid,
+        fileName: oid + '_' + pf + '_' + rt + '.mp4',
+        playbackUrl: String(v[i][5] || (fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : '')),
+        downloadUrl: fid ? 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid) : '',
+        status: st || 'Completed',
+        recordingType: rt
+      });
+
+      if (rows.length >= limit) break;
+    }
+  } catch (e) {
+    console.warn('OrderLog search note:', e);
   }
+
+  // 2. Scan UploadLog Sheet for any additional or in-progress/uploaded records
+  try {
+    if (rows.length < limit) {
+      const u = sheet_(CONFIG.UPLOAD_LOG_SHEET).getDataRange().getValues();
+      for (let i = u.length - 1; i >= 1; i--) {
+        const ts = u[i][0] instanceof Date ? u[i][0] : new Date(u[i][0]);
+        const oid = String(u[i][1] || '').trim();
+        const normOid = normalizeOrderId_(oid);
+        const pf = String(u[i][2] || '').trim();
+        const pe = String(u[i][3] || '').trim();
+        const fn = String(u[i][4] || '').trim();
+        const fid = String(u[i][9] || '').trim();
+        const st = String(u[i][10] || 'Completed').trim();
+        const rt = String(u[i][12] || 'Forward').trim();
+
+        if (fid && seenFids[fid]) continue; // already recorded from OrderLog
+        if (!isAdmin && normalize_(pe) !== email) continue;
+        if (order && !normOid.includes(order) && !normalize_(oid).includes(normalize_(rawOrder)) && !normalize_(fn).includes(normalize_(rawOrder))) continue;
+        if (platform && platform !== 'all' && normalize_(pf) !== platform) continue;
+        if (type && type !== 'all' && normalize_(rt) !== type) continue;
+        if (packer && !normalize_(pe).includes(packer)) continue;
+        if (from && ts < from) continue;
+        if (to && ts > to) continue;
+
+        rows.push({
+          timestamp: ts instanceof Date && !isNaN(ts.getTime()) ? ts.toISOString() : String(u[i][0]||''),
+          orderId: oid,
+          platform: pf,
+          packerEmail: pe,
+          fileId: fid,
+          fileName: fn || (oid + '_' + pf + '_' + rt + '.mp4'),
+          playbackUrl: fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : '',
+          downloadUrl: fid ? 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid) : '',
+          status: st || 'Completed',
+          recordingType: rt
+        });
+
+        if (rows.length >= limit) break;
+      }
+    }
+  } catch (e) {
+    console.warn('UploadLog search note:', e);
+  }
+
   if(p.sort==='oldest')rows.sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp));
   if(p.sort==='orderAsc')rows.sort((a,b)=>a.orderId.localeCompare(b.orderId,undefined,{numeric:true}));
   if(p.sort==='orderDesc')rows.sort((a,b)=>b.orderId.localeCompare(a.orderId,undefined,{numeric:true}));
@@ -981,7 +1066,11 @@ function uploadLogs_(p){
   const filterOrder = normalize_(p.orderId);
   const filterPlatform = normalize_(p.platform);
   const filterType = normalize_(p.recordingType);
-  const limit = Math.min(1000, Math.max(1, Number(p.limit || 500)));
+  const searchQ = normalize_(p.searchQuery || p.search);
+  
+  // When an orderId or search query is present, do not cap at 500 - scan all rows
+  const isSearchActive = !!(filterOrder || searchQ || (p.fromDate && p.fromDate !== '') || (p.toDate && p.toDate !== ''));
+  const limit = isSearchActive ? Math.min(10000, Math.max(1, Number(p.limit || 5000))) : Math.min(2000, Math.max(1, Number(p.limit || 500)));
 
   const v=sheet_(CONFIG.UPLOAD_LOG_SHEET).getDataRange().getValues(), logs=[];
   let totalCount = 0;
@@ -1000,6 +1089,8 @@ function uploadLogs_(p){
     const platform = String(v[i][2]||'');
     const recordingType = String(v[i][12]||'Forward');
     const driveFileId = String(v[i][9]||'');
+    const fileName = String(v[i][4]||'');
+    const uploadId = String(v[i][6]||'');
 
     // Aggregate stats
     totalCount++;
@@ -1018,6 +1109,14 @@ function uploadLogs_(p){
     }
 
     if(filterOrder && !normalize_(orderId).includes(filterOrder)) continue;
+    if(searchQ && !(
+      normalize_(orderId).includes(searchQ) ||
+      normalize_(fileName).includes(searchQ) ||
+      normalize_(pe).includes(searchQ) ||
+      normalize_(uploadId).includes(searchQ) ||
+      normalize_(platform).includes(searchQ)
+    )) continue;
+
     if(filterPlatform && filterPlatform !== 'all' && normalize_(platform) !== filterPlatform) continue;
     if(filterType && filterType !== 'all' && normalize_(recordingType) !== filterType) continue;
 
@@ -1027,9 +1126,9 @@ function uploadLogs_(p){
         orderId: orderId,
         platform: platform,
         packerEmail: pe,
-        fileName: String(v[i][4]||''),
+        fileName: fileName,
         fileSize: String(v[i][5]||''),
-        uploadId: String(v[i][6]||''),
+        uploadId: uploadId,
         stage: String(v[i][7]||''),
         progress: String(v[i][8]||''),
         driveFileId: driveFileId,

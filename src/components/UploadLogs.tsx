@@ -146,7 +146,9 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
 
   const refreshTimerRef = useRef<any>(null);
 
-  const loadData = async (showLoadingSpinner = false) => {
+  const [isSearchingCloud, setIsSearchingCloud] = useState(false);
+
+  const loadData = async (showLoadingSpinner = false, customQuery?: string) => {
     if (showLoadingSpinner) setIsLoading(true);
 
     try {
@@ -154,9 +156,15 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
       const localItems = await dbGetAllQueue();
       setLocalQueue(localItems);
 
+      const queryToUse = customQuery !== undefined ? customQuery : searchQuery;
+      const isSearchActive = !!queryToUse.trim();
+
       // 2. Fetch Cloud Logs from Google Sheet
+      // If user is actively searching an Order ID, query with limit 5000 so all historical records are retrieved!
+      // Otherwise default to 500 for lightning fast startup.
       const res = await fetchUploadLogs({
-        limit: 500,
+        limit: isSearchActive ? 5000 : 500,
+        searchQuery: queryToUse.trim() || undefined,
       });
 
       if (res.success && res.logs) {
@@ -177,8 +185,25 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
       console.warn('Failed to load upload logs:', err);
     } finally {
       if (showLoadingSpinner) setIsLoading(false);
+      setIsSearchingCloud(false);
     }
   };
+
+  // Debounced deep search when user enters an Order ID or search term
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      // If search query is cleared, revert to default 500 logs view
+      loadData(false, '');
+      return;
+    }
+
+    setIsSearchingCloud(true);
+    const timer = setTimeout(() => {
+      loadData(false, searchQuery);
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   useEffect(() => {
     loadData(true);
@@ -188,15 +213,18 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
   useEffect(() => {
     if (autoRefresh) {
       refreshTimerRef.current = setInterval(() => {
-        loadData(false);
-      }, 6000);
+        // Only run auto-refresh when not actively typing/searching
+        if (!searchQuery.trim()) {
+          loadData(false, '');
+        }
+      }, 10000);
     } else {
       if (refreshTimerRef.current) clearInterval(refreshTimerRef.current);
     }
     return () => {
       if (refreshTimerRef.current) clearInterval(refreshTimerRef.current);
     };
-  }, [autoRefresh]);
+  }, [autoRefresh, searchQuery]);
 
   const copyToClipboard = (text: string, label: string, id: string) => {
     navigator.clipboard.writeText(text);
@@ -492,8 +520,8 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
         return false;
       }
 
-      // 4. Date Range Filter
-      if (fromDate || toDate) {
+      // 4. Date Range Filter (Bypassed if user is typing an Order ID/search query)
+      if (!searchQuery.trim() && (fromDate || toDate)) {
         const logDateStr = extractDateStr(log.timestamp);
         if (logDateStr) {
           if (fromDate && logDateStr < fromDate) return false;
@@ -952,10 +980,14 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3">
           {/* Search Box */}
           <div className="lg:col-span-4 relative">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            {isSearchingCloud ? (
+              <Loader2 className="w-4 h-4 text-blue-600 animate-spin absolute left-3 top-1/2 -translate-y-1/2" />
+            ) : (
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            )}
             <input
               type="text"
-              placeholder="Search Order ID, file, packer email, or upload ID…"
+              placeholder="Search any Order ID across all historical records…"
               value={searchQuery}
               onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
               className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -963,7 +995,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs px-1.5 py-0.5 rounded"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs px-1.5 py-0.5 rounded cursor-pointer"
               >
                 ✕
               </button>

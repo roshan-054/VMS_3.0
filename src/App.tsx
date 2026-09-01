@@ -34,6 +34,7 @@ import { SystemHealth } from './components/SystemHealth';
 import { AdminPanel } from './components/AdminPanel';
 import { SetupModal } from './components/SetupModal';
 import { AuthView } from './components/AuthView';
+import { MobileScannerView } from './components/MobileScannerView';
 
 import {
   isMasterAdmin,
@@ -166,6 +167,22 @@ export function App() {
     updateCurrentUser(null);
     showToast('Logged out of workstation', 'info');
   };
+
+  // Check if this window was opened as a Mobile Wireless Barcode Scanner
+  const searchParams = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
+  const isMobileScanner = searchParams.get('mobile_scanner') === '1';
+  const stationParam = searchParams.get('station') || 'STATION-1';
+
+  if (isMobileScanner) {
+    return (
+      <MobileScannerView
+        stationSessionId={stationParam}
+        onExit={() => {
+          window.location.search = '';
+        }}
+      />
+    );
+  }
 
   if (!currentUser) {
     return (

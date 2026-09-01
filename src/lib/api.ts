@@ -145,6 +145,9 @@ export async function fetchUploadLogs(params: {
   orderId?: string;
   platform?: string;
   recordingType?: string;
+  searchQuery?: string;
+  fromDate?: string;
+  toDate?: string;
   limit?: number;
 } = {}): Promise<{
   success: boolean;

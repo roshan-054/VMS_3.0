@@ -73,15 +73,17 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast }) => {
         effTo = todayStr;
       }
 
+      const isSpecificQuery = !!orderQuery.trim();
+
       const res = await requestApi<{ results: VideoRecord[]; total: number }>('advancedSearch', {
         orderId: orderQuery.trim(),
         platform: platformFilter === 'all' ? '' : platformFilter,
         recordingType: typeFilter === 'all' ? '' : typeFilter,
         status: statusFilter === 'all' ? '' : statusFilter,
         packer: packerFilter.trim(),
-        fromDate: effFrom,
-        toDate: effTo,
-        limit: 100,
+        fromDate: isSpecificQuery ? '' : effFrom,
+        toDate: isSpecificQuery ? '' : effTo,
+        limit: isSpecificQuery ? 5000 : 100,
       });
 
       setResults(res.results || []);
@@ -94,8 +96,11 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast }) => {
   };
 
   useEffect(() => {
-    fetchRecords();
-  }, [platformFilter, typeFilter, statusFilter, datePreset, sortBy]);
+    const timer = setTimeout(() => {
+      fetchRecords();
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [orderQuery, platformFilter, typeFilter, statusFilter, datePreset, sortBy]);
 
   // Client-side refined sorting & filtering
   const filteredAndSortedResults = useMemo(() => {

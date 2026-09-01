@@ -38,6 +38,30 @@ function getLocalDateStr(offsetDays = 0): string {
   return `${year}-${month}-${day}`;
 }
 
+export function formatDDMM(dateStr?: string): string {
+  if (!dateStr) return '';
+  const parts = dateStr.trim().split('-');
+  if (parts.length === 3) {
+    // YYYY-MM-DD -> DD-MM
+    return `${parts[2]}-${parts[1]}`;
+  }
+  if (parts.length === 2 && parts[0].length === 2 && parts[1].length === 2) {
+    // MM-DD -> DD-MM
+    return `${parts[1]}-${parts[0]}`;
+  }
+  return dateStr;
+}
+
+export function formatDDMMYYYY(dateStr?: string): string {
+  if (!dateStr) return '';
+  const parts = dateStr.trim().split('-');
+  if (parts.length === 3) {
+    // YYYY-MM-DD -> DD-MM-YYYY
+    return `${parts[2]}-${parts[1]}-${parts[0]}`;
+  }
+  return dateStr;
+}
+
 export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -128,23 +152,27 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
 
   // Max value in daily series for line graph scaling
   const dailyList = data?.daily || [];
-  const maxDaily = useMemo(() => {
-    if (!dailyList.length) return 1;
-    const maxVal = Math.max(
+  const actualPeakVolume = useMemo(() => {
+    if (!dailyList.length) return 0;
+    return Math.max(
       ...dailyList.map((d) => {
         if (activeChartMode === 'forward') return d.types?.Forward || 0;
         if (activeChartMode === 'return') return d.types?.Return || 0;
         return d.total;
       }),
-      1
+      0
     );
-    return Math.ceil(maxVal * 1.25) || 5; // Add 25% headroom so peak curve doesn't touch top
   }, [dailyList, activeChartMode]);
 
-  // SVG Line Graph Geometry Calculations
-  const chartWidth = 900;
-  const chartHeight = 240;
-  const padding = { top: 30, right: 35, bottom: 45, left: 55 };
+  const maxDaily = useMemo(() => {
+    if (!actualPeakVolume) return 5;
+    return Math.ceil(actualPeakVolume * 1.25) || 5; // Add 25% headroom so peak curve doesn't touch top
+  }, [actualPeakVolume]);
+
+  // SVG Line Graph Geometry Calculations - Full width enlarged view
+  const chartWidth = 1000;
+  const chartHeight = 280;
+  const padding = { top: 28, right: 20, bottom: 42, left: 45 };
   const plotWidth = chartWidth - padding.left - padding.right;
   const plotHeight = chartHeight - padding.top - padding.bottom;
   const baselineY = padding.top + plotHeight;
@@ -361,7 +389,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
           </div>
 
           <span className="text-[11px] text-slate-400 ml-auto hidden md:inline">
-            Active: <strong className="text-slate-600">{fromDate}</strong> to <strong className="text-slate-600">{toDate}</strong> ({dailyList.length} days)
+            Active: <strong className="text-slate-600">{formatDDMMYYYY(fromDate)}</strong> to <strong className="text-slate-600">{formatDDMMYYYY(toDate)}</strong> ({dailyList.length} days)
           </span>
         </div>
       </div>
@@ -499,7 +527,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
             <div className="w-full bg-blue-50/90 border border-blue-200 p-2.5 sm:px-3 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs transition-all animate-in fade-in duration-150">
               <div className="flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-blue-600 shrink-0" />
-                <span className="font-bold text-slate-800">Date: {hoveredPoint.day.date}</span>
+                <span className="font-bold text-slate-800">Date: {formatDDMMYYYY(hoveredPoint.day.date)} ({formatDDMM(hoveredPoint.day.date)})</span>
                 <span className="text-slate-400">•</span>
                 <span className="font-bold text-blue-700">Volume: {hoveredPoint.val} packages</span>
               </div>
@@ -525,187 +553,186 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
           )}
         </div>
 
-        {/* Line Graph SVG Container */}
+        {/* Line Graph SVG Container - Fully Responsive & Enlarged */}
         {points.length > 0 ? (
-          <div className="space-y-2 pt-1">
-            <div className="w-full overflow-x-auto">
-              <div className="min-w-[650px] relative">
-                <svg
-                  viewBox={`0 0 ${chartWidth} ${chartHeight}`}
-                  className="w-full h-56 select-none overflow-visible cursor-crosshair"
-                  onMouseMove={(e) => {
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    if (!rect.width || !points.length) return;
-                    const mouseX = e.clientX - rect.left;
-                    const svgX = (mouseX / rect.width) * chartWidth;
-                    let closestIdx = 0;
-                    let minDiff = Infinity;
-                    for (let i = 0; i < points.length; i++) {
-                      const diff = Math.abs(points[i].x - svgX);
-                      if (diff < minDiff) {
-                        minDiff = diff;
-                        closestIdx = i;
-                      }
+          <div className="space-y-3 pt-1">
+            <div className="w-full relative">
+              <svg
+                viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+                preserveAspectRatio="none"
+                className="w-full h-72 sm:h-80 md:h-[340px] select-none overflow-visible cursor-crosshair"
+                onMouseMove={(e) => {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  if (!rect.width || !points.length) return;
+                  const mouseX = e.clientX - rect.left;
+                  const svgX = (mouseX / rect.width) * chartWidth;
+                  let closestIdx = 0;
+                  let minDiff = Infinity;
+                  for (let i = 0; i < points.length; i++) {
+                    const diff = Math.abs(points[i].x - svgX);
+                    if (diff < minDiff) {
+                      minDiff = diff;
+                      closestIdx = i;
                     }
-                    setHoveredIndex(closestIdx);
-                  }}
-                  onMouseLeave={() => setHoveredIndex(null)}
-                >
-                  <defs>
-                    <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#3B82F6" stopOpacity="0.28" />
-                      <stop offset="100%" stopColor="#3B82F6" stopOpacity="0.00" />
-                    </linearGradient>
-                    <linearGradient id="lineGradient" x1="0" y1="0" x2="1" y2="0">
-                      <stop offset="0%" stopColor="#2563EB" />
-                      <stop offset="100%" stopColor="#4F46E5" />
-                    </linearGradient>
-                  </defs>
+                  }
+                  setHoveredIndex(closestIdx);
+                }}
+                onMouseLeave={() => setHoveredIndex(null)}
+              >
+                <defs>
+                  <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#3B82F6" stopOpacity="0.32" />
+                    <stop offset="100%" stopColor="#3B82F6" stopOpacity="0.00" />
+                  </linearGradient>
+                  <linearGradient id="lineGradient" x1="0" y1="0" x2="1" y2="0">
+                    <stop offset="0%" stopColor="#2563EB" />
+                    <stop offset="100%" stopColor="#4F46E5" />
+                  </linearGradient>
+                </defs>
 
-                  {/* Horizontal Grid Lines */}
-                  {[0, 0.25, 0.5, 0.75, 1].map((ratio, i) => {
-                    const y = padding.top + plotHeight - ratio * plotHeight;
-                    const value = Math.round(ratio * maxDaily);
-                    return (
-                      <g key={i} className="pointer-events-none">
-                        <line
-                          x1={padding.left}
-                          y1={y}
-                          x2={padding.left + plotWidth}
-                          y2={y}
-                          stroke="#E2E8F0"
-                          strokeDasharray={i === 0 ? '0' : '4 4'}
-                          strokeWidth="1"
-                        />
-                        <text
-                          x={padding.left - 10}
-                          y={y + 4}
-                          textAnchor="end"
-                          className="text-[10px] fill-slate-400 font-mono font-medium"
-                        >
-                          {value}
-                        </text>
-                      </g>
-                    );
-                  })}
+                {/* Horizontal Grid Lines */}
+                {[0, 0.25, 0.5, 0.75, 1].map((ratio, i) => {
+                  const y = padding.top + plotHeight - ratio * plotHeight;
+                  const value = Math.round(ratio * maxDaily);
+                  return (
+                    <g key={i} className="pointer-events-none">
+                      <line
+                        x1={padding.left}
+                        y1={y}
+                        x2={padding.left + plotWidth}
+                        y2={y}
+                        stroke="#E2E8F0"
+                        strokeDasharray={i === 0 ? '0' : '4 4'}
+                        strokeWidth="1"
+                      />
+                      <text
+                        x={padding.left - 10}
+                        y={y + 4}
+                        textAnchor="end"
+                        className="text-[10px] fill-slate-400 font-mono font-medium"
+                      >
+                        {value}
+                      </text>
+                    </g>
+                  );
+                })}
 
-                  {/* Shaded Area Under Curve */}
-                  {areaPathD && (
-                    <path d={areaPathD} fill="url(#areaGradient)" className="pointer-events-none" />
-                  )}
+                {/* Shaded Area Under Curve */}
+                {areaPathD && (
+                  <path d={areaPathD} fill="url(#areaGradient)" className="pointer-events-none" />
+                )}
 
-                  {/* Main Line Stroke */}
-                  {linePathD && (
-                    <path
-                      d={linePathD}
-                      fill="none"
-                      stroke="url(#lineGradient)"
-                      strokeWidth="3"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="pointer-events-none"
-                    />
-                  )}
+                {/* Main Line Stroke */}
+                {linePathD && (
+                  <path
+                    d={linePathD}
+                    fill="none"
+                    stroke="url(#lineGradient)"
+                    strokeWidth="3.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="pointer-events-none"
+                  />
+                )}
 
-                  {/* Active Hover Crosshair Line */}
-                  {hoveredPoint && (
-                    <line
-                      x1={hoveredPoint.x}
-                      y1={padding.top}
-                      x2={hoveredPoint.x}
-                      y2={padding.top + plotHeight}
-                      stroke="#3B82F6"
-                      strokeDasharray="3 3"
-                      strokeWidth="1.5"
-                      className="pointer-events-none"
-                    />
-                  )}
+                {/* Active Hover Crosshair Line */}
+                {hoveredPoint && (
+                  <line
+                    x1={hoveredPoint.x}
+                    y1={padding.top}
+                    x2={hoveredPoint.x}
+                    y2={padding.top + plotHeight}
+                    stroke="#3B82F6"
+                    strokeDasharray="3 3"
+                    strokeWidth="1.5"
+                    className="pointer-events-none"
+                  />
+                )}
 
-                  {/* Data Points / Node Circles */}
-                  {points.map((p, idx) => {
-                    const isHovered = hoveredIndex === idx;
-                    return (
-                      <g key={idx} className="pointer-events-none">
-                        {/* Outer Glow Ring on Hover */}
-                        {isHovered && (
-                          <circle
-                            cx={p.x}
-                            cy={p.y}
-                            r="8"
-                            fill="#93C5FD"
-                            opacity="0.6"
-                          />
-                        )}
-
-                        {/* Inner Node Circle */}
+                {/* Data Points / Node Circles */}
+                {points.map((p, idx) => {
+                  const isHovered = hoveredIndex === idx;
+                  return (
+                    <g key={idx} className="pointer-events-none">
+                      {/* Outer Glow Ring on Hover */}
+                      {isHovered && (
                         <circle
                           cx={p.x}
                           cy={p.y}
-                          r={isHovered ? 5.5 : 3.5}
-                          fill={isHovered ? '#1D4ED8' : '#3B82F6'}
-                          stroke="#FFFFFF"
-                          strokeWidth="2"
+                          r="8"
+                          fill="#93C5FD"
+                          opacity="0.6"
                         />
+                      )}
 
-                        {/* Value Tag on Hover */}
-                        {isHovered && (
-                          <g>
-                            <rect
-                              x={p.x - 18}
-                              y={p.y - 24}
-                              width="36"
-                              height="18"
-                              rx="4"
-                              fill="#1E293B"
-                            />
-                            <text
-                              x={p.x}
-                              y={p.y - 12}
-                              textAnchor="middle"
-                              className="text-[10px] fill-white font-mono font-bold"
-                            >
-                              {p.val}
-                            </text>
-                          </g>
-                        )}
-                      </g>
-                    );
-                  })}
+                      {/* Inner Node Circle */}
+                      <circle
+                        cx={p.x}
+                        cy={p.y}
+                        r={isHovered ? 5.5 : 3.5}
+                        fill={isHovered ? '#1D4ED8' : '#3B82F6'}
+                        stroke="#FFFFFF"
+                        strokeWidth="2"
+                      />
 
-                  {/* X-Axis Date Labels */}
-                  {points.map((p, idx) => {
-                    // Show dates intelligently based on count
-                    const totalDays = points.length;
-                    const step = totalDays > 30 ? Math.ceil(totalDays / 10) : totalDays > 14 ? 2 : 1;
-                    const showLabel = idx === 0 || idx === totalDays - 1 || idx % step === 0;
+                      {/* Value Tag on Hover */}
+                      {isHovered && (
+                        <g>
+                          <rect
+                            x={p.x - 18}
+                            y={p.y - 24}
+                            width="36"
+                            height="18"
+                            rx="4"
+                            fill="#1E293B"
+                          />
+                          <text
+                            x={p.x}
+                            y={p.y - 12}
+                            textAnchor="middle"
+                            className="text-[10px] fill-white font-mono font-bold"
+                          >
+                            {p.val}
+                          </text>
+                        </g>
+                      )}
+                    </g>
+                  );
+                })}
 
-                    if (!showLabel) return null;
+                {/* X-Axis Date Labels in DD-MM format */}
+                {points.map((p, idx) => {
+                  // Show dates intelligently based on count
+                  const totalDays = points.length;
+                  const step = totalDays > 30 ? Math.ceil(totalDays / 12) : totalDays > 14 ? 2 : 1;
+                  const showLabel = idx === 0 || idx === totalDays - 1 || idx % step === 0;
 
-                    return (
-                      <text
-                        key={`label-${idx}`}
-                        x={p.x}
-                        y={padding.top + plotHeight + 20}
-                        textAnchor="middle"
-                        className={`text-[10px] font-mono pointer-events-none ${
-                          hoveredIndex === idx ? 'fill-blue-700 font-bold' : 'fill-slate-400'
-                        }`}
-                      >
-                        {p.day.date.slice(5)}
-                      </text>
-                    );
-                  })}
-                </svg>
-              </div>
+                  if (!showLabel) return null;
+
+                  return (
+                    <text
+                      key={`label-${idx}`}
+                      x={p.x}
+                      y={padding.top + plotHeight + 22}
+                      textAnchor="middle"
+                      className={`text-[11px] font-mono pointer-events-none font-medium ${
+                        hoveredIndex === idx ? 'fill-blue-700 font-bold' : 'fill-slate-500'
+                      }`}
+                    >
+                      {formatDDMM(p.day.date)}
+                    </text>
+                  );
+                })}
+              </svg>
             </div>
 
-            <div className="flex items-center justify-between text-[11px] text-slate-400 px-2 pt-2 border-t border-slate-100">
-              <span>Start: <strong className="text-slate-600">{dailyList[0]?.date}</strong></span>
+            <div className="flex items-center justify-between text-xs text-slate-500 px-2 pt-2 border-t border-slate-100 font-medium">
+              <span>Start: <strong className="text-slate-700 font-mono">{formatDDMMYYYY(dailyList[0]?.date)}</strong></span>
               <span className="font-semibold text-slate-700 flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-blue-600" />
-                Peak Volume: <strong className="text-blue-700">{maxDaily} packings/day</strong>
+                <span className="w-2 h-2 rounded-full bg-blue-600 animate-pulse" />
+                Peak Volume: <strong className="text-blue-700 font-mono font-bold">{actualPeakVolume} packings/day</strong>
               </span>
-              <span>End: <strong className="text-slate-600">{dailyList[dailyList.length - 1]?.date}</strong></span>
+              <span>End: <strong className="text-slate-700 font-mono">{formatDDMMYYYY(dailyList[dailyList.length - 1]?.date)}</strong></span>
             </div>
           </div>
         ) : (
