@@ -28,7 +28,9 @@ import {
   Save,
   Server,
   EyeOff,
-  Lock
+  Lock,
+  Edit3,
+  UserCog
 } from 'lucide-react';
 import { User, UserRole, UserStatus, AdminPermissions } from '../types';
 import { requestApi, checkBackendHealth, uploadBrandingImage, repairSheetPlaybackUrls, runSystemSetup } from '../lib/api';
@@ -95,6 +97,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
   const [resetPasswordValue, setResetPasswordValue] = useState('');
   const [showResetPasswordValue, setShowResetPasswordValue] = useState(false);
   const [resettingPassword, setResettingPassword] = useState(false);
+
+  // Edit User Modal State
+  const [editModalUser, setEditModalUser] = useState<User | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [editRole, setEditRole] = useState<UserRole>('User');
+  const [editStatus, setEditStatus] = useState<UserStatus>('Approved');
+  const [editPassword, setEditPassword] = useState('');
+  const [showEditPassword, setShowEditPassword] = useState(false);
+  const [savingEditUser, setSavingEditUser] = useState(false);
+
+  // Delete User Confirmation State
+  const [deleteModalUser, setDeleteModalUser] = useState<User | null>(null);
+  const [deletingUser, setDeletingUser] = useState(false);
 
   // Permissions Modal State
   const [permissionsModalUser, setPermissionsModalUser] = useState<User | null>(null);
@@ -316,6 +332,81 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
     setResetModalUser(u);
     setResetPasswordValue('');
     setShowResetPasswordValue(false);
+  };
+
+  const handleOpenEditUser = (u: User) => {
+    setEditModalUser(u);
+    setEditName(u.name || '');
+    setEditEmail(u.email || '');
+    setEditRole(u.role || 'User');
+    setEditStatus(u.status || 'Approved');
+    setEditPassword('');
+    setShowEditPassword(false);
+  };
+
+  const handleConfirmEditUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editModalUser) return;
+    if (!editName.trim()) {
+      onShowToast('Name cannot be empty.', 'error');
+      return;
+    }
+
+    setSavingEditUser(true);
+    try {
+      await requestApi('adminManageUser', {
+        row: editModalUser.row,
+        name: editName.trim(),
+        role: editRole,
+        status: editStatus,
+        expectedEmail: editModalUser.email,
+      });
+
+      if (editPassword.trim()) {
+        if (editPassword.trim().length < 6) {
+          onShowToast('Password must be at least 6 characters.', 'error');
+          setSavingEditUser(false);
+          return;
+        }
+        await requestApi('adminResetPassword', {
+          row: editModalUser.row,
+          password: editPassword.trim(),
+        });
+      }
+
+      onShowToast(`User "${editName}" updated successfully!`, 'success');
+      setEditModalUser(null);
+      fetchUsers();
+    } catch (err: any) {
+      onShowToast(err.message || 'Failed to update user', 'error');
+    } finally {
+      setSavingEditUser(false);
+    }
+  };
+
+  const handleOpenDeleteUser = (u: User) => {
+    if (u.email.toLowerCase().trim() === currentUser?.email?.toLowerCase().trim()) {
+      onShowToast('You cannot delete your own active administrator account.', 'error');
+      return;
+    }
+    setDeleteModalUser(u);
+  };
+
+  const handleConfirmDeleteUser = async () => {
+    if (!deleteModalUser) return;
+    setDeletingUser(true);
+    try {
+      await requestApi('adminDeleteUser', {
+        row: deleteModalUser.row,
+      });
+      onShowToast(`User account for ${deleteModalUser.email} was removed.`, 'success');
+      setDeleteModalUser(null);
+      fetchUsers();
+    } catch (err: any) {
+      onShowToast(err.message || 'Failed to delete user', 'error');
+    } finally {
+      setDeletingUser(false);
+    }
   };
 
   const handleConfirmResetPassword = async (e: React.FormEvent) => {
@@ -1556,33 +1647,66 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                       <td className="px-4 py-3 text-slate-500 text-[11px]">
                         {u.created ? new Date(u.created).toLocaleDateString() : 'Active'}
                       </td>
-                      <td className="px-4 py-3 text-right space-x-2">
-                        {isMasterAdmin(currentUser as User) && (
+                      <td className="px-4 py-3 text-right">
+                        <div className="flex items-center justify-end gap-1.5 flex-wrap">
                           <button
+                            type="button"
+                            onClick={() => handleOpenEditUser(u)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold rounded-lg text-[11px] transition shadow-2xs cursor-pointer"
+                            title="Edit user details (Name, Role, Status, Password)"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                            Edit
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleResetPassword(u)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg text-[11px] transition shadow-2xs cursor-pointer"
+                            title="Reset password"
+                          >
+                            <KeyRound className="w-3 h-3" />
+                            Password
+                          </button>
+
+                          {u.email !== currentUser?.email && (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleStatus(u)}
+                              className={`inline-flex items-center gap-1 px-2.5 py-1 font-semibold rounded-lg text-[11px] transition shadow-2xs cursor-pointer ${
+                                u.status === 'Approved'
+                                  ? 'bg-amber-50 hover:bg-amber-100 text-amber-700'
+                                  : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700'
+                              }`}
+                              title={u.status === 'Approved' ? 'Disable user access' : 'Approve user access'}
+                            >
+                              {u.status === 'Approved' ? <XCircle className="w-3 h-3" /> : <CheckCircle className="w-3 h-3" />}
+                              {u.status === 'Approved' ? 'Disable' : 'Approve'}
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
                             onClick={() => handleEditPermissions(u)}
-                            className="text-purple-600 hover:underline font-medium"
+                            className="inline-flex items-center gap-1 px-2 py-1 bg-purple-50 hover:bg-purple-100 text-purple-700 font-semibold rounded-lg text-[11px] transition shadow-2xs cursor-pointer"
+                            title="Granular permissions"
                           >
-                            Permissions
+                            <Shield className="w-3 h-3" />
+                            Perms
                           </button>
-                        )}
-                        <button
-                          onClick={() => handleResetPassword(u)}
-                          disabled={disableUsers}
-                          className="text-blue-600 hover:underline font-medium disabled:opacity-50 disabled:no-underline disabled:text-slate-400"
-                        >
-                          Reset Password
-                        </button>
-                        {u.email !== currentUser?.email && (
-                          <button
-                            onClick={() => handleToggleStatus(u)}
-                            disabled={disableUsers}
-                            className={`font-medium disabled:opacity-50 disabled:text-slate-400 ${
-                              u.status === 'Approved' ? 'text-amber-600' : 'text-emerald-600'
-                            }`}
-                          >
-                            {u.status === 'Approved' ? 'Disable' : 'Approve'}
-                          </button>
-                        )}
+
+                          {u.email !== currentUser?.email && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenDeleteUser(u)}
+                              className="inline-flex items-center gap-1 px-2 py-1 bg-red-50 hover:bg-red-100 text-red-600 font-semibold rounded-lg text-[11px] transition shadow-2xs cursor-pointer"
+                              title="Delete user account"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              Delete
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1842,6 +1966,182 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit User Modal */}
+      {editModalUser && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+                  <UserCog className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-800">Edit User Details</h3>
+                  <p className="text-[11px] text-slate-500 font-mono">{editModalUser.email}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setEditModalUser(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmEditUser} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Full Name
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  placeholder="e.g. Roshan K"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Email Address
+                </label>
+                <input
+                  type="email"
+                  disabled
+                  value={editEmail}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono text-slate-500 cursor-not-allowed"
+                />
+                <span className="text-[10px] text-slate-400 mt-0.5 block">Email identifier is linked to Google Sheet row</span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    System Role
+                  </label>
+                  <select
+                    value={editRole}
+                    onChange={(e) => setEditRole(e.target.value as UserRole)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none bg-white"
+                  >
+                    <option value="User">User / Operator</option>
+                    <option value="Admin">Administrator</option>
+                    <option value="Master Admin">Master Admin</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Account Status
+                  </label>
+                  <select
+                    value={editStatus}
+                    onChange={(e) => setEditStatus(e.target.value as UserStatus)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none bg-white"
+                  >
+                    <option value="Approved">Approved (Active)</option>
+                    <option value="Pending">Pending Approval</option>
+                    <option value="Disabled">Disabled</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="border-t border-slate-100 pt-3">
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Update Password (Optional)
+                </label>
+                <div className="relative">
+                  <input
+                    type={showEditPassword ? 'text' : 'password'}
+                    value={editPassword}
+                    onChange={(e) => setEditPassword(e.target.value)}
+                    placeholder="Leave blank to keep existing password"
+                    minLength={6}
+                    className="w-full pl-3 pr-10 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowEditPassword(!showEditPassword)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 p-1 cursor-pointer"
+                    title={showEditPassword ? 'Hide password' : 'View password'}
+                  >
+                    {showEditPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <span className="text-[10px] text-slate-400 mt-0.5 block">Only fill this if you wish to reset their password</span>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setEditModalUser(null)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingEditUser}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-semibold shadow-xs cursor-pointer flex items-center gap-1.5"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  {savingEditUser ? 'Saving…' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete User Confirmation Modal */}
+      {deleteModalUser && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-red-50 text-red-600 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-800">Delete User Account</h3>
+                <p className="text-xs text-slate-500 mt-0.5">This action will remove the user from the system.</p>
+              </div>
+            </div>
+
+            <div className="p-3 bg-red-50/70 border border-red-100 rounded-xl text-xs text-red-800 space-y-1">
+              <p className="font-semibold">Are you sure you want to remove this user?</p>
+              <p className="font-mono text-[11px] text-red-700">
+                {deleteModalUser.name} ({deleteModalUser.email})
+              </p>
+              <p className="text-[11px] text-red-600 pt-1">
+                Their login credentials will be removed from the Users sheet.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeleteModalUser(null)}
+                disabled={deletingUser}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteUser}
+                disabled={deletingUser}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-lg text-xs font-semibold shadow-xs cursor-pointer flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                {deletingUser ? 'Deleting…' : 'Yes, Delete User'}
+              </button>
+            </div>
           </div>
         </div>
       )}

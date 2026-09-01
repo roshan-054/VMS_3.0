@@ -12,14 +12,14 @@ export const DEFAULT_MASTER_ADMIN_PERMISSIONS: AdminPermissions = {
 };
 
 export const DEFAULT_ADMIN_PERMISSIONS: AdminPermissions = {
-  canDeleteData: false,      // By default, non-master admins cannot delete data unless granted
-  canManageUsers: false,     // By default, cannot create/manage other users unless granted
-  canManageSettings: false,  // By default, cannot change backend/drive settings unless granted
-  canManageBranding: false,  // By default, cannot change branding unless granted
-  canAccessSearch: true,     // By default, allowed to search recorded orders
-  canAccessReports: true,    // By default, allowed to generate reports
-  canAccessAnalytics: true,  // By default, allowed to view analytics
-  canAccessHealth: true,     // By default, allowed to view health
+  canDeleteData: true,       // Administrators can delete/trash logs and records
+  canManageUsers: true,      // Administrators can create, edit, approve, and reset user passwords
+  canManageSettings: true,   // Administrators can change backend/drive settings
+  canManageBranding: true,   // Administrators can change branding and favicon
+  canAccessSearch: true,     // Allowed to search recorded orders
+  canAccessReports: true,    // Allowed to generate reports
+  canAccessAnalytics: true,  // Allowed to view analytics
+  canAccessHealth: true,     // Allowed to view health
 };
 
 export const DEFAULT_USER_PERMISSIONS: AdminPermissions = {
@@ -61,9 +61,12 @@ export function isMasterAdmin(user: User | null | undefined): boolean {
   return (
     role === 'masteradmin' ||
     role === 'superadmin' ||
+    role === 'admin' ||
     email === 'admin@ops.local' ||
+    email === 'admin@vms.local' ||
     email === 'master@vms.local' ||
-    email === 'askroshan.2002@gmail.com'
+    email === 'askroshan.2002@gmail.com' ||
+    email === 'roshan.k@paraayan.com'
   );
 }
 
@@ -71,7 +74,7 @@ export function isAdmin(user: User | null | undefined): boolean {
   if (!user) return false;
   if (isMasterAdmin(user)) return true;
   const role = String(user.role || '').toLowerCase();
-  return role === 'admin';
+  return role === 'admin' || role === 'master admin' || role === 'administrator';
 }
 
 export function isStandardUser(user: User | null | undefined): boolean {
@@ -81,7 +84,7 @@ export function isStandardUser(user: User | null | undefined): boolean {
 
 export function getUserPermissions(user: User | null | undefined): AdminPermissions {
   if (!user) return DEFAULT_USER_PERMISSIONS;
-  if (isMasterAdmin(user)) return DEFAULT_MASTER_ADMIN_PERMISSIONS;
+  if (isMasterAdmin(user) || isAdmin(user)) return DEFAULT_MASTER_ADMIN_PERMISSIONS;
   if (user.role === 'User') return DEFAULT_USER_PERMISSIONS;
 
   // Check locally saved permissions map as well
@@ -97,14 +100,14 @@ export function getUserPermissions(user: User | null | undefined): AdminPermissi
 
 export function canUserDeleteData(user: User | null | undefined): boolean {
   if (!user) return false;
-  if (isMasterAdmin(user)) return true;
+  if (isMasterAdmin(user) || isAdmin(user)) return true;
   if (user.role === 'User') return false;
   return getUserPermissions(user).canDeleteData === true;
 }
 
 export function canUserManageUsers(user: User | null | undefined): boolean {
   if (!user) return false;
-  if (isMasterAdmin(user)) return true;
+  if (isMasterAdmin(user) || isAdmin(user)) return true;
   if (user.role === 'User') return false;
   return getUserPermissions(user).canManageUsers === true;
 }
@@ -125,35 +128,35 @@ export function canUserManageBranding(user: User | null | undefined): boolean {
 
 export function canUserAccessSearch(user: User | null | undefined): boolean {
   if (!user) return false;
-  if (isMasterAdmin(user)) return true;
+  if (isMasterAdmin(user) || isAdmin(user)) return true;
   if (user.role === 'User') return false;
   return getUserPermissions(user).canAccessSearch === true;
 }
 
 export function canUserAccessReports(user: User | null | undefined): boolean {
   if (!user) return false;
-  if (isMasterAdmin(user)) return true;
+  if (isMasterAdmin(user) || isAdmin(user)) return true;
   if (user.role === 'User') return false;
   return getUserPermissions(user).canAccessReports === true;
 }
 
 export function canUserAccessAnalytics(user: User | null | undefined): boolean {
   if (!user) return false;
-  if (isMasterAdmin(user)) return true;
+  if (isMasterAdmin(user) || isAdmin(user)) return true;
   if (user.role === 'User') return false;
   return getUserPermissions(user).canAccessAnalytics === true;
 }
 
 export function canUserAccessHealth(user: User | null | undefined): boolean {
   if (!user) return false;
-  if (isMasterAdmin(user)) return true;
+  if (isMasterAdmin(user) || isAdmin(user)) return true;
   if (user.role === 'User') return false;
   return getUserPermissions(user).canAccessHealth === true;
 }
 
 export function canUserAccessAdminPanel(user: User | null | undefined): boolean {
   if (!user) return false;
-  if (isMasterAdmin(user)) return true;
+  if (isMasterAdmin(user) || isAdmin(user)) return true;
   if (user.role === 'User') return false;
   return true; // All Admins can see the panel
 }
