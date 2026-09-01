@@ -4,9 +4,10 @@
  * Facilitates instantaneous real-time syncing between any smartphone (via WiFi / 4G / 5G)
  * and the desktop packing workstation using:
  * 1. Server-Sent Events (SSE) stream over HTTP (/api/phone-sync/events/:sessionId)
- * 2. Real-time REST API endpoint (/api/phone-sync/scan)
- * 3. Smart polling fallback for network dropouts
+ * 2. Adaptive Long-Polling Fallback (/api/phone-sync/poll/:sessionId)
+ * 3. Real-time REST API endpoint (/api/phone-sync/scan)
  * 4. BroadcastChannel & LocalStorage event bus (for local / same-machine testing)
+ * 5. Heartbeat & Live Pairing Presence Monitor
  */
 
 export interface ScannedBarcodePayload {
@@ -15,6 +16,15 @@ export interface ScannedBarcodePayload {
   barcode: string;
   timestamp: number;
   deviceInfo?: string;
+}
+
+export interface StationStatus {
+  sessionId: string;
+  isPhoneActive: boolean;
+  isDesktopActive: boolean;
+  phoneDevice?: string;
+  desktopName?: string;
+  serverTime: number;
 }
 
 const CHANNEL_NAME = 'vms_phone_scanner_bus';
@@ -51,6 +61,46 @@ export function setStationSession(newId: string): void {
 }
 
 /**
+ * Send Station Ping / Heartbeat
+ */
+export async function sendStationPing(
+  sessionId: string, 
+  role: 'phone' | 'desktop', 
+  device?: string
+): Promise<StationStatus | null> {
+  const clean = (sessionId || '').trim().toUpperCase();
+  if (!clean) return null;
+
+  try {
+    const res = await fetch('/api/phone-sync/ping', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: clean, role, device }),
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch {}
+  return null;
+}
+
+/**
+ * Check live status of station
+ */
+export async function fetchStationStatus(sessionId: string): Promise<StationStatus | null> {
+  const clean = (sessionId || '').trim().toUpperCase();
+  if (!clean) return null;
+
+  try {
+    const res = await fetch(`/api/phone-sync/status/${encodeURIComponent(clean)}`);
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch {}
+  return null;
+}
+
+/**
  * Transmit barcode from Phone to Desktop in real-time
  */
 export async function sendBarcodeFromPhone(
@@ -64,7 +114,7 @@ export async function sendBarcodeFromPhone(
   const cleanBarcode = rawBarcode.trim();
 
   const payload: ScannedBarcodePayload = {
-    id: `${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    id: `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
     sessionId: cleanSession,
     barcode: cleanBarcode,
     timestamp: Date.now(),
@@ -74,6 +124,9 @@ export async function sendBarcodeFromPhone(
   // 1. Send via Server REST API (Real-time network transport)
   let networkSuccess = false;
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
+
     const res = await fetch('/api/phone-sync/scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -82,7 +135,10 @@ export async function sendBarcodeFromPhone(
         barcode: cleanBarcode,
         deviceInfo,
       }),
+      signal: controller.signal,
     });
+    clearTimeout(timeout);
+
     if (res.ok) {
       networkSuccess = true;
     }
@@ -113,24 +169,36 @@ export async function sendBarcodeFromPhone(
  */
 export function subscribeToPhoneScans(
   targetSessionId: string,
-  onScanReceived: (barcode: string, payload: ScannedBarcodePayload) => void
+  onScanReceived: (barcode: string, payload: ScannedBarcodePayload) => void,
+  onStatusChange?: (isPhoneOnline: boolean) => void
 ): () => void {
   const target = targetSessionId.trim().toUpperCase();
   let isSubscribed = true;
   const seenEventIds = new Set<string>();
-  let lastReceivedTime = Date.now() - 1000;
+  
+  // Track server-synced timestamp to completely eliminate clock skew
+  let lastReceivedServerTime = 0;
 
   const handleIncomingPayload = (payload: ScannedBarcodePayload) => {
     if (!payload || !payload.barcode || !isSubscribed) return;
     
-    // De-duplicate events by ID or identical timestamp/barcode within 1s
+    // De-duplicate events by ID
     if (payload.id && seenEventIds.has(payload.id)) return;
-    if (payload.id) seenEventIds.add(payload.id);
+    if (payload.id) {
+      seenEventIds.add(payload.id);
+      // Keep seen set bounded
+      if (seenEventIds.size > 200) {
+        const first = seenEventIds.values().next().value;
+        if (first) seenEventIds.delete(first);
+      }
+    }
 
     // Filter by session
     const payloadSession = (payload.sessionId || '').trim().toUpperCase();
     if (payloadSession === target || payloadSession === '*' || !target) {
-      lastReceivedTime = Math.max(lastReceivedTime, payload.timestamp || Date.now());
+      if (payload.timestamp && payload.timestamp > lastReceivedServerTime) {
+        lastReceivedServerTime = payload.timestamp;
+      }
       onScanReceived(payload.barcode, payload);
     }
   };
@@ -140,6 +208,11 @@ export function subscribeToPhoneScans(
   const connectSSE = () => {
     if (!isSubscribed || typeof window === 'undefined' || !('EventSource' in window)) return;
     try {
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+      }
+
       eventSource = new EventSource(`/api/phone-sync/events/${encodeURIComponent(target)}`);
       
       eventSource.onmessage = (event) => {
@@ -156,9 +229,9 @@ export function subscribeToPhoneScans(
           eventSource.close();
           eventSource = null;
         }
-        // Reconnect after brief pause
+        // Auto-reconnect quickly on drop
         if (isSubscribed) {
-          setTimeout(connectSSE, 3000);
+          setTimeout(connectSSE, 2500);
         }
       };
     } catch (e) {
@@ -168,23 +241,46 @@ export function subscribeToPhoneScans(
 
   connectSSE();
 
-  // 2. Fast Polling Backup (polls every 1000ms in case SSE is interrupted or behind strict proxy)
+  // 2. High-speed Adaptive Polling Safety Net (every 450ms)
+  let isPolling = false;
   const pollInterval = setInterval(async () => {
-    if (!isSubscribed) return;
+    if (!isSubscribed || isPolling) return;
+    isPolling = true;
+
     try {
-      const res = await fetch(`/api/phone-sync/poll/${encodeURIComponent(target)}?since=${lastReceivedTime}`);
+      const url = `/api/phone-sync/poll/${encodeURIComponent(target)}?since=${lastReceivedServerTime}`;
+      const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
+        if (data.serverTime) {
+          // Initialize or update baseline server timestamp
+          if (lastReceivedServerTime === 0) {
+            lastReceivedServerTime = data.serverTime - 500;
+          }
+        }
         if (data.scans && Array.isArray(data.scans)) {
           for (const scan of data.scans) {
             handleIncomingPayload(scan);
           }
         }
       }
-    } catch {}
-  }, 1000);
+    } catch {} finally {
+      isPolling = false;
+    }
+  }, 450);
 
-  // 3. BroadcastChannel Listener (Instant for same-machine tabs)
+  // 3. Periodic Station Status / Heartbeat Check (every 3 seconds)
+  const heartbeatInterval = setInterval(async () => {
+    if (!isSubscribed) return;
+    try {
+      const status = await fetchStationStatus(target);
+      if (status && onStatusChange) {
+        onStatusChange(Boolean(status.isPhoneActive));
+      }
+    } catch {}
+  }, 3000);
+
+  // 4. BroadcastChannel Listener (Instant for same-machine tabs)
   let bc: BroadcastChannel | null = null;
   try {
     if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
@@ -197,7 +293,7 @@ export function subscribeToPhoneScans(
     }
   } catch {}
 
-  // 4. LocalStorage event listener
+  // 5. LocalStorage event listener
   const storageListener = (event: StorageEvent) => {
     if (event.key === LAST_SCAN_STORAGE_KEY && event.newValue) {
       try {
@@ -208,7 +304,7 @@ export function subscribeToPhoneScans(
   };
   window.addEventListener('storage', storageListener);
 
-  // 5. Custom in-window event listener
+  // 6. Custom in-window event listener
   const customListener = (event: Event) => {
     const customEv = event as CustomEvent<ScannedBarcodePayload>;
     if (customEv.detail) {
@@ -221,6 +317,7 @@ export function subscribeToPhoneScans(
   return () => {
     isSubscribed = false;
     clearInterval(pollInterval);
+    clearInterval(heartbeatInterval);
     if (eventSource) {
       try {
         eventSource.close();
@@ -235,3 +332,4 @@ export function subscribeToPhoneScans(
     window.removeEventListener('vms:phone_scan', customListener);
   };
 }
+

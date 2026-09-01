@@ -41,7 +41,7 @@ import { dbPutQueue, dbGetAllQueue, getStoredDuplicatePolicy, DuplicatePolicy } 
 import { checkDuplicate, requestApi, normalizeOrderId } from '../lib/api';
 import { triggerUploadWorker } from '../lib/uploadWorker';
 import { PhoneScannerModal } from './PhoneScannerModal';
-import { getOrCreateStationSession, subscribeToPhoneScans } from '../lib/phoneSync';
+import { getOrCreateStationSession, subscribeToPhoneScans, sendStationPing } from '../lib/phoneSync';
 
 interface ScanRecordProps {
   onQueueUpdated: () => void;
@@ -404,19 +404,35 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
 
   // Subscribe to Wireless Phone Barcode Scans from Mobile Companion App
   useEffect(() => {
-    const unsubscribe = subscribeToPhoneScans(stationSessionId, (scannedCode) => {
-      const cleaned = cleanBarcode(scannedCode);
-      if (cleaned) {
-        setOrderId(cleaned);
-        detectPlatformAndType(cleaned);
-        setIsPhoneConnected(true);
-        setLastPhoneScanFeedback(cleaned);
-        onShowToast(`Phone Scanned Order: ${cleaned}`, 'success');
-        setTimeout(() => setLastPhoneScanFeedback(null), 3000);
-      }
-    });
+    // Initial desktop ping
+    sendStationPing(stationSessionId, 'desktop', 'Desktop Packing Workstation');
 
-    return () => unsubscribe();
+    const pingTimer = setInterval(() => {
+      sendStationPing(stationSessionId, 'desktop', 'Desktop Packing Workstation');
+    }, 4000);
+
+    const unsubscribe = subscribeToPhoneScans(
+      stationSessionId, 
+      (scannedCode) => {
+        const cleaned = cleanBarcode(scannedCode);
+        if (cleaned) {
+          setOrderId(cleaned);
+          detectPlatformAndType(cleaned);
+          setIsPhoneConnected(true);
+          setLastPhoneScanFeedback(cleaned);
+          onShowToast(`Phone Scanned Order: ${cleaned}`, 'success');
+          setTimeout(() => setLastPhoneScanFeedback(null), 3000);
+        }
+      },
+      (isPhoneActive) => {
+        setIsPhoneConnected(isPhoneActive);
+      }
+    );
+
+    return () => {
+      clearInterval(pingTimer);
+      unsubscribe();
+    };
   }, [stationSessionId, onShowToast]);
 
   // Debounced real-time duplicate check whenever Order ID, platform, or recording type changes
