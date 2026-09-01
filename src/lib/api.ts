@@ -99,6 +99,13 @@ export async function checkBackendHealth(customUrl?: string): Promise<{
   }
 }
 
+export function normalizeOrderId(id: string | null | undefined): string {
+  if (!id) return '';
+  let s = String(id).trim().toLowerCase();
+  s = s.replace(/^[#_-\s]+/, '').replace(/[\s_-]+/g, '');
+  return s;
+}
+
 export async function checkDuplicate(meta: {
   orderId: string;
   platform: string;

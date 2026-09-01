@@ -99,6 +99,20 @@ export function setStoredAutoResume(enabled: boolean): void {
   localStorage.setItem('ops_auto_resume', String(enabled));
 }
 
+export type DuplicatePolicy = 'strict_block' | 'admin_override' | 'warn_only';
+
+export function getStoredDuplicatePolicy(): DuplicatePolicy {
+  const p = localStorage.getItem('ops_duplicate_policy');
+  if (p === 'admin_override' || p === 'warn_only' || p === 'strict_block') {
+    return p;
+  }
+  return 'strict_block';
+}
+
+export function setStoredDuplicatePolicy(policy: DuplicatePolicy): void {
+  localStorage.setItem('ops_duplicate_policy', policy);
+}
+
 export function getStoredToken(): string {
   return localStorage.getItem('ops_token') || '';
 }

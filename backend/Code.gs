@@ -479,8 +479,8 @@ function normalize_(v){return String(v||'').trim().toLowerCase()}
 function normalizeOrderId_(v){
   if(v===null||v===undefined)return '';
   let s=String(v).trim().toLowerCase();
-  // Strip leading hashtag, underscores, hyphens or spaces (e.g. "#OD-4737" -> "od-4737")
-  s=s.replace(/^[#_-\s]+/,'');
+  // Strip leading hashtag, underscores, hyphens or spaces and internal hyphens/underscores/spaces (e.g. "#OD-4737" -> "od4737")
+  s=s.replace(/^[#_-\s]+/,'').replace(/[\s_-]+/g,'');
   return s;
 }
 function key_(order,platform,type){return [normalizeOrderId_(order),normalize_(platform),normalize_(type||'Forward')].join('||')}
@@ -507,33 +507,63 @@ function completedDuplicate_(order,platform,type){
 
         const rawType = v[i][8] || 'Forward';
         const normRowType = normalize_(rawType);
-        // Match if recordingType matches (Forward vs Forward) or if type is not specified
         if (normTargetType && normRowType && normTargetType !== normRowType) continue;
 
         const rawStatus = normalize_(v[i][7] || '');
         const fileId = String(v[i][4] || '').trim();
 
-        // If marked Completed/Ready or has a valid Drive file ID
-        if (rawStatus === 'completed' || rawStatus === 'ready' || rawStatus === 'success' || fileId.length > 5) {
-          return {
-            sourceSheet: CONFIG.ORDER_LOG_SHEET,
-            row: i + 1,
-            orderId: String(rawOrder || ''),
-            platform: String(v[i][2] || ''),
-            recordingType: String(rawType || 'Forward'),
-            timestamp: v[i][0] instanceof Date ? v[i][0].toISOString() : String(v[i][0] || ''),
-            packerEmail: String(v[i][3] || ''),
-            fileId: fileId,
-            playbackUrl: String(v[i][5] || (fileId ? 'https://drive.google.com/file/d/' + fileId + '/preview' : ''))
-          };
-        }
+        // Any recorded row in OrderLog for this order ID is an existing recording
+        return {
+          sourceSheet: CONFIG.ORDER_LOG_SHEET,
+          row: i + 1,
+          orderId: String(rawOrder || ''),
+          platform: String(v[i][2] || ''),
+          recordingType: String(rawType || 'Forward'),
+          timestamp: v[i][0] instanceof Date ? v[i][0].toISOString() : String(v[i][0] || ''),
+          packerEmail: String(v[i][3] || ''),
+          fileId: fileId,
+          playbackUrl: String(v[i][5] || (fileId ? 'https://drive.google.com/file/d/' + fileId + '/preview' : ''))
+        };
       }
     }
   } catch (e) {
     console.warn('OrderLog duplicate check note:', e);
   }
 
-  // 2. Check UPLOAD_LOG_SHEET next (as an extra safety net)
+  // 2. Check RETURN_LOG_SHEET next
+  try {
+    const returnSheet = sheet_(CONFIG.RETURN_LOG_SHEET);
+    if (returnSheet) {
+      const r = returnSheet.getDataRange().getValues();
+      for (let i = r.length - 1; i >= 1; i--) {
+        const rawOrder = r[i][1];
+        const normRowOrder = normalizeOrderId_(rawOrder);
+        if (!normRowOrder || normRowOrder !== normTargetOrder) continue;
+
+        const rawType = r[i][8] || 'Return';
+        const normRowType = normalize_(rawType);
+        if (normTargetType && normRowType && normTargetType !== normRowType) continue;
+
+        const fileId = String(r[i][4] || '').trim();
+
+        return {
+          sourceSheet: CONFIG.RETURN_LOG_SHEET,
+          row: i + 1,
+          orderId: String(rawOrder || ''),
+          platform: String(r[i][2] || ''),
+          recordingType: String(rawType || 'Return'),
+          timestamp: r[i][0] instanceof Date ? r[i][0].toISOString() : String(r[i][0] || ''),
+          packerEmail: String(r[i][3] || ''),
+          fileId: fileId,
+          playbackUrl: String(r[i][5] || (fileId ? 'https://drive.google.com/file/d/' + fileId + '/preview' : ''))
+        };
+      }
+    }
+  } catch (e) {
+    console.warn('ReturnLog duplicate check note:', e);
+  }
+
+  // 3. Check UPLOAD_LOG_SHEET next (for completed or in-flight uploads)
   try {
     const uploadSheet = sheet_(CONFIG.UPLOAD_LOG_SHEET);
     if (uploadSheet) {
@@ -551,7 +581,7 @@ function completedDuplicate_(order,platform,type){
         const rawStage = normalize_(u[i][7] || '');
         const fileId = String(u[i][9] || '').trim();
 
-        if (rawStatus === 'completed' || rawStage === 'completed' || fileId.length > 5) {
+        if (rawStatus === 'completed' || rawStage === 'completed' || fileId.length > 5 || rawStatus === 'in progress' || rawStatus === 'started') {
           return {
             sourceSheet: CONFIG.UPLOAD_LOG_SHEET,
             row: i + 1,

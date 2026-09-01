@@ -7,7 +7,7 @@ import {
   getStoredAutoUpload,
   getStoredAutoResume,
 } from './storage';
-import { requestApi, checkDuplicate } from './api';
+import { requestApi, checkDuplicate, normalizeOrderId } from './api';
 
 export type WorkerToastHandler = (msg: string, type: 'info' | 'success' | 'error') => void;
 
@@ -147,19 +147,19 @@ export async function triggerUploadWorker(): Promise<void> {
     // Check if another completed item with same orderId exists locally or remotely
     // -------------------------------------------------------------
     if (!currentItem.bypassDuplicate) {
-      const normTarget = currentItem.orderId.trim().toLowerCase().replace(/^[#_-\s]+/, '');
+      const normTarget = normalizeOrderId(currentItem.orderId);
 
       // 1. Check local completed queue
       const localDuplicate = allItems.some(
         (it) =>
           it.id !== currentItem.id &&
-          it.orderId.trim().toLowerCase().replace(/^[#_-\s]+/, '') === normTarget &&
-          it.status === 'completed'
+          normalizeOrderId(it.orderId) === normTarget &&
+          (it.status === 'completed' || it.status === 'uploading')
       );
 
       // 2. Check remote Google Sheet / Drive records
       let remoteDuplicate: any = null;
-      if (!localDuplicate) {
+      if (!localDuplicate && normTarget) {
         try {
           remoteDuplicate = await checkDuplicate({
             orderId: currentItem.orderId,
