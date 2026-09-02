@@ -232,6 +232,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
   }, [autoRefresh, searchQuery]);
 
   const [isCleaningStuck, setIsCleaningStuck] = useState(false);
+  const [isPurgingInterrupted, setIsPurgingInterrupted] = useState(false);
 
   const handleCleanStuckUploads = async () => {
     setIsCleaningStuck(true);
@@ -243,6 +244,22 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
       onShowToast(`Failed to clean stuck uploads: ${e?.message || e}`, 'error');
     } finally {
       setIsCleaningStuck(false);
+    }
+  };
+
+  const handlePurgeInterrupted = async () => {
+    if (!window.confirm('Are you sure you want to permanently remove all interrupted/failed upload session rows from Google Sheet? This will clear stale interrupted rows from the table.')) {
+      return;
+    }
+    setIsPurgingInterrupted(true);
+    try {
+      const result = await fixAndCleanAllStuckUploads({ purgeInterrupted: true });
+      onShowToast(`🧹 ${result.message || 'Purged interrupted upload records.'}`, 'success');
+      await loadData(true);
+    } catch (e: any) {
+      onShowToast(`Failed to purge interrupted records: ${e?.message || e}`, 'error');
+    } finally {
+      setIsPurgingInterrupted(false);
     }
   };
 
@@ -818,13 +835,26 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
           <button
             id="fix-stuck-logs-btn"
             onClick={handleCleanStuckUploads}
-            disabled={isCleaningStuck}
+            disabled={isCleaningStuck || isPurgingInterrupted}
             className="px-3.5 py-2 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-900 rounded-xl text-xs font-semibold transition inline-flex items-center gap-1.5 shadow-2xs cursor-pointer"
             title="Clean up zombie in-progress upload sessions and reset upload locks"
           >
             <RotateCw className={`w-3.5 h-3.5 text-amber-700 ${isCleaningStuck ? 'animate-spin' : ''}`} />
             {isCleaningStuck ? 'Cleaning…' : 'Fix Stuck Uploads'}
           </button>
+
+          {stats.failed > 0 && (
+            <button
+              id="purge-interrupted-btn"
+              onClick={handlePurgeInterrupted}
+              disabled={isPurgingInterrupted || isCleaningStuck}
+              className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 border border-rose-300 text-rose-800 rounded-xl text-xs font-semibold transition inline-flex items-center gap-1.5 shadow-2xs cursor-pointer"
+              title="Permanently remove all interrupted / stale log entries from Google Sheet"
+            >
+              <Trash2 className={`w-3.5 h-3.5 text-rose-600 ${isPurgingInterrupted ? 'animate-spin' : ''}`} />
+              {isPurgingInterrupted ? 'Purging…' : `Purge Interrupted (${stats.failed})`}
+            </button>
+          )}
 
           <button
             id="refresh-logs-btn"
@@ -955,6 +985,41 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
           </div>
         </button>
       </div>
+
+      {/* Interrupted / Stale Logs Cleanup Alert Banner */}
+      {stats.failed > 0 && (
+        <div className="bg-rose-50/80 border border-rose-200 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 text-rose-900 shadow-2xs">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-rose-100 rounded-xl text-rose-600 shrink-0">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="text-xs font-bold text-rose-950">
+                {stats.failed} interrupted upload session(s) in Google Sheet logs
+              </h4>
+              <p className="text-[11px] text-rose-700 mt-0.5">
+                These records represent previous unfinalized chunks or stopped uploads. You can purge them from the log table or filter them to inspect details.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handlePurgeInterrupted}
+              disabled={isPurgingInterrupted}
+              className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-semibold transition inline-flex items-center gap-1.5 shadow-2xs cursor-pointer"
+            >
+              <Trash2 className={`w-3.5 h-3.5 ${isPurgingInterrupted ? 'animate-spin' : ''}`} />
+              {isPurgingInterrupted ? 'Purging…' : `Purge All Interrupted (${stats.failed})`}
+            </button>
+            <button
+              onClick={() => { setStatusFilter('failed'); setCurrentPage(1); }}
+              className="px-3 py-1.5 bg-white hover:bg-rose-50 border border-rose-300 text-rose-800 rounded-xl text-xs font-medium transition cursor-pointer"
+            >
+              View Interrupted Only
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Filter Control Bar */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs space-y-3.5">

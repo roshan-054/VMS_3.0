@@ -841,7 +841,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                         }`}
                       >
                         <span>{size} MB</span>
-                        {size === 8 && (
+                        {size === 16 && (
                           <span className={`text-[9px] uppercase tracking-wider ${chunkSizeMbInput === size ? 'text-blue-100' : 'text-blue-600'}`}>
                             Default
                           </span>
@@ -850,7 +850,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                     ))}
                   </div>
                   <p className="text-[11px] text-slate-400 mt-2">
-                    <strong>8 MB</strong> is the optimal balance between high upload speed and resilient resumability for warehouse packing stations.
+                    <strong>16 MB</strong> is the optimal balance between high upload speed and resilient resumability for warehouse packing stations.
                   </p>
                 </div>
               </div>

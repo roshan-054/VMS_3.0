@@ -285,12 +285,17 @@ export async function triggerUploadWorker(): Promise<void> {
     }
 
     const uploadId = startRes.uploadId;
+    const directUploadUrl = startRes.uploadUrl || '';
+    let useDirectDriveStream = Boolean(directUploadUrl && directUploadUrl.startsWith('https://'));
+
     currentItem.uploadId = uploadId;
     currentItem.totalChunks = totalChunks;
     currentItem.chunkSize = chunkSize;
 
-    // 2. Upload Chunks Sequentially (A new uploadId always starts cleanly from chunk 0)
+    // 2. Upload Chunks Sequentially
     const startChunk = 0;
+    let finalFileId = '';
+    let finalWebViewLink = '';
 
     for (let c = startChunk; c < totalChunks; c++) {
       // Re-check if item was paused by user mid-stream
@@ -299,7 +304,6 @@ export async function triggerUploadWorker(): Promise<void> {
       if (freshItem && freshItem.status === 'paused') {
         isWorkerBusy = false;
         updateState({ isProcessing: false, activeItemId: null });
-        // Proceed to next pending item if available
         setTimeout(() => triggerUploadWorker(), 200);
         return;
       }
@@ -307,7 +311,6 @@ export async function triggerUploadWorker(): Promise<void> {
       const startByte = c * chunkSize;
       const endByte = Math.min(startByte + chunkSize, totalBytes);
       const chunkBlob = currentItem.blob.slice(startByte, endByte);
-      const base64 = await blobToBase64(chunkBlob);
       const isFinalChunk = c === totalChunks - 1 || endByte >= totalBytes;
 
       const stageDesc =
@@ -330,51 +333,117 @@ export async function triggerUploadWorker(): Promise<void> {
         totalChunks: totalChunks,
       });
 
-      // Send chunk with retry logic (up to 3 attempts)
-      let chunkRes: any = null;
-      let attempt = 0;
       let chunkSuccess = false;
 
-      while (attempt < 3 && !chunkSuccess) {
-        attempt++;
+      // Strategy A: Direct Google Drive Resumable Stream
+      if (useDirectDriveStream) {
         try {
-          chunkRes = await requestApi('uploadChunk', {
-            uploadId: uploadId,
-            chunkIndex: c,
-            totalChunks: totalChunks,
-            startByte: startByte,
-            endByte: endByte,
-            totalSize: totalBytes,
-            base64: base64,
-            driveFolderId: driveFolderId,
-            queueJobId: currentItem.id,
+          const driveResp = await fetch(directUploadUrl, {
+            method: 'PUT',
+            headers: {
+              'Content-Range': `bytes ${startByte}-${endByte - 1}/${totalBytes}`,
+            },
+            body: chunkBlob,
           });
 
-          if (chunkRes?.success) {
+          if (driveResp.status === 308) {
+            // Resume incomplete - chunk accepted by Google Drive!
+            chunkSuccess = true;
+          } else if (driveResp.status === 200 || driveResp.status === 201) {
+            // Upload complete directly to Google Drive!
+            const json = await driveResp.json();
+            if (json?.id) {
+              finalFileId = json.id;
+              finalWebViewLink = `https://drive.google.com/file/d/${json.id}/preview`;
+            }
             chunkSuccess = true;
           } else {
-            throw new Error(chunkRes?.error || 'Chunk upload returned false');
+            console.warn(`Direct Drive PUT returned HTTP ${driveResp.status}, falling back to proxy`);
+            useDirectDriveStream = false;
           }
-        } catch (cErr: any) {
-          console.warn(`Chunk ${c + 1} attempt ${attempt} failed:`, cErr);
-          if (attempt >= 3) {
-            throw new Error(
-              `Chunk ${c + 1}/${totalChunks} failed after 3 attempts: ${cErr.message || cErr}`
-            );
-          }
-          // Backoff before retry
-          await new Promise((r) => setTimeout(r, 1200 * attempt));
+        } catch (dErr) {
+          console.warn('Direct Drive stream error, falling back to proxy:', dErr);
+          useDirectDriveStream = false;
         }
       }
 
-      // Check if finished
-      if (chunkRes?.completed || isFinalChunk) {
+      let chunkRes: any = null;
+
+      // Strategy B: Fallback to Apps Script proxy uploadChunk
+      if (!chunkSuccess) {
+        const base64 = await blobToBase64(chunkBlob);
+        let attempt = 0;
+        let proxySuccess = false;
+
+        while (attempt < 3 && !proxySuccess) {
+          attempt++;
+          try {
+            chunkRes = await requestApi('uploadChunk', {
+              uploadId: uploadId,
+              chunkIndex: c,
+              totalChunks: totalChunks,
+              startByte: startByte,
+              endByte: endByte,
+              totalSize: totalBytes,
+              base64: base64,
+              driveFolderId: driveFolderId,
+              queueJobId: currentItem.id,
+            });
+
+            if (chunkRes?.success) {
+              proxySuccess = true;
+              if (chunkRes?.fileId) {
+                finalFileId = chunkRes.fileId;
+                finalWebViewLink = chunkRes.webViewLink || chunkRes.playbackUrl;
+              }
+            } else {
+              throw new Error(chunkRes?.error || 'Chunk upload returned false');
+            }
+          } catch (cErr: any) {
+            console.warn(`Proxy chunk ${c + 1} attempt ${attempt} failed:`, cErr);
+            if (attempt >= 3) {
+              throw new Error(
+                `Chunk ${c + 1}/${totalChunks} failed after 3 attempts: ${cErr.message || cErr}`
+              );
+            }
+            await new Promise((r) => setTimeout(r, 1200 * attempt));
+          }
+        }
+      }
+
+      // If final chunk reached, finalize
+      if (isFinalChunk) {
+        // If uploaded directly to Drive (and not already finalized by proxy uploadChunk), call finishUpload
+        if (finalFileId && !chunkRes?.fileId) {
+          try {
+            const finishRes = await requestApi('finishUpload', {
+              uploadId: uploadId,
+              fileId: finalFileId,
+              orderId: currentItem.orderId,
+              platform: currentItem.platform,
+              recordingType: currentItem.recordingType,
+              fileName: currentItem.fileName,
+              fileSize: currentItem.fileSize || totalBytes,
+              mimeType: currentItem.mimeType,
+              queueJobId: currentItem.id,
+              driveFolderId: driveFolderId,
+              recordingDate: currentItem.recordingDate,
+            });
+            if (finishRes?.fileId) {
+              finalFileId = finishRes.fileId;
+              finalWebViewLink = finishRes.webViewLink || finishRes.playbackUrl;
+            }
+          } catch (fErr) {
+            console.warn('Finish upload note:', fErr);
+          }
+        }
+
         currentItem.status = 'completed';
         currentItem.progress = 100;
         currentItem.stage = 'Uploaded to Google Drive';
         currentItem.error = undefined;
-        currentItem.webViewLink = chunkRes?.webViewLink || chunkRes?.playbackUrl;
-        currentItem.fileId = chunkRes?.fileId;
+        currentItem.webViewLink = finalWebViewLink || (finalFileId ? `https://drive.google.com/file/d/${finalFileId}/preview` : '');
+        currentItem.fileId = finalFileId;
 
         await dbPutQueue(currentItem);
         updateState({
@@ -589,7 +658,7 @@ export async function resetStuckLocalQueue(): Promise<number> {
 /**
  * Clean up all stuck local and Google Sheet upload sessions
  */
-export async function fixAndCleanAllStuckUploads(): Promise<{
+export async function fixAndCleanAllStuckUploads(options: { purgeInterrupted?: boolean } = {}): Promise<{
   localResetCount: number;
   cloudCleanedRows: number;
   message: string;
@@ -606,7 +675,7 @@ export async function fixAndCleanAllStuckUploads(): Promise<{
 
   // 2. Call cloud cleanup API
   try {
-    const res = await cleanupStuckUploads();
+    const res = await cleanupStuckUploads({ purgeInterrupted: !!options.purgeInterrupted });
     if (res && res.cleanedRows !== undefined) {
       cloudCleanedRows = res.cleanedRows;
     }
@@ -620,6 +689,8 @@ export async function fixAndCleanAllStuckUploads(): Promise<{
   return {
     localResetCount,
     cloudCleanedRows,
-    message: `Reset ${localResetCount} local queue item(s) and cleared ${cloudCleanedRows} stuck cloud session(s).`,
+    message: options.purgeInterrupted
+      ? `Purged ${cloudCleanedRows} interrupted cloud row(s) and reset ${localResetCount} local item(s).`
+      : `Reset ${localResetCount} local queue item(s) and cleared ${cloudCleanedRows} stuck cloud session(s).`,
   };
 }

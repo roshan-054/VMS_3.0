@@ -82,6 +82,7 @@ function doPost(e) {
       case 'cleanupStuckUploads': return output_(cleanupStuckUploads_(p));
       case 'startUpload': return output_(startUpload_(p));
       case 'uploadChunk': return output_(uploadChunk_(p));
+      case 'finishUpload': return output_(finishUpload_(p));
       case 'uploadLogs': return output_(uploadLogs_(p));
       case 'getUploadLogs': return output_(uploadLogs_(p));
       case 'downloadLog': return output_(downloadLog_(p));
@@ -638,24 +639,32 @@ function cleanupStuckUploads_(p){
   lock.waitLock(20000);
   let cleanedRows = 0;
   let clearedProps = 0;
+  const purgeInterrupted = p.purgeInterrupted === true || String(p.purgeInterrupted) === 'true' || p.purgeStale === true || String(p.purgeStale) === 'true';
 
   try {
     const uploadSh = sheet_(CONFIG.UPLOAD_LOG_SHEET);
     const data = uploadSh.getDataRange().getValues();
     const now = Date.now();
 
-    for (let i = 1; i < data.length; i++) {
+    for (let i = data.length - 1; i >= 1; i--) {
       const rawStatus = normalize_(data[i][10] || '');
       const fileId = String(data[i][9] || '').trim();
       const rawDate = data[i][0];
       const rowTime = rawDate instanceof Date ? rawDate.getTime() : new Date(rawDate).getTime();
       const isOld = isNaN(rowTime) || (now - rowTime > 3 * 60 * 1000); // older than 3 minutes
 
-      // If status is in progress / started / initiated and has no completed fileId
-      if ((rawStatus === 'in progress' || rawStatus === 'started' || rawStatus === 'initiated' || rawStatus === 'uploading' || rawStatus === 'session created') && !fileId) {
-        uploadSh.getRange(i + 1, 11).setValue('Interrupted / Stale');
-        uploadSh.getRange(i + 1, 8).setValue('Upload session expired or reset by operator');
-        cleanedRows++;
+      // If status is in progress / started / initiated / stale and has no completed fileId
+      const isUnfinished = (rawStatus === 'in progress' || rawStatus === 'started' || rawStatus === 'initiated' || rawStatus === 'uploading' || rawStatus === 'session created' || rawStatus === 'interrupted / stale' || rawStatus === 'stale') && !fileId;
+
+      if (isUnfinished) {
+        if (purgeInterrupted) {
+          uploadSh.deleteRow(i + 1);
+          cleanedRows++;
+        } else {
+          uploadSh.getRange(i + 1, 11).setValue('Interrupted / Stale');
+          uploadSh.getRange(i + 1, 8).setValue('Upload session expired or reset by operator');
+          cleanedRows++;
+        }
       }
     }
 
@@ -673,7 +682,10 @@ function cleanupStuckUploads_(p){
       success: true,
       cleanedRows: cleanedRows,
       clearedProperties: clearedProps,
-      message: `Successfully resolved ${cleanedRows} stuck upload row(s) and cleared active session locks.`
+      purged: purgeInterrupted,
+      message: purgeInterrupted
+        ? `Successfully purged ${cleanedRows} interrupted upload row(s) and cleared active session locks.`
+        : `Successfully resolved ${cleanedRows} stuck upload row(s) and cleared active session locks.`
     };
   } finally {
     lock.releaseLock();
@@ -996,8 +1008,8 @@ function startUpload_(p){
 
         const respCode = driveSessionResp.getResponseCode();
         if (respCode >= 200 && respCode < 300) {
-          const headers = driveSessionResp.getAllHeaders();
-          uploadUrl = headers.Location || headers.location || '';
+          const headers = driveSessionResp.getHeaders ? driveSessionResp.getHeaders() : driveSessionResp.getAllHeaders();
+          uploadUrl = headers['Location'] || headers['location'] || headers['LOCATION'] || '';
         }
       }
     } catch(dErr) {
@@ -1052,8 +1064,10 @@ function startUpload_(p){
     return {
       success: true,
       uploadId: uploadId,
+      uploadUrl: uploadUrl,
       chunkSize: CONFIG.DEFAULT_CHUNK_BYTES,
       fileName: name,
+      fileSize: size,
       hasResumableUrl: !!uploadUrl,
       isDuplicate: !!done
     };
@@ -1123,42 +1137,23 @@ function uploadChunk_(p){
         // Completed via Resumable Drive API
         const fileObj = JSON.parse(resp.getContentText());
         const fid = String(fileObj.id);
-        const playback = 'https://drive.google.com/file/d/' + fid + '/preview';
+        return finalizeCompletedUpload_(s, uploadId, fid, user);
+      }
 
-        try { DriveApp.getFileById(fid).setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch(_) {}
-
-        const lock = LockService.getScriptLock();
-        lock.waitLock(20000);
-        try {
-          const targetLogSheet = getTargetLogSheet_(s.type);
-          targetLogSheet.appendRow([new Date(), s.order, s.platform, s.packerEmail, fid, playback, '', 'Completed', s.type, s.queueJobId, s.mime, 'READY']);
-          applyDuplicateConditionalFormatting_(targetLogSheet);
-          try {
-            sheet_(CONFIG.DOWNLOAD_LOG_SHEET).appendRow([
-              new Date(), s.order, s.platform, s.packerEmail, s.name, s.size, 'Recording & Cloud Upload Complete', s.type
-            ]);
-          } catch(_) {}
-          updateUploadLog_(uploadId, 'Completed', 100, fid, 'Completed', '');
-          if(s.reservationKey) releaseReservation_(s.reservationKey);
-          cleanupOldStartedUploads_(s.order, uploadId);
-        } finally {
-          lock.releaseLock();
+      if (code >= 400) {
+        const errText = resp.getContentText();
+        console.error('Google Drive Resumable API error: ' + code + ' ' + errText);
+        if (code === 404 || code === 410) {
+          updateUploadLog_(uploadId, 'Session Expired', 0, '', 'Failed', 'Drive upload session expired. Please retry.');
+          throw new Error('Google Drive upload session expired. Please retry.');
         }
-
-        PropertiesService.getScriptProperties().deleteProperty('UPLOAD_' + uploadId);
-
-        return {
-          success: true,
-          complete: true,
-          completed: true,
-          fileId: fid,
-          webViewLink: playback,
-          playbackUrl: playback,
-          downloadUrl: 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid)
-        };
+        throw new Error('Google Drive returned error ' + code + ': ' + (errText || 'Upload chunk rejected'));
       }
     } catch(uErr) {
       console.warn('Drive resumable chunk upload notice:', uErr);
+      if (String(uErr).indexOf('expired') !== -1 || String(uErr).indexOf('Google Drive') !== -1) {
+        throw uErr;
+      }
     }
   }
 
@@ -1169,41 +1164,8 @@ function uploadChunk_(p){
     // Single chunk: Instant Direct File Creation
     const blob = Utilities.newBlob(chunkBytes, s.mime, s.name);
     const file = targetFolder.createFile(blob);
-
-    try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch(_) {}
-
     const fid = file.getId();
-    const playback = 'https://drive.google.com/file/d/' + fid + '/preview';
-
-    const lock = LockService.getScriptLock();
-    lock.waitLock(20000);
-    try {
-      const targetLogSheet = getTargetLogSheet_(s.type);
-      targetLogSheet.appendRow([new Date(), s.order, s.platform, s.packerEmail, fid, playback, '', 'Completed', s.type, s.queueJobId, s.mime, 'READY']);
-      applyDuplicateConditionalFormatting_(targetLogSheet);
-      try {
-        sheet_(CONFIG.DOWNLOAD_LOG_SHEET).appendRow([
-          new Date(), s.order, s.platform, s.packerEmail, s.name, s.size, 'Recording & Cloud Upload Complete', s.type
-        ]);
-      } catch(_) {}
-      updateUploadLog_(uploadId, 'Completed', 100, fid, 'Completed', '');
-      if(s.reservationKey) releaseReservation_(s.reservationKey);
-      cleanupOldStartedUploads_(s.order, uploadId);
-    } finally {
-      lock.releaseLock();
-    }
-
-    PropertiesService.getScriptProperties().deleteProperty('UPLOAD_' + uploadId);
-
-    return {
-      success: true,
-      complete: true,
-      completed: true,
-      fileId: fid,
-      webViewLink: file.getUrl(),
-      playbackUrl: playback,
-      downloadUrl: 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid)
-    };
+    return finalizeCompletedUpload_(s, uploadId, fid, user);
   } else {
     // Multi-chunk fallback: Save chunk part file
     const partName = `_vms_part_${uploadId}_${chunkIndex}`;
@@ -1230,58 +1192,134 @@ function uploadChunk_(p){
       const finalBlob = Utilities.newBlob(allBytes, s.mime, s.name);
       const masterFile = targetFolder.createFile(finalBlob);
 
-      try { masterFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch(_) {}
-
       // Delete temporary part files
       partFiles.forEach(function(f) {
         try { f.setTrashed(true); } catch(_) {}
       });
 
       const fid = masterFile.getId();
-      const playback = 'https://drive.google.com/file/d/' + fid + '/preview';
-
-      const lock = LockService.getScriptLock();
-      lock.waitLock(20000);
-      try {
-        const targetLogSheet = getTargetLogSheet_(s.type);
-        targetLogSheet.appendRow([new Date(), s.order, s.platform, s.packerEmail, fid, playback, '', 'Completed', s.type, s.queueJobId, s.mime, 'READY']);
-        applyDuplicateConditionalFormatting_(targetLogSheet);
-        try {
-          sheet_(CONFIG.DOWNLOAD_LOG_SHEET).appendRow([
-            new Date(), s.order, s.platform, s.packerEmail, s.name, s.size, 'Recording & Cloud Upload Complete', s.type
-          ]);
-        } catch(_) {}
-        updateUploadLog_(uploadId, 'Completed', 100, fid, 'Completed', '');
-        if(s.reservationKey) releaseReservation_(s.reservationKey);
-        cleanupOldStartedUploads_(s.order, uploadId);
-      } finally {
-        lock.releaseLock();
-      }
-
-      PropertiesService.getScriptProperties().deleteProperty('UPLOAD_' + uploadId);
-
-      return {
-        success: true,
-        complete: true,
-        completed: true,
-        fileId: fid,
-        webViewLink: masterFile.getUrl(),
-        playbackUrl: playback,
-        downloadUrl: 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid)
-      };
+      return finalizeCompletedUpload_(s, uploadId, fid, user);
     }
 
-    const pct = Math.min(99, Math.round(((inclusiveEnd + 1) / total) * 100));
+    const pct = Math.min(99, Math.round(((chunkIndex + 1) / totalChunks) * 100));
     updateUploadLog_(uploadId, 'Uploading chunk ' + (chunkIndex + 1) + '/' + totalChunks, pct, '', 'In Progress', '');
     return {
       success: true,
       complete: false,
       completed: false,
       chunkIndex: chunkIndex,
-      percent: pct,
-      received: inclusiveEnd + 1
+      percent: pct
     };
   }
+}
+
+/**
+ * Finalize completed video upload:
+ * Sets Drive public sharing, records row in OrderLog/ReturnLog, DownloadLog,
+ * updates UploadLog status to 100% Completed, and releases reservation locks.
+ */
+function finalizeCompletedUpload_(s, uploadId, fid, user) {
+  const playback = 'https://drive.google.com/file/d/' + fid + '/preview';
+  try {
+    DriveApp.getFileById(fid).setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  } catch(_) {}
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const targetLogSheet = getTargetLogSheet_(s.type);
+    let alreadyLogged = false;
+    if (fid || s.queueJobId) {
+      const existingData = targetLogSheet.getDataRange().getValues();
+      for (let i = existingData.length - 1; i >= 1; i--) {
+        const rowFid = String(existingData[i][4] || '').trim();
+        const rowJob = String(existingData[i][9] || '').trim();
+        if ((fid && rowFid === fid) || (s.queueJobId && rowJob === s.queueJobId)) {
+          alreadyLogged = true;
+          break;
+        }
+      }
+    }
+
+    if (!alreadyLogged) {
+      targetLogSheet.appendRow([
+        new Date(),
+        s.order,
+        s.platform,
+        s.packerEmail || (user ? user.email : ''),
+        fid,
+        playback,
+        '',
+        'Completed',
+        s.type,
+        s.queueJobId || '',
+        s.mime || 'video/mp4',
+        'READY'
+      ]);
+      applyDuplicateConditionalFormatting_(targetLogSheet);
+      try {
+        sheet_(CONFIG.DOWNLOAD_LOG_SHEET).appendRow([
+          new Date(),
+          s.order,
+          s.platform,
+          s.packerEmail || (user ? user.email : ''),
+          s.name,
+          s.size,
+          'Recording & Cloud Upload Complete',
+          s.type
+        ]);
+      } catch(_) {}
+    }
+    updateUploadLog_(uploadId, 'Completed', 100, fid, 'Completed', '');
+    if(s.reservationKey) releaseReservation_(s.reservationKey);
+    cleanupOldStartedUploads_(s.order, uploadId);
+  } finally {
+    lock.releaseLock();
+  }
+
+  if (uploadId) {
+    try { PropertiesService.getScriptProperties().deleteProperty('UPLOAD_' + uploadId); } catch(_) {}
+  }
+
+  return {
+    success: true,
+    complete: true,
+    completed: true,
+    fileId: fid,
+    webViewLink: playback,
+    playbackUrl: playback,
+    downloadUrl: 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid)
+  };
+}
+
+/**
+ * Direct Client Finish Upload:
+ * Called by the frontend uploadWorker when binary streaming directly to Google Drive completes.
+ */
+function finishUpload_(p) {
+  const user = session_(p.token);
+  const uploadId = String(p.uploadId || '').trim();
+  const fid = String(p.fileId || '').trim();
+  if (!fid) throw new Error('Valid Google Drive file ID is required to finalize upload.');
+
+  const raw = uploadId ? PropertiesService.getScriptProperties().getProperty('UPLOAD_' + uploadId) : null;
+  let s = raw ? JSON.parse(raw) : null;
+  if (!s) {
+    s = {
+      order: String(p.orderId || '').trim(),
+      platform: String(p.platform || '').trim(),
+      type: String(p.recordingType || 'Forward').trim(),
+      name: String(p.fileName || ''),
+      size: Number(p.fileSize || 0),
+      mime: String(p.mimeType || 'video/mp4'),
+      packerEmail: user.email,
+      queueJobId: String(p.queueJobId || ''),
+      driveFolderId: p.driveFolderId || CONFIG.HARDWIRED_PARENT_FOLDER_ID,
+      reservationKey: ''
+    };
+  }
+
+  return finalizeCompletedUpload_(s, uploadId, fid, user);
 }
 
 /* ---------- Upload Logs Sheet Query ---------- */

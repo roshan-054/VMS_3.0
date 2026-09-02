@@ -1,5 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Video, Lock, Mail, User as UserIcon, ArrowRight, Eye, EyeOff, AlertCircle } from 'lucide-react';
+import {
+  Video,
+  Lock,
+  Mail,
+  User as UserIcon,
+  ArrowRight,
+  Eye,
+  EyeOff,
+  AlertCircle,
+  Settings,
+} from 'lucide-react';
 import { requestApi } from '../lib/api';
 import { setStoredToken } from '../lib/storage';
 import { getStoredBranding, BrandingConfig } from '../lib/branding';
@@ -13,6 +23,7 @@ interface AuthViewProps {
 
 export const AuthView: React.FC<AuthViewProps> = ({
   onLoginSuccess,
+  onOpenSetup,
   onShowToast,
 }) => {
   const [branding, setBranding] = useState<BrandingConfig>(getStoredBranding());
@@ -51,7 +62,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
         }
 
         onShowToast(res.message || 'Account created! Signing in...', 'success');
-        
+
         // Auto sign in right after signup
         const loginRes = await requestApi<{ token: string; user: User }>('login', {
           email: cleanEmail,
@@ -69,7 +80,6 @@ export const AuthView: React.FC<AuthViewProps> = ({
         onShowToast(`Welcome, ${res.user.name || res.user.email}!`, 'success');
       }
     } catch (err: any) {
-      console.error('Auth error:', err);
       const errMsg = err.message || 'Invalid ID or password. Please check your credentials.';
       setAuthError(errMsg);
       onShowToast(errMsg, 'error');
@@ -79,7 +89,21 @@ export const AuthView: React.FC<AuthViewProps> = ({
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 sm:p-6">
+    <div className="relative min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 sm:p-6">
+      {/* Top Bar Config Button */}
+      {onOpenSetup && (
+        <button
+          id="auth-setup-btn"
+          type="button"
+          onClick={onOpenSetup}
+          className="absolute top-4 right-4 flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-300 hover:text-white bg-slate-800/90 hover:bg-slate-700/90 border border-slate-700 rounded-xl transition cursor-pointer shadow-sm"
+          title="Configure Google Apps Script Web App URL & Drive ID"
+        >
+          <Settings className="w-3.5 h-3.5 text-blue-400" />
+          <span>Setup Web App</span>
+        </button>
+      )}
+
       <div className="w-full max-w-md space-y-6">
         {/* Brand Header */}
         <div className="text-center space-y-2">
@@ -173,9 +197,24 @@ export const AuthView: React.FC<AuthViewProps> = ({
             </div>
 
             {authError && (
-              <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl flex items-start gap-2">
-                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-                <p className="font-medium">{authError}</p>
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl space-y-2">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                  <p className="font-medium">{authError}</p>
+                </div>
+                {onOpenSetup &&
+                  (authError.includes('Apps Script') ||
+                    authError.includes('Anyone') ||
+                    authError.includes('Version')) && (
+                    <button
+                      type="button"
+                      onClick={onOpenSetup}
+                      className="w-full py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    >
+                      <Settings className="w-3.5 h-3.5" />
+                      Configure Google Apps Script URL
+                    </button>
+                  )}
               </div>
             )}
 
@@ -189,16 +228,26 @@ export const AuthView: React.FC<AuthViewProps> = ({
             </button>
           </form>
 
-          <div className="pt-2 border-t border-slate-100 flex items-center justify-center text-xs">
-            <button
-              onClick={() => {
-                setIsSignup(!isSignup);
-                setAuthError(null);
-              }}
-              className="text-blue-600 hover:underline font-medium"
-            >
-              {isSignup ? 'Already have an account? Sign In with ID & Password' : 'Don\'t have an account? Create Account'}
-            </button>
+          <div className="space-y-3 pt-2 border-t border-slate-100 text-xs">
+            <div className="flex items-center justify-center">
+              <button
+                onClick={() => {
+                  setIsSignup(!isSignup);
+                  setAuthError(null);
+                }}
+                className="text-blue-600 hover:underline font-medium cursor-pointer"
+              >
+                {isSignup
+                  ? 'Already have an account? Sign In with ID & Password'
+                  : "Don't have an account? Create Account"}
+              </button>
+            </div>
+
+            <div className="text-center pt-1">
+              <span className="text-[11px] text-slate-400">
+                Default Master Admin: <code className="text-slate-600 bg-slate-100 px-1 py-0.5 rounded font-mono">admin@ops.local</code> / <code className="text-slate-600 bg-slate-100 px-1 py-0.5 rounded font-mono">Admin@123</code>
+              </span>
+            </div>
           </div>
         </div>
       </div>

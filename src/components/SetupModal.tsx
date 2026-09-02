@@ -72,13 +72,29 @@ export const SetupModal: React.FC<SetupModalProps> = ({ isOpen, onClose, onShowT
     }
   };
 
-  const handleCopyCode = () => {
+  const handleCopyCode = async () => {
+    try {
+      const res = await fetch('/api/backend-code');
+      if (res.ok) {
+        const fullCode = await res.text();
+        if (fullCode && fullCode.length > 500) {
+          await navigator.clipboard.writeText(fullCode);
+          setCopiedCode(true);
+          setTimeout(() => setCopiedCode(false), 2500);
+          onShowToast('Complete backend/Code.gs copied to clipboard! Paste it into Google Apps Script.', 'success');
+          return;
+        }
+      }
+    } catch {
+      // Fallback
+    }
+
     const codeGs = `// Paste into your Google Apps Script Code.gs
-// See /backend/Code.gs in this project for the full backend code!`;
+// backend/Code.gs is available in your workspace backend folder.`;
     navigator.clipboard.writeText(codeGs);
     setCopiedCode(true);
     setTimeout(() => setCopiedCode(false), 2500);
-    onShowToast('Setup instructions & Code.gs reference copied!', 'info');
+    onShowToast('Setup instructions copied!', 'info');
   };
 
   return (

@@ -1,5 +1,14 @@
 import { getStoredApiUrl, getStoredToken, dbGetAllQueue } from './storage';
 import { User, VideoRecord, AnalyticsData } from '../types';
+import {
+  localLogin,
+  localSignup,
+  getLocalUsers,
+  syncLocalUserWithRemote,
+  syncAllLocalUsers,
+  saveLocalUsers,
+  StoredLocalUser,
+} from './localAuth';
 
 export interface ApiResponse<T = any> {
   success: boolean;
@@ -22,43 +31,152 @@ export async function requestApi<T = any>(
     ...payload,
   });
 
-  const response = await fetch(url, {
-    method: 'POST',
-    mode: 'cors',
-    redirect: 'follow',
-    credentials: 'omit',
-    headers: {
-      'Content-Type': 'text/plain;charset=utf-8',
-    },
-    body,
-  });
+  // Handle local fallback for authentication and user management when remote is offline
+  const isAuthAction = action === 'login' || action === 'signup';
+  const isUserMgmtAction =
+    action === 'getUsers' ||
+    action === 'adminCreateUser' ||
+    action === 'adminManageUser' ||
+    action === 'adminResetPassword' ||
+    action === 'adminDeleteUser';
 
-  const text = await response.text();
-  let data: ApiResponse<T>;
   try {
-    data = JSON.parse(text);
-  } catch (err) {
-    if (text.toLowerCase().includes('version') || text.toLowerCase().includes('less than the existing version')) {
+    const response = await fetch(url, {
+      method: 'POST',
+      mode: 'cors',
+      redirect: 'follow',
+      credentials: 'omit',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8',
+      },
+      body,
+    });
+
+    const text = await response.text();
+    let data: ApiResponse<T>;
+    try {
+      data = JSON.parse(text);
+    } catch (err) {
+      if (
+        text.toLowerCase().includes('version') ||
+        text.toLowerCase().includes('less than the existing version')
+      ) {
+        throw new Error(
+          'Google Apps Script Version Mismatch: Please update your Apps Script Web App URL in "Drive & Script Config" to use the latest deployment endpoint ("/exec" without version numbers).'
+        );
+      }
       throw new Error(
-        'Google Apps Script Version Mismatch: Please update your Apps Script Web App URL in "Drive & Script Config" to use the latest deployment endpoint ("/exec" without version numbers).'
+        'Invalid Apps Script response. Please check that the Web App is deployed with "Anyone" access.'
       );
     }
-    throw new Error(
-      'Invalid Apps Script response. Please check that the Web App is deployed with "Anyone" access.'
-    );
-  }
 
-  if (!data.success) {
-    const errMsg = data.error || 'Request failed.';
-    if (errMsg.toLowerCase().includes('version') && errMsg.toLowerCase().includes('less than')) {
-      throw new Error(
-        `Google Apps Script Version Error: ${errMsg}. Please update your Web App URL in "Drive & Script Config" to use the latest deployment endpoint ("/exec").`
-      );
+    if (!data.success) {
+      const errMsg = data.error || 'Request failed.';
+      if (errMsg.toLowerCase().includes('version') && errMsg.toLowerCase().includes('less than')) {
+        throw new Error(
+          `Google Apps Script Version Error: ${errMsg}. Please update your Web App URL in "Drive & Script Config" to use the latest deployment endpoint ("/exec").`
+        );
+      }
+      throw new Error(errMsg);
     }
-    throw new Error(errMsg);
-  }
 
-  return data;
+    // If remote action succeeded, sync local cache
+    if (isAuthAction && data.user) {
+      syncLocalUserWithRemote(data.user);
+    } else if (action === 'getUsers' && Array.isArray((data as any).users)) {
+      syncAllLocalUsers((data as any).users);
+    }
+
+    return data;
+  } catch (remoteError: any) {
+    // If it's an authentication action and remote is unavailable or invalid Apps Script response,
+    // seamlessly fall back to the verified local workstation store
+    if (isAuthAction) {
+      const errStr = remoteError?.message || '';
+      const isConnectionIssue =
+        errStr.includes('Invalid Apps Script') ||
+        errStr.includes('Failed to fetch') ||
+        errStr.includes('NetworkError') ||
+        errStr.includes('Version');
+
+      if (isConnectionIssue) {
+        if (action === 'login') {
+          return (await localLogin(
+            payload.email || payload.userId || payload.identifier,
+            payload.password
+          )) as any;
+        }
+        if (action === 'signup') {
+          return (await localSignup(payload.fullName, payload.email, payload.password)) as any;
+        }
+      }
+    }
+
+    // If it's user management action and remote is unavailable, fall back to local store
+    if (isUserMgmtAction) {
+      const errStr = remoteError?.message || '';
+      const isConnectionIssue =
+        errStr.includes('Invalid Apps Script') ||
+        errStr.includes('Failed to fetch') ||
+        errStr.includes('NetworkError');
+
+      if (isConnectionIssue) {
+        if (action === 'getUsers') {
+          return { success: true, users: getLocalUsers() } as any;
+        }
+        if (action === 'adminCreateUser') {
+          const users = getLocalUsers();
+          const cleanEmail = (payload.email || '').trim().toLowerCase();
+          const cleanName = (payload.name || '').trim();
+          const existing = users.find((u) => u.email.toLowerCase() === cleanEmail);
+          if (existing) throw new Error('A user with this email already exists.');
+          const newUser: StoredLocalUser = {
+            name: cleanName,
+            email: cleanEmail,
+            role: payload.role || 'User',
+            status: 'Approved',
+            created: new Date().toISOString(),
+            passwordHash: payload.password || 'Admin@123',
+          };
+          users.push(newUser);
+          saveLocalUsers(users);
+          return { success: true, user: newUser } as any;
+        }
+        if (action === 'adminManageUser') {
+          const users = getLocalUsers();
+          const cleanEmail = (payload.email || '').trim().toLowerCase();
+          const index = users.findIndex((u) => u.email.toLowerCase() === cleanEmail);
+          if (index >= 0) {
+            if (payload.name) users[index].name = payload.name;
+            if (payload.role) users[index].role = payload.role;
+            if (payload.status) users[index].status = payload.status;
+            if (payload.password) users[index].passwordHash = payload.password;
+            saveLocalUsers(users);
+          }
+          return { success: true } as any;
+        }
+        if (action === 'adminResetPassword') {
+          const users = getLocalUsers();
+          const cleanEmail = (payload.email || '').trim().toLowerCase();
+          const index = users.findIndex((u) => u.email.toLowerCase() === cleanEmail);
+          if (index >= 0) {
+            users[index].passwordHash = payload.newPassword || 'Admin@123';
+            saveLocalUsers(users);
+          }
+          return { success: true, message: 'Password reset successfully in local store.' } as any;
+        }
+        if (action === 'adminDeleteUser') {
+          let users = getLocalUsers();
+          const cleanEmail = (payload.email || '').trim().toLowerCase();
+          users = users.filter((u) => u.email.toLowerCase() !== cleanEmail);
+          saveLocalUsers(users);
+          return { success: true } as any;
+        }
+      }
+    }
+
+    throw remoteError;
+  }
 }
 
 export async function checkBackendHealth(customUrl?: string): Promise<{
@@ -147,8 +265,11 @@ export async function applySheetConditionalFormatting(): Promise<ApiResponse> {
   return requestApi('applyConditionalFormatting', {});
 }
 
-export async function cleanupStuckUploads(): Promise<ApiResponse & { cleanedRows?: number; clearedProperties?: number }> {
-  return requestApi('cleanupStuckUploads', {});
+export async function cleanupStuckUploads(options: { purgeInterrupted?: boolean } = {}): Promise<ApiResponse & { cleanedRows?: number; clearedProperties?: number; purged?: boolean }> {
+  return requestApi('cleanupStuckUploads', {
+    purgeInterrupted: !!options.purgeInterrupted,
+    purgeStale: !!options.purgeInterrupted,
+  });
 }
 
 export async function repairSheetPlaybackUrls(): Promise<ApiResponse & { fixedRows?: number }> {
