@@ -52,40 +52,40 @@ export function setStoredDriveFolderId(folderId: string): void {
   localStorage.setItem('ops_drive_folder_id', folderId.trim());
 }
 
-export const DEFAULT_CHUNK_SIZE_MB = 4;
-export const DEFAULT_CHUNK_SIZE_BYTES = DEFAULT_CHUNK_SIZE_MB * 1024 * 1024; // 4 MB fast chunks
+export const DEFAULT_CHUNK_SIZE_MB = 16;
+export const DEFAULT_CHUNK_SIZE_BYTES = DEFAULT_CHUNK_SIZE_MB * 1024 * 1024;
 
-export function getStoredChunkSize(): number {
+export function getCustomStoredChunkSizeMb(): number | null {
   const stored = localStorage.getItem('ops_upload_chunk_size_mb');
-  if (stored) {
+  if (stored !== null && stored !== '') {
     const parsedMb = parseFloat(stored);
     if (!isNaN(parsedMb) && parsedMb > 0) {
-      // If legacy 16MB is found, gently migrate to optimal 4MB for high-speed uploads
-      if (parsedMb === 16) {
-        return DEFAULT_CHUNK_SIZE_BYTES;
-      }
-      return parsedMb * 1024 * 1024;
+      return parsedMb;
     }
+  }
+  return null;
+}
+
+export function getStoredChunkSize(): number {
+  const custom = getCustomStoredChunkSizeMb();
+  if (custom !== null) {
+    return custom * 1024 * 1024;
   }
   return DEFAULT_CHUNK_SIZE_BYTES;
 }
 
 export function getStoredChunkSizeMb(): number {
-  const stored = localStorage.getItem('ops_upload_chunk_size_mb');
-  if (stored) {
-    const parsedMb = parseFloat(stored);
-    if (!isNaN(parsedMb) && parsedMb > 0) {
-      if (parsedMb === 16) {
-        return DEFAULT_CHUNK_SIZE_MB;
-      }
-      return parsedMb;
-    }
+  const custom = getCustomStoredChunkSizeMb();
+  if (custom !== null) {
+    return custom;
   }
   return DEFAULT_CHUNK_SIZE_MB;
 }
 
 export function setStoredChunkSizeMb(sizeMb: number): void {
   localStorage.setItem('ops_upload_chunk_size_mb', String(sizeMb));
+  window.dispatchEvent(new CustomEvent('ops_config_updated', { detail: { chunkSizeMb: sizeMb } }));
+  window.dispatchEvent(new CustomEvent('ops_queue_updated'));
 }
 
 export function getStoredAutoUpload(): boolean {

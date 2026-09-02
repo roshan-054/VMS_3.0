@@ -29,6 +29,7 @@ import {
   dbDeleteQueueItem,
   dbPutQueue,
   getStoredChunkSizeMb,
+  getCustomStoredChunkSizeMb,
   getStoredAutoUpload,
   setStoredAutoUpload
 } from '../lib/storage';
@@ -61,7 +62,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
   const [isApplyingFormatting, setIsApplyingFormatting] = useState(false);
   const [filterType, setFilterType] = useState<'all' | 'pending' | 'duplicate' | 'completed'>('all');
   const [autoUploadEnabled, setAutoUploadEnabled] = useState(getStoredAutoUpload());
-  const [currentChunkSizeMb, setCurrentChunkSizeMb] = useState(getStoredChunkSizeMb());
+  const [currentChunkSizeMb, setCurrentChunkSizeMb] = useState<number | null>(() => getCustomStoredChunkSizeMb());
   const [workerState, setWorkerState] = useState({
     isProcessing: false,
     activeItemId: null as string | null,
@@ -117,22 +118,26 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
       loadQueue();
     });
 
-    // Listen for custom queue updates
+    // Listen for custom queue and config updates
     const handleQueueUpdate = () => {
       loadQueue();
-      setCurrentChunkSizeMb(getStoredChunkSizeMb());
+      setCurrentChunkSizeMb(getCustomStoredChunkSizeMb());
       onQueueChanged();
     };
 
     window.addEventListener('ops_queue_updated', handleQueueUpdate);
+    window.addEventListener('ops_config_updated', handleQueueUpdate);
+    window.addEventListener('storage', handleQueueUpdate);
     const interval = setInterval(() => {
       loadQueue();
-      setCurrentChunkSizeMb(getStoredChunkSizeMb());
-    }, 3000);
+      setCurrentChunkSizeMb(getCustomStoredChunkSizeMb());
+    }, 2000);
 
     return () => {
       unsubscribeWorker();
       window.removeEventListener('ops_queue_updated', handleQueueUpdate);
+      window.removeEventListener('ops_config_updated', handleQueueUpdate);
+      window.removeEventListener('storage', handleQueueUpdate);
       clearInterval(interval);
     };
   }, []);
@@ -382,10 +387,12 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
                 <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
                 Sequential Upload: 1-by-1 FIFO
               </span>
-              <span className="bg-blue-50 text-blue-700 text-[10px] font-bold px-2 py-0.5 rounded-full border border-blue-200 flex items-center gap-1">
-                <Zap className="w-3 h-3 text-amber-500" />
-                {currentChunkSizeMb} MB Chunks
-              </span>
+              {currentChunkSizeMb !== null && currentChunkSizeMb > 0 && (
+                <span className="bg-blue-50 text-blue-700 text-[10px] font-bold px-2 py-0.5 rounded-full border border-blue-200 flex items-center gap-1">
+                  <Zap className="w-3 h-3 text-amber-500" />
+                  {currentChunkSizeMb} MB Chunks
+                </span>
+              )}
             </div>
             <p className="text-xs text-slate-500 mt-1">
               Strict sequential upload system: Files upload one after another. As soon as one file finishes, the next one begins automatically.

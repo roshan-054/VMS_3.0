@@ -225,8 +225,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
     setStoredAutoResume(autoResumeInput);
     setStoredAutoRefreshInterval(autoRefreshIntervalInput);
 
+    window.dispatchEvent(new CustomEvent('ops_config_updated', { detail: { chunkSizeMb: chunkSizeMbInput } }));
+    window.dispatchEvent(new CustomEvent('ops_queue_updated'));
+
     onShowToast(
-      `Drive & System configuration saved! Auto-refresh set to ${autoRefreshIntervalInput}s interval.`,
+      `Drive & System configuration saved! Chunk size set to ${chunkSizeMbInput} MB. Auto-refresh set to ${autoRefreshIntervalInput}s interval.`,
       'success'
     );
   };
@@ -880,7 +883,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                         key={size}
                         type="button"
                         disabled={disableSettings}
-                        onClick={() => setChunkSizeMbInput(size)}
+                        onClick={() => {
+                          setChunkSizeMbInput(size);
+                          setStoredChunkSizeMb(size);
+                        }}
                         className={`py-2.5 px-2 rounded-xl text-xs font-bold border transition flex flex-col items-center justify-center gap-1 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
                           chunkSizeMbInput === size
                             ? 'bg-blue-600 text-white border-blue-600 shadow-xs'

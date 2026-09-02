@@ -256,11 +256,9 @@ export async function triggerUploadWorker(): Promise<void> {
     });
 
     const totalBytes = currentItem.blob.size;
-    // For small and medium files (<= 12 MB), use single-chunk instant upload (~1.5-2.5s)
-    // For larger files, use fast 4 MB chunks
-    const isSmallFile = totalBytes <= 12 * 1024 * 1024;
     const configuredChunkSize = getStoredChunkSize();
-    const chunkSize = isSmallFile ? totalBytes : (configuredChunkSize > 0 ? configuredChunkSize : 4 * 1024 * 1024);
+    const effectiveChunkSize = configuredChunkSize > 0 ? configuredChunkSize : 16 * 1024 * 1024;
+    const chunkSize = Math.min(totalBytes, effectiveChunkSize);
     const totalChunks = Math.max(1, Math.ceil(totalBytes / chunkSize));
     const driveFolderId = currentItem.driveFolderId || getStoredDriveFolderId();
 
