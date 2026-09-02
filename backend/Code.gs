@@ -995,9 +995,14 @@ function startUpload_(p){
           });
 
           const respCode = driveSessionResp.getResponseCode();
-          if (respCode >= 200 && respCode < 300) {
+          if (respCode >= 200 && respCode < 300 || respCode === 308) {
             const headers = driveSessionResp.getHeaders ? driveSessionResp.getHeaders() : driveSessionResp.getAllHeaders();
-            uploadUrl = headers['Location'] || headers['location'] || headers['LOCATION'] || '';
+            for (const key in headers) {
+              if (key.toLowerCase() === 'location') {
+                uploadUrl = String(headers[key] || '').trim();
+                break;
+              }
+            }
           }
         }
       } catch(dErr) {
@@ -1124,8 +1129,21 @@ function uploadChunk_(p){
 
       if (code === 200 || code === 201) {
         // Completed via Resumable Drive API
-        const fileObj = JSON.parse(resp.getContentText());
-        const fid = String(fileObj.id);
+        let fid = '';
+        try {
+          const fileObj = JSON.parse(resp.getContentText());
+          fid = String(fileObj.id || '');
+        } catch(_) {}
+
+        if (!fid) {
+          try {
+            const folder = dateFolder_(s.platform, s.type, s.driveFolderId || CONFIG.HARDWIRED_PARENT_FOLDER_ID, s.recordingDate);
+            const it = folder.getFilesByName(s.name);
+            if (it.hasNext()) {
+              fid = it.next().getId();
+            }
+          } catch(e) {}
+        }
         return finalizeCompletedUpload_(s, uploadId, fid, user);
       }
 
