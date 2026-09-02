@@ -636,17 +636,37 @@ function checkDuplicateOrder_(p){
 }
 
 /**
+ * Safe concurrency lock helper that uses tryLock with fallback
+ * to prevent 'Lock timeout: another process was holding the lock for too long' errors.
+ */
+function withScriptLock_(fn, timeoutMs) {
+  const lock = LockService.getScriptLock();
+  const waitMs = timeoutMs || 8000;
+  let hasLock = false;
+  try {
+    hasLock = lock.tryLock(waitMs);
+  } catch(e) {
+    console.warn('Script lock acquisition note:', e);
+  }
+  try {
+    return fn();
+  } finally {
+    if (hasLock) {
+      try { lock.releaseLock(); } catch(_) {}
+    }
+  }
+}
+
+/**
  * Clean up all orphaned/stuck 'In Progress' sessions in Google Sheet and script properties
  */
 function cleanupStuckUploads_(p){
   const user = session_(p.token);
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  let cleanedRows = 0;
-  let clearedProps = 0;
-  const purgeInterrupted = p.purgeInterrupted === true || String(p.purgeInterrupted) === 'true' || p.purgeStale === true || String(p.purgeStale) === 'true';
+  return withScriptLock_(function() {
+    let cleanedRows = 0;
+    let clearedProps = 0;
+    const purgeInterrupted = p.purgeInterrupted === true || String(p.purgeInterrupted) === 'true' || p.purgeStale === true || String(p.purgeStale) === 'true';
 
-  try {
     const uploadSh = sheet_(CONFIG.UPLOAD_LOG_SHEET);
     const data = uploadSh.getDataRange().getValues();
     const now = Date.now();
@@ -692,9 +712,7 @@ function cleanupStuckUploads_(p){
         ? `Successfully purged ${cleanedRows} interrupted upload row(s) and cleared active session locks.`
         : `Successfully resolved ${cleanedRows} stuck upload row(s) and cleared active session locks.`
     };
-  } finally {
-    lock.releaseLock();
-  }
+  }, 10000);
 }
 
 function reservationKey_(order,platform,type){return 'DUPRES_'+Utilities.base64EncodeWebSafe(key_(order,platform,type)).replace(/=+$/,'')}
@@ -974,123 +992,121 @@ function startUpload_(p){
     };
   }
 
-  const lock=LockService.getScriptLock();
-  lock.waitLock(20000);
-  let reservation=null;
-  try{
-    reservation=reserve_(order,platform,type,user);
+  const ext = String(p.fileName||'').toLowerCase().endsWith('.mp4')?'.mp4':'.webm';
+  const name = safeName_(order)+'_'+safeName_(platform)+'_'+safeName_(type)+ext;
+  const uploadId = Utilities.getUuid();
+  const source = String(p.source||'Automatic Recording');
+  const queueJobId = String(p.queueJobId||'');
+  const mime = String(p.mimeType||'video/mp4');
 
-    const ext = String(p.fileName||'').toLowerCase().endsWith('.mp4')?'.mp4':'.webm';
-    const name = safeName_(order)+'_'+safeName_(platform)+'_'+safeName_(type)+ext;
-    const uploadId = Utilities.getUuid();
-    const source = String(p.source||'Automatic Recording');
-    const queueJobId = String(p.queueJobId||'');
-    const mime = String(p.mimeType||'video/mp4');
+  const recordingDate = p.recordingDate ? String(p.recordingDate).trim() : '';
+  const folder = dateFolder_(platform, type, driveFolderId, recordingDate);
 
-    const recordingDate = p.recordingDate ? String(p.recordingDate).trim() : '';
-    const folder = dateFolder_(platform, type, driveFolderId, recordingDate);
+  // Initiate Google Drive Resumable Upload Session (Direct Drive v3 API) only for large files (> 12 MB)
+  // For small and medium files (<= 12 MB), native targetFolder.createFile(blob) in Apps Script is 10x faster (~1.2s)
+  let uploadUrl = '';
+  const isSmallFile = size <= 12 * 1024 * 1024;
+  if (!isSmallFile) {
+    try {
+      const oauthToken = ScriptApp.getOAuthToken();
+      if (oauthToken) {
+        const driveSessionResp = UrlFetchApp.fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true', {
+          method: 'post',
+          contentType: 'application/json; charset=UTF-8',
+          headers: {
+            Authorization: 'Bearer ' + oauthToken,
+            'X-Upload-Content-Type': mime,
+            'X-Upload-Content-Length': String(size)
+          },
+          payload: JSON.stringify({
+            name: name,
+            mimeType: mime,
+            parents: [folder.getId()]
+          }),
+          muteHttpExceptions: true
+        });
 
-    // Initiate Google Drive Resumable Upload Session (Direct Drive v3 API) only for large files (> 12 MB)
-    // For small and medium files (<= 12 MB), native targetFolder.createFile(blob) in Apps Script is 10x faster (~1.2s)
-    let uploadUrl = '';
-    const isSmallFile = size <= 12 * 1024 * 1024;
-    if (!isSmallFile) {
-      try {
-        const oauthToken = ScriptApp.getOAuthToken();
-        if (oauthToken) {
-          const driveSessionResp = UrlFetchApp.fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true', {
-            method: 'post',
-            contentType: 'application/json; charset=UTF-8',
-            headers: {
-              Authorization: 'Bearer ' + oauthToken,
-              'X-Upload-Content-Type': mime,
-              'X-Upload-Content-Length': String(size)
-            },
-            payload: JSON.stringify({
-              name: name,
-              mimeType: mime,
-              parents: [folder.getId()]
-            }),
-            muteHttpExceptions: true
-          });
-
-          const respCode = driveSessionResp.getResponseCode();
-          if (respCode >= 200 && respCode < 300 || respCode === 308) {
-            const headers = driveSessionResp.getHeaders ? driveSessionResp.getHeaders() : driveSessionResp.getAllHeaders();
-            for (const key in headers) {
-              if (key.toLowerCase() === 'location') {
-                uploadUrl = String(headers[key] || '').trim();
-                break;
-              }
+        const respCode = driveSessionResp.getResponseCode();
+        if (respCode >= 200 && respCode < 300 || respCode === 308) {
+          const headers = driveSessionResp.getHeaders ? driveSessionResp.getHeaders() : driveSessionResp.getAllHeaders();
+          for (const key in headers) {
+            if (key.toLowerCase() === 'location') {
+              uploadUrl = String(headers[key] || '').trim();
+              break;
             }
           }
         }
-      } catch(dErr) {
-        console.warn('Drive resumable session create note:', dErr);
       }
+    } catch(dErr) {
+      console.warn('Drive resumable session create note:', dErr);
     }
+  }
 
-    const sessionData = {
-      uploadId: uploadId,
-      uploadUrl: uploadUrl,
-      order: order,
-      platform: platform,
-      type: type,
-      name: name,
-      mime: mime,
-      size: size,
-      recordingDate: recordingDate,
-      packerEmail: user.email,
-      source: source,
-      queueJobId: queueJobId,
-      driveFolderId: driveFolderId,
-      targetFolderId: folder.getId(),
-      reservationKey: reservation ? reservation.key : '',
-      createdAt: Date.now()
-    };
+  let reservation = null;
+  return withScriptLock_(function() {
+    try {
+      reservation = reserve_(order,platform,type,user);
 
-    PropertiesService.getScriptProperties().setProperty('UPLOAD_' + uploadId, JSON.stringify(sessionData));
-    if (reservation) setReservationUpload_(reservation.key, uploadId);
+      const sessionData = {
+        uploadId: uploadId,
+        uploadUrl: uploadUrl,
+        order: order,
+        platform: platform,
+        type: type,
+        name: name,
+        mime: mime,
+        size: size,
+        recordingDate: recordingDate,
+        packerEmail: user.email,
+        source: source,
+        queueJobId: queueJobId,
+        driveFolderId: driveFolderId,
+        targetFolderId: folder.getId(),
+        reservationKey: reservation ? reservation.key : '',
+        createdAt: Date.now()
+      };
 
-    // Reuse existing unfinished row if present, otherwise log new
-    const uploadSh = sheet_(CONFIG.UPLOAD_LOG_SHEET);
-    const uploadData = uploadSh.getDataRange().getValues();
-    let updatedExisting = false;
-    for (let i = uploadData.length - 1; i >= 1; i--) {
-      const rOrder = String(uploadData[i][1] || '').trim();
-      const rPlatform = String(uploadData[i][2] || '').trim();
-      const rType = String(uploadData[i][12] || 'Forward').trim();
-      const rStatus = String(uploadData[i][10] || '').trim();
-      if (normalize_(rOrder) === normalize_(order) && normalize_(rPlatform) === normalize_(platform) && normalize_(rType) === normalize_(type)) {
-        if (rStatus === 'Started' || rStatus === 'Pending' || rStatus === 'In Progress') {
-          uploadSh.getRange(i + 1, 1, 1, 15).setValues([[
-            new Date(), order, platform, user.email, name, size, uploadId, 'Session Created', 0, '', 'Started', '', type, source, queueJobId
-          ]]);
-          updatedExisting = true;
-          break;
+      PropertiesService.getScriptProperties().setProperty('UPLOAD_' + uploadId, JSON.stringify(sessionData));
+      if (reservation) setReservationUpload_(reservation.key, uploadId);
+
+      // Reuse existing unfinished row if present, otherwise log new
+      const uploadSh = sheet_(CONFIG.UPLOAD_LOG_SHEET);
+      const uploadData = uploadSh.getDataRange().getValues();
+      let updatedExisting = false;
+      for (let i = uploadData.length - 1; i >= 1; i--) {
+        const rOrder = String(uploadData[i][1] || '').trim();
+        const rPlatform = String(uploadData[i][2] || '').trim();
+        const rType = String(uploadData[i][12] || 'Forward').trim();
+        const rStatus = String(uploadData[i][10] || '').trim();
+        if (normalize_(rOrder) === normalize_(order) && normalize_(rPlatform) === normalize_(platform) && normalize_(rType) === normalize_(type)) {
+          if (rStatus === 'Started' || rStatus === 'Pending' || rStatus === 'In Progress') {
+            uploadSh.getRange(i + 1, 1, 1, 15).setValues([[
+              new Date(), order, platform, user.email, name, size, uploadId, 'Session Created', 0, '', 'Started', '', type, source, queueJobId
+            ]]);
+            updatedExisting = true;
+            break;
+          }
         }
       }
-    }
-    if (!updatedExisting) {
-      logUpload_([new Date(), order, platform, user.email, name, size, uploadId, 'Session Created', 0, '', 'Started', '', type, source, queueJobId]);
-    }
+      if (!updatedExisting) {
+        logUpload_([new Date(), order, platform, user.email, name, size, uploadId, 'Session Created', 0, '', 'Started', '', type, source, queueJobId]);
+      }
 
-    return {
-      success: true,
-      uploadId: uploadId,
-      uploadUrl: uploadUrl,
-      chunkSize: CONFIG.DEFAULT_CHUNK_BYTES,
-      fileName: name,
-      fileSize: size,
-      hasResumableUrl: !!uploadUrl,
-      isDuplicate: !!done
-    };
-  } catch(e) {
-    if(reservation&&reservation.key)releaseReservation_(reservation.key);
-    throw e;
-  } finally {
-    lock.releaseLock();
-  }
+      return {
+        success: true,
+        uploadId: uploadId,
+        uploadUrl: uploadUrl,
+        chunkSize: CONFIG.DEFAULT_CHUNK_BYTES,
+        fileName: name,
+        fileSize: size,
+        hasResumableUrl: !!uploadUrl,
+        isDuplicate: !!done
+      };
+    } catch(e) {
+      if(reservation&&reservation.key)releaseReservation_(reservation.key);
+      throw e;
+    }
+  }, 10000);
 }
 
 /* ---------- Upload Chunk ---------- */
@@ -1262,9 +1278,7 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
     DriveApp.getFileById(fid).setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
   } catch(_) {}
 
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  try {
+  return withScriptLock_(function() {
     const targetLogSheet = getTargetLogSheet_(s.type);
     let alreadyLogged = false;
     if (fid || s.queueJobId) {
@@ -1310,23 +1324,21 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
     updateUploadLog_(uploadId, 'Completed', 100, fid, 'Completed', '');
     if(s.reservationKey) releaseReservation_(s.reservationKey);
     cleanupOldStartedUploads_(s.order, uploadId);
-  } finally {
-    lock.releaseLock();
-  }
 
-  if (uploadId) {
-    try { PropertiesService.getScriptProperties().deleteProperty('UPLOAD_' + uploadId); } catch(_) {}
-  }
+    if (uploadId) {
+      try { PropertiesService.getScriptProperties().deleteProperty('UPLOAD_' + uploadId); } catch(_) {}
+    }
 
-  return {
-    success: true,
-    complete: true,
-    completed: true,
-    fileId: fid,
-    webViewLink: playback,
-    playbackUrl: playback,
-    downloadUrl: 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid)
-  };
+    return {
+      success: true,
+      complete: true,
+      completed: true,
+      fileId: fid,
+      webViewLink: playback,
+      playbackUrl: playback,
+      downloadUrl: 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid)
+    };
+  }, 10000);
 }
 
 /**
@@ -1573,10 +1585,8 @@ function deleteLogEntry_(p){
     throw new Error('Order ID, Upload ID, Drive File ID, or Queue Job ID is required to remove log entries.');
   }
 
-  const lock = LockService.getScriptLock();
-  lock.waitLock(25000);
-
-  let orderLogsRemoved = 0;
+  return withScriptLock_(function() {
+    let orderLogsRemoved = 0;
   let uploadLogsRemoved = 0;
   let downloadLogsRemoved = 0;
   const discoveredDriveIds = [];
@@ -1793,9 +1803,7 @@ function deleteLogEntry_(p){
       driveTrashedCount: driveTrashedCount,
       driveTrashed: driveTrashedCount > 0
     };
-  } finally {
-    lock.releaseLock();
-  }
+  }, 12000);
 }
 
 /* ---------- Reports & Analytics ---------- */

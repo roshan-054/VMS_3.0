@@ -21,7 +21,8 @@ import {
   ArrowRight,
   Filter,
   Loader2,
-  Layers
+  Layers,
+  Upload
 } from 'lucide-react';
 import { QueueItem } from '../types';
 import {
@@ -31,7 +32,8 @@ import {
   getStoredChunkSizeMb,
   getCustomStoredChunkSizeMb,
   getStoredAutoUpload,
-  setStoredAutoUpload
+  setStoredAutoUpload,
+  manualFileCache
 } from '../lib/storage';
 import { applySheetConditionalFormatting, fetchUploadLogs, deleteLogEntry } from '../lib/api';
 import {
@@ -190,10 +192,39 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
   };
 
   const handleResume = async (item: QueueItem) => {
+    const hasBlob = (item.blob && item.blob.size > 0) || manualFileCache.has(item.id);
+    if (!hasBlob) {
+      onShowToast(`⚠️ Video file data was lost due to a previous session or page refresh. Please click "Re-attach Video" on the card to select the file.`, 'error');
+      return;
+    }
     await resumeUploadItem(item.id);
     loadQueue();
     onQueueChanged();
     onShowToast(`Resuming upload for Order ${item.orderId}…`, 'info');
+  };
+
+  const handleReattachVideoFile = async (item: QueueItem, file?: File) => {
+    if (!file) return;
+    try {
+      manualFileCache.set(item.id, file);
+      item.blob = file;
+      item.fileSize = file.size;
+      item.mimeType = file.type || 'video/mp4';
+      item.status = 'pending';
+      item.error = undefined;
+      item.stage = 'Video file attached - Ready to upload';
+      item.progress = 0;
+      item.uploadedBytes = 0;
+      item.currentChunk = 0;
+      await dbPutQueue(item);
+      window.dispatchEvent(new CustomEvent('ops_queue_updated'));
+      triggerUploadWorker();
+      loadQueue();
+      onQueueChanged();
+      onShowToast(`✅ Video file attached for Order ${item.orderId}! Uploading now…`, 'success');
+    } catch (err: any) {
+      onShowToast(`Failed to attach video: ${err?.message || err}`, 'error');
+    }
   };
 
   const handlePause = async (item: QueueItem) => {
@@ -709,6 +740,8 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
             );
             const queuePosition = pendingOrActiveList.findIndex((i) => i.id === item.id) + 1;
             const isCompleted = item.status === 'completed' || !!item.fileId;
+            const hasBlobData = (item.blob && item.blob.size > 0) || manualFileCache.has(item.id);
+            const isUnreadable = !isCompleted && !isDuplicate && (!hasBlobData || item.error?.toLowerCase().includes('unreadable') || item.stage?.toLowerCase().includes('unreadable'));
 
             return (
               <div
@@ -816,6 +849,13 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
 
                     <p className="text-xs text-slate-500 font-mono mt-1 truncate">{item.fileName}</p>
 
+                    {/* Unreadable / Missing Blob Warning */}
+                    {isUnreadable && (
+                      <div className="mt-1.5 p-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 font-medium flex items-center justify-between gap-2">
+                        <span>⚠️ <strong>Video data missing:</strong> File data was cleared by a page reload. Please click <strong>Re-attach Video</strong> to select the video file from your computer and upload.</span>
+                      </div>
+                    )}
+
                     {/* Duplicate Description or Stage Details */}
                     {isDuplicate ? (
                       <div className="mt-1.5 p-2 bg-red-100/60 border border-red-200 rounded-lg text-xs text-red-800 font-medium">
@@ -903,8 +943,28 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
                       </button>
                     )}
 
-                    {/* Resume / Sync Button (when not duplicate and failed/paused/pending) */}
-                    {!isDuplicate && (item.status === 'failed' || item.status === 'paused' || (item.status === 'pending' && !isItemUploading)) && (
+                    {/* Re-attach Video File Button (if unreadable/missing or failed) */}
+                    {!isDuplicate && !isCompleted && isUnreadable && (
+                      <label
+                        className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                        title="Select or re-attach the video file from your computer"
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>Re-attach Video</span>
+                        <input
+                          type="file"
+                          accept="video/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            handleReattachVideoFile(item, e.target.files?.[0]);
+                            e.target.value = '';
+                          }}
+                        />
+                      </label>
+                    )}
+
+                    {/* Resume / Sync Button (when not duplicate and failed/paused/pending and not unreadable) */}
+                    {!isDuplicate && !isUnreadable && (item.status === 'failed' || item.status === 'paused' || (item.status === 'pending' && !isItemUploading)) && (
                       <button
                         onClick={() => handleResume(item)}
                         className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
