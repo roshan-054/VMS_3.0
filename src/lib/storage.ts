@@ -148,8 +148,17 @@ export function setStoredToken(token: string): void {
   }
 }
 
+let dbInstance: IDBDatabase | null = null;
+let dbPromise: Promise<IDBDatabase> | null = null;
+
 function openDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
+  if (dbInstance) {
+    return Promise.resolve(dbInstance);
+  }
+  if (dbPromise) {
+    return dbPromise;
+  }
+  dbPromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
@@ -159,9 +168,24 @@ function openDB(): Promise<IDBDatabase> {
         store.createIndex('createdAt', 'createdAt');
       }
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      dbInstance = request.result;
+      dbPromise = null;
+      dbInstance.onversionchange = () => {
+        dbInstance?.close();
+        dbInstance = null;
+      };
+      dbInstance.onclose = () => {
+        dbInstance = null;
+      };
+      resolve(dbInstance);
+    };
+    request.onerror = () => {
+      dbPromise = null;
+      reject(request.error);
+    };
   });
+  return dbPromise;
 }
 
 export async function dbPutQueue(item: QueueItem): Promise<QueueItem> {
@@ -170,8 +194,19 @@ export async function dbPutQueue(item: QueueItem): Promise<QueueItem> {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
     const req = store.put(item);
-    req.onsuccess = () => resolve(item);
-    req.onerror = () => reject(req.error);
+
+    tx.oncomplete = () => {
+      resolve(item);
+    };
+    tx.onerror = () => {
+      reject(tx.error || req.error || new Error('Failed to save item to queue database'));
+    };
+    tx.onabort = () => {
+      reject(tx.error || new Error('Queue transaction was aborted'));
+    };
+    req.onerror = () => {
+      reject(req.error);
+    };
   });
 }
 
@@ -198,6 +233,12 @@ export async function dbGetQueueItem(id: string): Promise<QueueItem | null> {
 }
 
 export async function clearAllApplicationCacheAndStorage(): Promise<void> {
+  if (dbInstance) {
+    dbInstance.close();
+    dbInstance = null;
+  }
+  dbPromise = null;
+
   const keysToRemove: string[] = [];
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
@@ -220,8 +261,9 @@ export async function dbDeleteQueueItem(id: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
-    const req = store.delete(id);
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
+    store.delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
   });
 }

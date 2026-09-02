@@ -1001,6 +1001,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       bypassDuplicateRef.current = false;
 
       await dbPutQueue(queueItem);
+      window.dispatchEvent(new CustomEvent('ops_queue_updated'));
       onQueueUpdated();
       triggerUploadWorker();
 

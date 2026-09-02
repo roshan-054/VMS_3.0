@@ -282,6 +282,18 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
 
   useEffect(() => {
     loadData(true);
+
+    const handleQueueUpdated = async () => {
+      try {
+        const localItems = await dbGetAllQueue();
+        setLocalQueue(localItems);
+      } catch (err) {}
+    };
+
+    window.addEventListener('ops_queue_updated', handleQueueUpdated);
+    return () => {
+      window.removeEventListener('ops_queue_updated', handleQueueUpdated);
+    };
   }, []);
 
   // Handle auto-refresh interval

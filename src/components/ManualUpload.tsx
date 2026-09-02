@@ -222,9 +222,22 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
           item.platform === 'Custom' ? item.customPlatform?.trim() || 'Custom' : item.platform;
         const cleanOrderId = item.orderId.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
         const cleanPlatform = effectivePlatform.replace(/[^a-zA-Z0-9_-]/g, '_');
-        const ext = item.file.name.toLowerCase().endsWith('.mp4') ? '.mp4' : '.webm';
+        const extMatch = item.file.name.match(/\.[a-zA-Z0-9]+$/);
+        const ext = extMatch ? extMatch[0].toLowerCase() : '.mp4';
         const fileName = `${cleanOrderId}_${cleanPlatform}_${item.recordingType}${ext}`;
         const targetDate = item.recordingDate || new Date().toLocaleDateString('en-CA');
+        const mimeType =
+          item.file.type ||
+          (ext === '.mp4'
+            ? 'video/mp4'
+            : ext === '.webm'
+            ? 'video/webm'
+            : ext === '.mov'
+            ? 'video/quicktime'
+            : 'video/mp4');
+
+        // Extract pure Blob from File to prevent DOM descriptor / structured clone issues
+        const cleanBlob = item.file.slice(0, item.file.size, mimeType);
 
         const queueItem: QueueItem = {
           id: crypto.randomUUID(),
@@ -234,9 +247,9 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
           recordingType: item.recordingType,
           fileName: fileName,
           fileSize: item.file.size,
-          mimeType: item.file.type || 'video/mp4',
+          mimeType: mimeType,
           source: 'Manual Backup Upload',
-          blob: item.file,
+          blob: cleanBlob,
           status: 'pending',
           progress: 0,
           driveFolderId: driveFolderId,
@@ -248,6 +261,8 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
       }
 
       setStagedFiles([]);
+      // Broadcast queue update event so all listeners (App badge, UploadQueue, UploadLogs) refresh
+      window.dispatchEvent(new CustomEvent('ops_queue_updated'));
       onQueueUpdated();
       triggerUploadWorker();
       onShowToast(

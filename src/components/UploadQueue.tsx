@@ -355,8 +355,8 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
     if (filterType === 'completed') {
       return item.status === 'completed';
     }
-    // Default 'all' in active queue shows non-completed items (completed files belong in Upload Logs)
-    return item.status !== 'completed';
+    // 'all' displays all items in the queue
+    return true;
   });
 
   const duplicateCount = queue.filter(
@@ -482,8 +482,8 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
       {showManualUpload && (
         <div className="animate-in fade-in slide-in-from-top-3 duration-200">
           <ManualUpload
-            onQueueUpdated={() => {
-              loadQueue();
+            onQueueUpdated={async () => {
+              await loadQueue();
               onQueueChanged();
               triggerUploadWorker();
             }}
