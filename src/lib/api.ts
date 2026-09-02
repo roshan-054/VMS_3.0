@@ -211,9 +211,7 @@ export async function checkBackendHealth(customUrl?: string): Promise<{
 
 export function normalizeOrderId(id: string | null | undefined): string {
   if (!id) return '';
-  let s = String(id).trim().toLowerCase();
-  s = s.replace(/^[#_-\s]+/, '').replace(/[\s_-]+/g, '');
-  return s;
+  return String(id).trim().toLowerCase().replace(/\s+/g, '');
 }
 
 export async function checkDuplicate(meta: {

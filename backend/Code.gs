@@ -480,10 +480,7 @@ function adminDeleteUser_(p){
 function normalize_(v){return String(v||'').trim().toLowerCase()}
 function normalizeOrderId_(v){
   if(v===null||v===undefined)return '';
-  let s=String(v).trim().toLowerCase();
-  // Strip leading hashtag, underscores, hyphens or spaces and internal hyphens/underscores/spaces (e.g. "#OD-4737" -> "od4737")
-  s=s.replace(/^[#_-\s]+/,'').replace(/[\s_-]+/g,'');
-  return s;
+  return String(v).trim().toLowerCase().replace(/\s+/g, '');
 }
 function key_(order,platform,type){return [normalizeOrderId_(order),normalize_(platform),normalize_(type||'Forward')].join('||')}
 

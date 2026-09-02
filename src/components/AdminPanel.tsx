@@ -138,7 +138,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
   const [autoUploadInput, setAutoUploadInput] = useState<boolean>(getStoredAutoUpload());
   const [autoResumeInput, setAutoResumeInput] = useState<boolean>(getStoredAutoResume());
   const [autoRefreshIntervalInput, setAutoRefreshIntervalInput] = useState<number>(getStoredAutoRefreshInterval());
-  const [duplicatePolicyInput, setDuplicatePolicyInput] = useState<DuplicatePolicy>(getStoredDuplicatePolicy());
   const [clearingCache, setClearingCache] = useState(false);
   const [testingHealth, setTestingHealth] = useState(false);
   const [repairingUrls, setRepairingUrls] = useState(false);
@@ -167,7 +166,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
     setAutoUploadInput(getStoredAutoUpload());
     setAutoResumeInput(getStoredAutoResume());
     setAutoRefreshIntervalInput(getStoredAutoRefreshInterval());
-    setDuplicatePolicyInput(getStoredDuplicatePolicy());
   }, []);
 
   const handleClearAllCache = async () => {
@@ -226,7 +224,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
     setStoredAutoUpload(autoUploadInput);
     setStoredAutoResume(autoResumeInput);
     setStoredAutoRefreshInterval(autoRefreshIntervalInput);
-    setStoredDuplicatePolicy(duplicatePolicyInput);
 
     onShowToast(
       `Drive & System configuration saved! Auto-refresh set to ${autoRefreshIntervalInput}s interval.`,
@@ -1019,100 +1016,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                 </div>
               </div>
 
-              {/* 5. Duplicate Order ID Recording Policy */}
-              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
-                <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-                  <div className="w-7 h-7 rounded-lg bg-red-50 text-red-600 flex items-center justify-center font-bold text-xs">
-                    5
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-slate-900">Duplicate Order ID Recording Policy</h4>
-                    <p className="text-[11px] text-slate-500">Enforce duplicate order detection across Google Drive & Sheet logs</p>
-                  </div>
-                </div>
-
-                <div className="space-y-2.5">
-                  <label
-                    className={`flex items-start gap-3 p-3 rounded-xl border transition cursor-pointer ${
-                      duplicatePolicyInput === 'strict_block'
-                        ? 'bg-red-50/70 border-red-300'
-                        : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name="duplicatePolicy"
-                      value="strict_block"
-                      checked={duplicatePolicyInput === 'strict_block'}
-                      onChange={() => setDuplicatePolicyInput('strict_block')}
-                      className="mt-0.5 text-red-600 focus:ring-red-500"
-                    />
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-slate-900">Strict Block (No Duplicates Allowed)</span>
-                        <span className="bg-red-100 text-red-700 text-[10px] font-bold px-2 py-0.2 rounded-full">
-                          RECOMMENDED
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-600 mt-0.5 leading-snug">
-                        Completely locks the "Start Recording" button when an Order ID has already been recorded. Operators cannot bypass this block.
-                      </p>
-                    </div>
-                  </label>
-
-                  <label
-                    className={`flex items-start gap-3 p-3 rounded-xl border transition cursor-pointer ${
-                      duplicatePolicyInput === 'admin_override'
-                        ? 'bg-amber-50/70 border-amber-300'
-                        : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name="duplicatePolicy"
-                      value="admin_override"
-                      checked={duplicatePolicyInput === 'admin_override'}
-                      onChange={() => setDuplicatePolicyInput('admin_override')}
-                      className="mt-0.5 text-amber-600 focus:ring-amber-500"
-                    />
-                    <div className="flex-1">
-                      <span className="text-xs font-bold text-slate-900 block">Admin Authorization Required</span>
-                      <p className="text-[11px] text-slate-600 mt-0.5 leading-snug">
-                        Operators are blocked from duplicate recording; only logged-in Administrators can review existing logs and override the lock.
-                      </p>
-                    </div>
-                  </label>
-
-                  <label
-                    className={`flex items-start gap-3 p-3 rounded-xl border transition cursor-pointer ${
-                      duplicatePolicyInput === 'warn_only'
-                        ? 'bg-blue-50/70 border-blue-300'
-                        : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name="duplicatePolicy"
-                      value="warn_only"
-                      checked={duplicatePolicyInput === 'warn_only'}
-                      onChange={() => setDuplicatePolicyInput('warn_only')}
-                      className="mt-0.5 text-blue-600 focus:ring-blue-500"
-                    />
-                    <div className="flex-1">
-                      <span className="text-xs font-bold text-slate-900 block">Warning Alert Only (Allow Operator Override)</span>
-                      <p className="text-[11px] text-slate-600 mt-0.5 leading-snug">
-                        Displays a duplicate alert and link to the previous video, but permits the operator to click "Proceed & Record Anyway".
-                      </p>
-                    </div>
-                  </label>
-                </div>
-              </div>
-
-              {/* 6. Google Sheet Maintenance & Playback Links Repair */}
+              {/* 5. Google Sheet Maintenance & Playback Links Repair */}
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
                 <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
                   <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-xs">
-                    6
+                    5
                   </div>
                   <div>
                     <h4 className="text-xs font-bold text-slate-900">Google Sheet Maintenance & Repair</h4>
@@ -1163,11 +1071,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                 </div>
               </div>
 
-              {/* 7. Cache & Storage Management */}
+              {/* 6. Cache & Storage Management */}
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
                 <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
                   <div className="w-7 h-7 rounded-lg bg-red-50 text-red-600 flex items-center justify-center font-bold text-xs">
-                    7
+                    6
                   </div>
                   <div>
                     <h4 className="text-xs font-bold text-slate-900">Cache & Storage Management</h4>
