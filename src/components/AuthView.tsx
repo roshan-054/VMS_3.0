@@ -90,20 +90,6 @@ export const AuthView: React.FC<AuthViewProps> = ({
 
   return (
     <div className="relative min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 sm:p-6">
-      {/* Top Bar Config Button */}
-      {onOpenSetup && (
-        <button
-          id="auth-setup-btn"
-          type="button"
-          onClick={onOpenSetup}
-          className="absolute top-4 right-4 flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-300 hover:text-white bg-slate-800/90 hover:bg-slate-700/90 border border-slate-700 rounded-xl transition cursor-pointer shadow-sm"
-          title="Configure Google Apps Script Web App URL & Drive ID"
-        >
-          <Settings className="w-3.5 h-3.5 text-blue-400" />
-          <span>Setup Web App</span>
-        </button>
-      )}
-
       <div className="w-full max-w-md space-y-6">
         {/* Brand Header */}
         <div className="text-center space-y-2">
@@ -228,7 +214,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
             </button>
           </form>
 
-          <div className="space-y-3 pt-2 border-t border-slate-100 text-xs">
+          <div className="pt-2 border-t border-slate-100 text-xs">
             <div className="flex items-center justify-center">
               <button
                 onClick={() => {
@@ -241,12 +227,6 @@ export const AuthView: React.FC<AuthViewProps> = ({
                   ? 'Already have an account? Sign In with ID & Password'
                   : "Don't have an account? Create Account"}
               </button>
-            </div>
-
-            <div className="text-center pt-1">
-              <span className="text-[11px] text-slate-400">
-                Default Master Admin: <code className="text-slate-600 bg-slate-100 px-1 py-0.5 rounded font-mono">admin@ops.local</code> / <code className="text-slate-600 bg-slate-100 px-1 py-0.5 rounded font-mono">Admin@123</code>
-              </span>
             </div>
           </div>
         </div>
