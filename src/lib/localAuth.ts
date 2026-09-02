@@ -6,6 +6,36 @@ export interface StoredLocalUser extends User {
 
 const LOCAL_USERS_KEY = 'vms_local_users_v3';
 const LOCAL_SESSION_PREFIX = 'vms_loc_sess_';
+const DELETED_USERS_KEY = 'vms_deleted_user_emails_v3';
+
+export function getDeletedUserEmails(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DELETED_USERS_KEY);
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) return new Set(arr.map((e) => String(e).toLowerCase().trim()));
+    }
+  } catch {}
+  return new Set<string>();
+}
+
+export function recordDeletedUserEmail(email: string): void {
+  const clean = String(email || '').toLowerCase().trim();
+  if (!clean) return;
+  const set = getDeletedUserEmails();
+  set.add(clean);
+  try {
+    localStorage.setItem(DELETED_USERS_KEY, JSON.stringify(Array.from(set)));
+  } catch {}
+}
+
+export function deleteLocalUserByEmail(email: string): void {
+  const clean = String(email || '').toLowerCase().trim();
+  if (!clean) return;
+  recordDeletedUserEmail(clean);
+  const users = getLocalUsers().filter((u) => u.email.toLowerCase().trim() !== clean);
+  saveLocalUsers(users);
+}
 
 export async function hashPassword(str: string): Promise<string> {
   const clean = String(str || '').trim();
@@ -30,14 +60,15 @@ export async function hashPassword(str: string): Promise<string> {
 }
 
 export function getDefaultLocalUsers(): StoredLocalUser[] {
-  return [
+  const deleted = getDeletedUserEmails();
+  const defaults: StoredLocalUser[] = [
     {
       name: 'Master Admin',
       email: 'askroshan.2002@gmail.com',
       role: 'Master Admin',
       status: 'Approved',
       created: new Date().toISOString(),
-      passwordHash: 'Admin@123', // Matches plain or hashed
+      passwordHash: 'Admin@123',
     },
     {
       name: 'Workstation Admin',
@@ -48,9 +79,11 @@ export function getDefaultLocalUsers(): StoredLocalUser[] {
       passwordHash: 'Admin@123',
     },
   ];
+  return defaults.filter((u) => !deleted.has(u.email.toLowerCase().trim()));
 }
 
 export function getLocalUsers(): StoredLocalUser[] {
+  const deleted = getDeletedUserEmails();
   try {
     const raw = localStorage.getItem(LOCAL_USERS_KEY);
     if (!raw) {
@@ -60,7 +93,9 @@ export function getLocalUsers(): StoredLocalUser[] {
     }
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed;
+      return (parsed as StoredLocalUser[]).filter(
+        (u) => u && u.email && !deleted.has(u.email.toLowerCase().trim())
+      );
     }
     const defaults = getDefaultLocalUsers();
     localStorage.setItem(LOCAL_USERS_KEY, JSON.stringify(defaults));

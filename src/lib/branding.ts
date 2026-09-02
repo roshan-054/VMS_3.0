@@ -23,12 +23,12 @@ export async function syncCloudBranding(): Promise<BrandingConfig> {
   const local = getStoredBranding();
   try {
     const cloud = await fetchCloudBranding();
-    if (cloud && (cloud.logoUrl || cloud.faviconUrl || cloud.appName)) {
+    if (cloud) {
       const merged: BrandingConfig = {
-        logoUrl: cloud.logoUrl || local.logoUrl,
-        faviconUrl: cloud.faviconUrl || local.faviconUrl,
-        appName: cloud.appName || local.appName,
-        appSubtitle: cloud.appSubtitle || local.appSubtitle,
+        logoUrl: cloud.logoUrl !== undefined && cloud.logoUrl !== null ? cloud.logoUrl : local.logoUrl,
+        faviconUrl: cloud.faviconUrl !== undefined && cloud.faviconUrl !== null ? cloud.faviconUrl : local.faviconUrl,
+        appName: cloud.appName || local.appName || DEFAULT_BRANDING.appName,
+        appSubtitle: cloud.appSubtitle || local.appSubtitle || DEFAULT_BRANDING.appSubtitle,
       };
       localStorage.setItem(BRANDING_STORAGE_KEY, JSON.stringify(merged));
       applyFavicon(merged.faviconUrl);
@@ -47,11 +47,9 @@ export async function syncCloudBranding(): Promise<BrandingConfig> {
   return local;
 }
 
-// Trigger background cloud sync on module load
+// Trigger background cloud sync immediately on module load
 if (typeof window !== 'undefined') {
-  setTimeout(() => {
-    syncCloudBranding().catch(() => {});
-  }, 1000);
+  syncCloudBranding().catch(() => {});
 }
 
 export function getStoredBranding(): BrandingConfig {

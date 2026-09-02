@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { requestApi } from '../lib/api';
 import { setStoredToken } from '../lib/storage';
-import { getStoredBranding, BrandingConfig } from '../lib/branding';
+import { getStoredBranding, subscribeBranding, syncCloudBranding, BrandingConfig } from '../lib/branding';
 import { User } from '../types';
 
 interface AuthViewProps {
@@ -37,6 +37,9 @@ export const AuthView: React.FC<AuthViewProps> = ({
 
   useEffect(() => {
     setBranding(getStoredBranding());
+    const unsub = subscribeBranding((updated) => setBranding(updated));
+    syncCloudBranding().catch(() => {});
+    return () => unsub();
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {

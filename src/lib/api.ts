@@ -7,6 +7,8 @@ import {
   syncLocalUserWithRemote,
   syncAllLocalUsers,
   saveLocalUsers,
+  deleteLocalUserByEmail,
+  recordDeletedUserEmail,
   StoredLocalUser,
 } from './localAuth';
 
@@ -41,21 +43,11 @@ export async function requestApi<T = any>(
     action === 'adminDeleteUser';
 
   try {
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        method: 'POST',
-        mode: 'cors',
-        redirect: 'follow',
-        credentials: 'omit',
-        headers: {
-          'Content-Type': 'text/plain;charset=utf-8',
-        },
-        body,
-      });
-    } catch (fetchErr: any) {
-      if (action.startsWith('get') || action === 'uploadLogs' || action === 'checkDuplicateOrder' || action === 'getUploadLogs') {
-        await new Promise((resolve) => setTimeout(resolve, 800));
+    let response: Response | null = null;
+    let lastFetchErr: any = null;
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
         response = await fetch(url, {
           method: 'POST',
           mode: 'cors',
@@ -66,9 +58,17 @@ export async function requestApi<T = any>(
           },
           body,
         });
-      } else {
-        throw fetchErr;
+        if (response && response.ok) break;
+      } catch (fetchErr: any) {
+        lastFetchErr = fetchErr;
+        if (attempt < 3) {
+          await new Promise((resolve) => setTimeout(resolve, 600 * attempt));
+        }
       }
+    }
+
+    if (!response) {
+      throw lastFetchErr || new Error('Network request failed. Please check your connection.');
     }
 
     const text = await response.text();
@@ -104,6 +104,9 @@ export async function requestApi<T = any>(
       syncLocalUserWithRemote(data.user);
     } else if (action === 'getUsers' && Array.isArray((data as any).users)) {
       syncAllLocalUsers((data as any).users);
+    } else if (action === 'adminDeleteUser') {
+      const delEmail = payload.email || payload.userId || (data as any).email;
+      if (delEmail) deleteLocalUserByEmail(delEmail);
     }
 
     return data;

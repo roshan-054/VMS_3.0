@@ -37,7 +37,7 @@ import {
 } from 'lucide-react';
 import { User, UserRole, UserStatus, AdminPermissions } from '../types';
 import { requestApi, checkBackendHealth, uploadBrandingImage, repairSheetPlaybackUrls, runSystemSetup } from '../lib/api';
-import { getLocalUsers } from '../lib/localAuth';
+import { getLocalUsers, deleteLocalUserByEmail, getDeletedUserEmails } from '../lib/localAuth';
 import {
   isMasterAdmin,
   getUserPermissions,
@@ -50,6 +50,8 @@ import {
   getStoredBranding,
   setStoredBranding,
   resetStoredBranding,
+  subscribeBranding,
+  syncCloudBranding,
   BrandingConfig,
   DEFAULT_BRANDING
 } from '../lib/branding';
@@ -172,6 +174,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
     setAppNameInput(current.appName);
     setAppSubtitleInput(current.appSubtitle);
 
+    const unsubBranding = subscribeBranding((updated) => {
+      setBranding(updated);
+      setLogoUrlInput(updated.logoUrl || '');
+      setFaviconUrlInput(updated.faviconUrl || '');
+      setAppNameInput(updated.appName || 'VMS 3.0');
+      setAppSubtitleInput(updated.appSubtitle || 'Order Packing System');
+    });
+    syncCloudBranding().catch(() => {});
+
     setApiUrlInput(getStoredApiUrl());
     setDriveFolderIdInput(getStoredDriveFolderId());
     setChunkSizeMbInput(getStoredChunkSizeMb());
@@ -181,6 +192,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
     setAutoRefreshIntervalInput(getStoredAutoRefreshInterval());
     setNightModeInput(getStoredNightMode());
     setMaxConcurrentInput(getStoredMaxConcurrentUploads());
+
+    return () => {
+      unsubBranding();
+    };
   }, []);
 
   const handleClearAllCache = async () => {
@@ -285,40 +300,42 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
 
   const fetchUsers = async () => {
     setLoading(true);
+    const deletedEmails = getDeletedUserEmails();
     try {
       const res = await requestApi<{ users: User[] }>('getUsers', {});
       const fetched = Array.isArray(res.users) ? res.users : [];
-      const local = getLocalUsers();
       const userMap = new Map<string, User>();
 
-      // 1. Load local workstation users
-      local.forEach((u) => {
-        const key = (u.email || '').toLowerCase().trim();
-        if (key) {
-          userMap.set(key, {
-            name: u.name,
-            email: u.email,
-            role: u.role,
-            status: u.status,
-            created: u.created,
-            permissions: u.permissions,
-          });
-        }
-      });
+      // 1. If remote returns users, remote is ground truth for users
+      if (fetched.length > 0) {
+        fetched.forEach((u) => {
+          const key = (u.email || '').toLowerCase().trim();
+          if (key && !deletedEmails.has(key)) {
+            userMap.set(key, u);
+          }
+        });
+      } else {
+        // Fall back to local storage users
+        const local = getLocalUsers();
+        local.forEach((u) => {
+          const key = (u.email || '').toLowerCase().trim();
+          if (key && !deletedEmails.has(key)) {
+            userMap.set(key, {
+              name: u.name,
+              email: u.email,
+              role: u.role,
+              status: u.status,
+              created: u.created,
+              permissions: u.permissions,
+            });
+          }
+        });
+      }
 
-      // 2. Merge remote users
-      fetched.forEach((u) => {
-        const key = (u.email || '').toLowerCase().trim();
-        if (key) {
-          const existing = userMap.get(key);
-          userMap.set(key, { ...existing, ...u });
-        }
-      });
-
-      // 3. Ensure active logged in user is included
+      // 2. Ensure active logged in user is included unless deleted
       if (currentUser?.email) {
         const key = currentUser.email.toLowerCase().trim();
-        if (!userMap.has(key)) {
+        if (!userMap.has(key) && !deletedEmails.has(key)) {
           userMap.set(key, currentUser);
         }
       }
@@ -330,7 +347,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
       const userMap = new Map<string, User>();
       local.forEach((u) => {
         const key = (u.email || '').toLowerCase().trim();
-        if (key) {
+        if (key && !deletedEmails.has(key)) {
           userMap.set(key, {
             name: u.name,
             email: u.email,
@@ -343,7 +360,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
       });
       if (currentUser?.email) {
         const key = currentUser.email.toLowerCase().trim();
-        if (!userMap.has(key)) {
+        if (!userMap.has(key) && !deletedEmails.has(key)) {
           userMap.set(key, currentUser);
         }
       }
@@ -462,15 +479,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
   const handleConfirmDeleteUser = async () => {
     if (!deleteModalUser) return;
     setDeletingUser(true);
+    const targetEmail = deleteModalUser.email;
     try {
       await requestApi('adminDeleteUser', {
         row: deleteModalUser.row,
+        email: targetEmail,
+        userId: targetEmail,
       });
-      onShowToast(`User account for ${deleteModalUser.email} was removed.`, 'success');
+      deleteLocalUserByEmail(targetEmail);
+      onShowToast(`User account for ${targetEmail} was removed permanently.`, 'success');
       setDeleteModalUser(null);
-      fetchUsers();
+      await fetchUsers();
     } catch (err: any) {
-      onShowToast(err.message || 'Failed to delete user', 'error');
+      // Even if remote throws or fails, ensure local store is cleaned up if user confirmed
+      deleteLocalUserByEmail(targetEmail);
+      setDeleteModalUser(null);
+      await fetchUsers();
+      onShowToast(`User account for ${targetEmail} was removed locally: ${err.message || ''}`, 'info');
     } finally {
       setDeletingUser(false);
     }

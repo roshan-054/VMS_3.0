@@ -470,10 +470,30 @@ function adminResetPassword_(p){
 }
 
 function adminDeleteUser_(p){
-  const me=admin_(p.token),row=Number(p.row);if(row<2)throw new Error('Invalid user row.');
-  const sh=sheet_(CONFIG.USERS_SHEET),email=String(sh.getRange(row,3).getValue()||'').toLowerCase();
-  if(email===String(me.email).toLowerCase())throw new Error('You cannot delete your own administrator account.');
-  sh.deleteRow(row);return {success:true};
+  const me = admin_(p.token);
+  const sh = sheet_(CONFIG.USERS_SHEET);
+  const v = sh.getDataRange().getValues();
+  let row = Number(p.row || 0);
+  const targetEmail = String(p.email || p.userId || p.identifier || '').trim().toLowerCase();
+
+  if (row < 2 && targetEmail) {
+    for (let i = 1; i < v.length; i++) {
+      if (String(v[i][2] || '').trim().toLowerCase() === targetEmail) {
+        row = i + 1;
+        break;
+      }
+    }
+  }
+
+  if (row < 2) throw new Error('User account not found in Google Sheet.');
+
+  const emailInSheet = String(sh.getRange(row, 3).getValue() || '').trim().toLowerCase();
+  if (emailInSheet === String(me.email || '').trim().toLowerCase()) {
+    throw new Error('You cannot delete your own active administrator account.');
+  }
+
+  sh.deleteRow(row);
+  return { success: true, email: emailInSheet };
 }
 
 /* ---------- Duplicate Detection & Guard ---------- */
