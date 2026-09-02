@@ -1214,6 +1214,17 @@ function uploadChunk_(p){
 }
 
 /**
+ * Resolves the appropriate Google Sheets log tab ('OrderLog' vs 'ReturnLog') based on recording type.
+ */
+function getTargetLogSheet_(type) {
+  const norm = normalize_(type);
+  if (norm === 'return' || norm === 'inbound') {
+    return sheet_(CONFIG.RETURN_LOG_SHEET);
+  }
+  return sheet_(CONFIG.ORDER_LOG_SHEET);
+}
+
+/**
  * Finalize completed video upload:
  * Sets Drive public sharing, records row in OrderLog/ReturnLog, DownloadLog,
  * updates UploadLog status to 100% Completed, and releases reservation locks.
