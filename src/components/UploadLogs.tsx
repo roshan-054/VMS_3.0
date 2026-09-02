@@ -35,7 +35,7 @@ import {
 } from 'lucide-react';
 import { User, UploadLogItem, QueueItem, PlatformType, RecordingType } from '../types';
 import { fetchUploadLogs, deleteLogEntry, formatFileSize } from '../lib/api';
-import { dbGetAllQueue, dbPutQueue, dbDeleteQueueItem, getStoredDriveFolderId } from '../lib/storage';
+import { dbGetAllQueue, dbPutQueue, dbDeleteQueueItem, getStoredDriveFolderId, getStoredAutoRefreshInterval } from '../lib/storage';
 import { canUserDeleteData } from '../lib/permissions';
 import { retryUploadItem, fixAndCleanAllStuckUploads } from '../lib/uploadWorker';
 
@@ -205,11 +205,11 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
   const [isSearchingCloud, setIsSearchingCloud] = useState(false);
 
   const loadData = async (showLoadingSpinner = false, customQuery?: string) => {
-    // Prevent overlapping concurrent background fetches
-    if (isFetchingRef.current) return;
-    isFetchingRef.current = true;
-
     if (showLoadingSpinner) setIsLoading(true);
+
+    // Prevent overlapping concurrent background fetches unless user clicked manual refresh
+    if (isFetchingRef.current && !showLoadingSpinner) return;
+    isFetchingRef.current = true;
 
     try {
       // 1. Fetch Local Queue items
@@ -259,7 +259,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
       console.warn('Failed to load upload logs:', err);
     } finally {
       isFetchingRef.current = false;
-      if (showLoadingSpinner) setIsLoading(false);
+      setIsLoading(false);
       setIsSearchingCloud(false);
     }
   };
@@ -287,12 +287,13 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
   // Handle auto-refresh interval
   useEffect(() => {
     if (autoRefresh) {
+      const intervalMs = getStoredAutoRefreshInterval() * 1000;
       refreshTimerRef.current = setInterval(() => {
         // Only run auto-refresh when not actively typing/searching
         if (!searchQuery.trim()) {
           loadData(false, '');
         }
-      }, 20000); // Stable 20s refresh to prevent spamming Google Sheets
+      }, intervalMs);
     } else {
       if (refreshTimerRef.current) clearInterval(refreshTimerRef.current);
     }
@@ -951,7 +952,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
               onChange={(e) => setAutoRefresh(e.target.checked)}
               className="rounded text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
             />
-            <span>Auto-refresh (10s)</span>
+            <span>Auto-refresh ({getStoredAutoRefreshInterval()}s)</span>
           </label>
         </div>
       </div>

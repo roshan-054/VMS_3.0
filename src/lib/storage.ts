@@ -106,6 +106,22 @@ export function setStoredAutoResume(enabled: boolean): void {
   localStorage.setItem('ops_auto_resume', String(enabled));
 }
 
+export function getStoredAutoRefreshInterval(): number {
+  const stored = localStorage.getItem('ops_auto_refresh_sec');
+  if (stored) {
+    const parsed = parseInt(stored, 10);
+    if (!isNaN(parsed) && parsed >= 2 && parsed <= 300) {
+      return parsed;
+    }
+  }
+  return 6; // Default 6 seconds auto-refresh interval
+}
+
+export function setStoredAutoRefreshInterval(seconds: number): void {
+  const clean = Math.max(2, Math.min(300, Math.round(seconds || 6)));
+  localStorage.setItem('ops_auto_refresh_sec', String(clean));
+}
+
 export type DuplicatePolicy = 'strict_block' | 'admin_override' | 'warn_only';
 
 export function getStoredDuplicatePolicy(): DuplicatePolicy {

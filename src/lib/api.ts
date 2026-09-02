@@ -112,66 +112,58 @@ export async function requestApi<T = any>(
       }
     }
 
-    // If it's user management action and remote is unavailable, fall back to local store
+    // If it's user management action and remote is unavailable or throws error, fall back to local store
     if (isUserMgmtAction) {
-      const errStr = remoteError?.message || '';
-      const isConnectionIssue =
-        errStr.includes('Invalid Apps Script') ||
-        errStr.includes('Failed to fetch') ||
-        errStr.includes('NetworkError');
-
-      if (isConnectionIssue) {
-        if (action === 'getUsers') {
-          return { success: true, users: getLocalUsers() } as any;
-        }
-        if (action === 'adminCreateUser') {
-          const users = getLocalUsers();
-          const cleanEmail = (payload.email || '').trim().toLowerCase();
-          const cleanName = (payload.name || '').trim();
-          const existing = users.find((u) => u.email.toLowerCase() === cleanEmail);
-          if (existing) throw new Error('A user with this email already exists.');
-          const newUser: StoredLocalUser = {
-            name: cleanName,
-            email: cleanEmail,
-            role: payload.role || 'User',
-            status: 'Approved',
-            created: new Date().toISOString(),
-            passwordHash: payload.password || 'Admin@123',
-          };
-          users.push(newUser);
+      if (action === 'getUsers') {
+        return { success: true, users: getLocalUsers() } as any;
+      }
+      if (action === 'adminCreateUser') {
+        const users = getLocalUsers();
+        const cleanEmail = (payload.email || '').trim().toLowerCase();
+        const cleanName = (payload.name || '').trim();
+        const existing = users.find((u) => u.email.toLowerCase() === cleanEmail);
+        if (existing) throw new Error('A user with this email already exists.');
+        const newUser: StoredLocalUser = {
+          name: cleanName,
+          email: cleanEmail,
+          role: payload.role || 'User',
+          status: payload.status || 'Approved',
+          created: new Date().toISOString(),
+          passwordHash: payload.password || 'Admin@123',
+        };
+        users.push(newUser);
+        saveLocalUsers(users);
+        return { success: true, user: newUser } as any;
+      }
+      if (action === 'adminManageUser') {
+        const users = getLocalUsers();
+        const cleanEmail = (payload.email || '').trim().toLowerCase();
+        const index = users.findIndex((u) => u.email.toLowerCase() === cleanEmail);
+        if (index >= 0) {
+          if (payload.name) users[index].name = payload.name;
+          if (payload.role) users[index].role = payload.role;
+          if (payload.status) users[index].status = payload.status;
+          if (payload.password) users[index].passwordHash = payload.password;
           saveLocalUsers(users);
-          return { success: true, user: newUser } as any;
         }
-        if (action === 'adminManageUser') {
-          const users = getLocalUsers();
-          const cleanEmail = (payload.email || '').trim().toLowerCase();
-          const index = users.findIndex((u) => u.email.toLowerCase() === cleanEmail);
-          if (index >= 0) {
-            if (payload.name) users[index].name = payload.name;
-            if (payload.role) users[index].role = payload.role;
-            if (payload.status) users[index].status = payload.status;
-            if (payload.password) users[index].passwordHash = payload.password;
-            saveLocalUsers(users);
-          }
-          return { success: true } as any;
-        }
-        if (action === 'adminResetPassword') {
-          const users = getLocalUsers();
-          const cleanEmail = (payload.email || '').trim().toLowerCase();
-          const index = users.findIndex((u) => u.email.toLowerCase() === cleanEmail);
-          if (index >= 0) {
-            users[index].passwordHash = payload.newPassword || 'Admin@123';
-            saveLocalUsers(users);
-          }
-          return { success: true, message: 'Password reset successfully in local store.' } as any;
-        }
-        if (action === 'adminDeleteUser') {
-          let users = getLocalUsers();
-          const cleanEmail = (payload.email || '').trim().toLowerCase();
-          users = users.filter((u) => u.email.toLowerCase() !== cleanEmail);
+        return { success: true } as any;
+      }
+      if (action === 'adminResetPassword') {
+        const users = getLocalUsers();
+        const cleanEmail = (payload.email || '').trim().toLowerCase();
+        const index = users.findIndex((u) => u.email.toLowerCase() === cleanEmail);
+        if (index >= 0) {
+          users[index].passwordHash = payload.newPassword || payload.password || 'Admin@123';
           saveLocalUsers(users);
-          return { success: true } as any;
         }
+        return { success: true, message: 'Password reset successfully in local store.' } as any;
+      }
+      if (action === 'adminDeleteUser') {
+        let users = getLocalUsers();
+        const cleanEmail = (payload.email || '').trim().toLowerCase();
+        users = users.filter((u) => u.email.toLowerCase() !== cleanEmail);
+        saveLocalUsers(users);
+        return { success: true } as any;
       }
     }
 

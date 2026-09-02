@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import { User, UserRole, UserStatus, AdminPermissions } from '../types';
 import { requestApi, checkBackendHealth, uploadBrandingImage, repairSheetPlaybackUrls, runSystemSetup } from '../lib/api';
+import { getLocalUsers } from '../lib/localAuth';
 import {
   isMasterAdmin,
   getUserPermissions,
@@ -60,6 +61,8 @@ import {
   setStoredAutoUpload,
   getStoredAutoResume,
   setStoredAutoResume,
+  getStoredAutoRefreshInterval,
+  setStoredAutoRefreshInterval,
   getStoredDuplicatePolicy,
   setStoredDuplicatePolicy,
   DuplicatePolicy,
@@ -134,6 +137,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
   const [chunkSizeMbInput, setChunkSizeMbInput] = useState<number>(getStoredChunkSizeMb());
   const [autoUploadInput, setAutoUploadInput] = useState<boolean>(getStoredAutoUpload());
   const [autoResumeInput, setAutoResumeInput] = useState<boolean>(getStoredAutoResume());
+  const [autoRefreshIntervalInput, setAutoRefreshIntervalInput] = useState<number>(getStoredAutoRefreshInterval());
   const [duplicatePolicyInput, setDuplicatePolicyInput] = useState<DuplicatePolicy>(getStoredDuplicatePolicy());
   const [clearingCache, setClearingCache] = useState(false);
   const [testingHealth, setTestingHealth] = useState(false);
@@ -162,6 +166,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
     setChunkSizeMbInput(getStoredChunkSizeMb());
     setAutoUploadInput(getStoredAutoUpload());
     setAutoResumeInput(getStoredAutoResume());
+    setAutoRefreshIntervalInput(getStoredAutoRefreshInterval());
     setDuplicatePolicyInput(getStoredDuplicatePolicy());
   }, []);
 
@@ -220,12 +225,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
     setStoredChunkSizeMb(chunkSizeMbInput);
     setStoredAutoUpload(autoUploadInput);
     setStoredAutoResume(autoResumeInput);
+    setStoredAutoRefreshInterval(autoRefreshIntervalInput);
     setStoredDuplicatePolicy(duplicatePolicyInput);
 
     onShowToast(
-      `Drive & System configuration saved! Duplicate policy: ${
-        duplicatePolicyInput === 'strict_block' ? 'Strict Block' : duplicatePolicyInput === 'admin_override' ? 'Admin Override' : 'Warning Only'
-      }.`,
+      `Drive & System configuration saved! Auto-refresh set to ${autoRefreshIntervalInput}s interval.`,
       'success'
     );
   };
@@ -266,21 +270,67 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
     setLoading(true);
     try {
       const res = await requestApi<{ users: User[] }>('getUsers', {});
-      setUsers(res.users || []);
-    } catch (err: any) {
-      console.warn('Failed to load users:', err);
-      // Fallback mock admin for preview if Google Sheet is freshly initializing
-      if (users.length === 0) {
-        setUsers([
-          {
-            name: currentUser?.name || 'Administrator',
-            email: currentUser?.email || 'admin@vms.local',
-            role: 'Admin',
-            status: 'Approved',
-            created: new Date().toISOString(),
-          },
-        ]);
+      const fetched = Array.isArray(res.users) ? res.users : [];
+      const local = getLocalUsers();
+      const userMap = new Map<string, User>();
+
+      // 1. Load local workstation users
+      local.forEach((u) => {
+        const key = (u.email || '').toLowerCase().trim();
+        if (key) {
+          userMap.set(key, {
+            name: u.name,
+            email: u.email,
+            role: u.role,
+            status: u.status,
+            created: u.created,
+            permissions: u.permissions,
+          });
+        }
+      });
+
+      // 2. Merge remote users
+      fetched.forEach((u) => {
+        const key = (u.email || '').toLowerCase().trim();
+        if (key) {
+          const existing = userMap.get(key);
+          userMap.set(key, { ...existing, ...u });
+        }
+      });
+
+      // 3. Ensure active logged in user is included
+      if (currentUser?.email) {
+        const key = currentUser.email.toLowerCase().trim();
+        if (!userMap.has(key)) {
+          userMap.set(key, currentUser);
+        }
       }
+
+      setUsers(Array.from(userMap.values()));
+    } catch (err: any) {
+      console.warn('Failed to load remote users, displaying local users:', err);
+      const local = getLocalUsers();
+      const userMap = new Map<string, User>();
+      local.forEach((u) => {
+        const key = (u.email || '').toLowerCase().trim();
+        if (key) {
+          userMap.set(key, {
+            name: u.name,
+            email: u.email,
+            role: u.role,
+            status: u.status,
+            created: u.created,
+            permissions: u.permissions,
+          });
+        }
+      });
+      if (currentUser?.email) {
+        const key = currentUser.email.toLowerCase().trim();
+        if (!userMap.has(key)) {
+          userMap.set(key, currentUser);
+        }
+      }
+      setUsers(Array.from(userMap.values()));
     } finally {
       setLoading(false);
     }
@@ -906,6 +956,69 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                 </div>
               </div>
 
+              {/* 5. Auto-Refresh Interval Rate */}
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-teal-50 text-teal-600 flex items-center justify-center font-bold text-xs">
+                      5
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900">Auto-Refresh Interval Rate</h4>
+                      <p className="text-[11px] text-slate-500">Configure status refresh frequency for upload logs and queue status</p>
+                    </div>
+                  </div>
+
+                  <span className="bg-teal-50 text-teal-700 text-xs font-bold px-2.5 py-1 rounded-lg border border-teal-200 flex items-center gap-1">
+                    <RefreshCw className="w-3.5 h-3.5 text-teal-600" />
+                    Every {autoRefreshIntervalInput} Sec
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-2">
+                    Select Refresh Frequency (Seconds)
+                  </label>
+                  <div className="grid grid-cols-6 gap-2">
+                    {[3, 6, 10, 15, 30, 60].map((sec) => (
+                      <button
+                        key={sec}
+                        type="button"
+                        disabled={disableSettings}
+                        onClick={() => setAutoRefreshIntervalInput(sec)}
+                        className={`py-2 px-1.5 rounded-xl text-xs font-bold border transition flex flex-col items-center justify-center gap-0.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                          autoRefreshIntervalInput === sec
+                            ? 'bg-teal-600 text-white border-teal-600 shadow-xs'
+                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        <span>{sec}s</span>
+                        {sec === 6 && (
+                          <span className={`text-[8px] uppercase tracking-wider ${autoRefreshIntervalInput === sec ? 'text-teal-100' : 'text-teal-600'}`}>
+                            Default
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-3 flex items-center gap-2">
+                    <label className="text-xs text-slate-600 font-medium">Custom interval (seconds):</label>
+                    <input
+                      type="number"
+                      min={2}
+                      max={300}
+                      disabled={disableSettings}
+                      value={autoRefreshIntervalInput}
+                      onChange={(e) => setAutoRefreshIntervalInput(Math.max(2, parseInt(e.target.value, 10) || 6))}
+                      className="w-20 px-2.5 py-1 bg-slate-50 border border-slate-300 rounded-lg text-xs font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+                    />
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-2">
+                    <strong>6 Seconds</strong> is the recommended default interval for real-time tracking without excessive network bandwidth usage.
+                  </p>
+                </div>
+              </div>
+
               {/* 5. Duplicate Order ID Recording Policy */}
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
                 <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
@@ -1517,9 +1630,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                       <div className="flex items-center gap-1.5">
                         <span className="font-bold text-slate-900 tracking-tight text-sm">
                           {appNameInput || 'VMS 3.0'}
-                        </span>
-                        <span className="bg-blue-50 text-blue-700 text-[10px] font-bold px-1.5 py-0.2 rounded border border-blue-200">
-                          DRIVE
                         </span>
                       </div>
                       <p className="text-[11px] text-slate-400 font-medium">

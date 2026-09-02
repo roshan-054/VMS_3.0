@@ -21,7 +21,7 @@ import {
   ChevronRight
 } from 'lucide-react';
 import { User, QueueItem } from './types';
-import { getStoredToken, setStoredToken, dbGetAllQueue } from './lib/storage';
+import { getStoredToken, setStoredToken, dbGetAllQueue, getStoredAutoRefreshInterval } from './lib/storage';
 import { getStoredBranding, subscribeBranding, applyFavicon, BrandingConfig } from './lib/branding';
 import { initUploadWorker } from './lib/uploadWorker';
 import { ScanRecord } from './components/ScanRecord';
@@ -144,7 +144,8 @@ export function App() {
 
     window.addEventListener('ops_queue_updated', handleQueueChange);
     refreshQueueBadge();
-    const timer = setInterval(refreshQueueBadge, 4000);
+    const intervalMs = getStoredAutoRefreshInterval() * 1000;
+    const timer = setInterval(refreshQueueBadge, intervalMs);
 
     return () => {
       cleanupWorker();
@@ -231,9 +232,6 @@ export function App() {
               <span className="font-bold text-slate-900 tracking-tight text-sm">
                 {branding.appName || 'VMS 3.0'}
               </span>
-              <span className="ml-1.5 bg-blue-50 text-blue-700 text-[10px] font-semibold px-1.5 py-0.5 rounded border border-blue-200">
-                Drive
-              </span>
             </div>
           </div>
         </div>
@@ -294,14 +292,11 @@ export function App() {
             )}
             <div>
               <div className="flex items-center gap-1.5">
-                <span className="font-bold text-slate-900 tracking-tight text-base truncate max-w-[120px]">
+                <span className="font-bold text-slate-900 tracking-tight text-base truncate max-w-[160px]">
                   {branding.appName || 'VMS 3.0'}
                 </span>
-                <span className="bg-blue-50 text-blue-700 text-[10px] font-bold px-1.5 py-0.5 rounded border border-blue-200">
-                  DRIVE
-                </span>
               </div>
-              <p className="text-[11px] text-slate-400 truncate max-w-[140px]">
+              <p className="text-[11px] text-slate-400 truncate max-w-[160px]">
                 {branding.appSubtitle || 'Order Packing System'}
               </p>
             </div>
