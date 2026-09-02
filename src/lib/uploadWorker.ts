@@ -133,9 +133,15 @@ export async function triggerUploadWorker(): Promise<void> {
       return;
     }
 
-    if (!candidate.blob) {
+    // Verify if candidate has valid video data available
+    const hasData =
+      (candidate.blob && candidate.blob.size > 0) ||
+      manualFileCache.has(candidate.id) ||
+      Boolean(candidate.blob);
+
+    if (!hasData) {
       candidate.status = 'failed';
-      candidate.error = 'Recording video data is missing or corrupted.';
+      candidate.error = 'Recording video data is missing or corrupted. Please re-queue the video.';
       candidate.stage = 'Error: Video data missing';
       await dbPutQueue(candidate);
       isWorkerBusy = false;
@@ -256,10 +262,33 @@ export async function triggerUploadWorker(): Promise<void> {
       activeStage: 'Connecting to Google Drive...',
     });
 
-    const totalBytes = currentItem.blob.size;
+    // Compute accurate total size in bytes
+    let realBlobOrFile: Blob | null = null;
+    if (manualFileCache.has(currentItem.id)) {
+      realBlobOrFile = manualFileCache.get(currentItem.id) || null;
+    }
+    if (!realBlobOrFile && currentItem.blob && currentItem.blob.size > 0) {
+      realBlobOrFile = currentItem.blob;
+    }
+
+    const totalBytes =
+      realBlobOrFile && realBlobOrFile.size > 0
+        ? realBlobOrFile.size
+        : (currentItem.fileSize || (currentItem.blob ? currentItem.blob.size : 0));
+
+    if (totalBytes <= 0) {
+      currentItem.status = 'failed';
+      currentItem.error = 'Video file size is empty (0 bytes) or missing. Please re-queue the video.';
+      currentItem.stage = 'Error: Video file empty';
+      await dbPutQueue(currentItem);
+      isWorkerBusy = false;
+      setTimeout(() => triggerUploadWorker(), 300);
+      return;
+    }
+
     const configuredChunkSize = getStoredChunkSize();
     const effectiveChunkSize = configuredChunkSize > 0 ? configuredChunkSize : 16 * 1024 * 1024;
-    const chunkSize = Math.min(totalBytes, effectiveChunkSize);
+    const chunkSize = Math.max(1024 * 1024, Math.min(totalBytes, effectiveChunkSize));
     const totalChunks = Math.max(1, Math.ceil(totalBytes / chunkSize));
     const driveFolderId = currentItem.driveFolderId || getStoredDriveFolderId();
 
@@ -371,22 +400,25 @@ export async function triggerUploadWorker(): Promise<void> {
       const startByte = c * chunkSize;
       const endByte = Math.min(startByte + chunkSize, totalBytes);
       
-      let chunkBlob: Blob;
-      if (currentItem.isInMemory) {
-        const realFile = manualFileCache.get(currentItem.id);
-        if (!realFile) {
-          currentItem.status = 'failed';
-          currentItem.error = 'File lost from memory due to page reload. Please re-queue the video.';
-          await dbPutQueue(currentItem);
-          window.dispatchEvent(new CustomEvent('ops_queue_updated'));
-          isWorkerBusy = false;
-          triggerUploadWorker();
-          return;
-        }
-        chunkBlob = realFile.slice(startByte, endByte);
-      } else {
-        if (!currentItem.blob) throw new Error('Missing Blob data.');
+      let chunkBlob: Blob | null = null;
+      if (manualFileCache.has(currentItem.id)) {
+        const fileFromCache = manualFileCache.get(currentItem.id)!;
+        chunkBlob = fileFromCache.slice(startByte, endByte);
+      } else if (currentItem.blob && currentItem.blob.size > 0) {
         chunkBlob = currentItem.blob.slice(startByte, endByte);
+      }
+
+      if (!chunkBlob || chunkBlob.size === 0) {
+        currentItem.status = 'failed';
+        currentItem.error = currentItem.isInMemory
+          ? 'File data in memory was cleared by page reload. Please re-upload the video.'
+          : 'Video data missing or unreadable. Please re-queue the video.';
+        currentItem.stage = 'Error: Video data unreadable';
+        await dbPutQueue(currentItem);
+        window.dispatchEvent(new CustomEvent('ops_queue_updated'));
+        isWorkerBusy = false;
+        triggerUploadWorker();
+        return;
       }
 
       const isFinalChunk = c === totalChunks - 1 || endByte >= totalBytes;

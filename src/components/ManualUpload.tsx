@@ -252,16 +252,8 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
             : 'video/mp4');
 
         const itemId = crypto.randomUUID();
-        let finalBlob: Blob | undefined = item.file;
-        let isInMemory = false;
-
-        // Browsers often crash or throw QuotaExceededError/DataCloneError 
-        // when trying to put large File objects (e.g. >50MB) into IndexedDB.
-        if (item.file.size > 50 * 1024 * 1024) {
-          manualFileCache.set(itemId, item.file);
-          finalBlob = new Blob([''], { type: mimeType }); // Lightweight placeholder
-          isInMemory = true;
-        }
+        // Keep in fast memory cache
+        manualFileCache.set(itemId, item.file);
 
         const queueItem: QueueItem = {
           id: itemId,
@@ -273,15 +265,24 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
           fileSize: item.file.size,
           mimeType: mimeType,
           source: 'Manual Backup Upload',
-          blob: finalBlob,
-          isInMemory: isInMemory,
+          blob: item.file,
+          isInMemory: false,
           status: 'pending',
           progress: 0,
           driveFolderId: driveFolderId,
           recordingDate: targetDate,
         };
 
-        await dbPutQueue(queueItem);
+        try {
+          await dbPutQueue(queueItem);
+        } catch (dbErr) {
+          // If browser IndexedDB quota is exceeded for ultra-large files, fall back to memory cache
+          console.warn('IndexedDB write note, using in-memory store:', dbErr);
+          queueItem.blob = new Blob([''], { type: mimeType });
+          queueItem.isInMemory = true;
+          await dbPutQueue(queueItem);
+        }
+
         queuedCount++;
       }
 
