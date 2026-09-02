@@ -79,6 +79,7 @@ function doPost(e) {
       case 'advancedSearch': return output_(advancedSearch_(p));
       case 'searchOrders': return output_(advancedSearch_(p));
       case 'checkDuplicateOrder': return output_(checkDuplicateOrder_(p));
+      case 'cleanupStuckUploads': return output_(cleanupStuckUploads_(p));
       case 'startUpload': return output_(startUpload_(p));
       case 'uploadChunk': return output_(uploadChunk_(p));
       case 'uploadLogs': return output_(uploadLogs_(p));
@@ -512,18 +513,20 @@ function completedDuplicate_(order,platform,type){
         const rawStatus = normalize_(v[i][7] || '');
         const fileId = String(v[i][4] || '').trim();
 
-        // Any recorded row in OrderLog for this order ID is an existing recording
-        return {
-          sourceSheet: CONFIG.ORDER_LOG_SHEET,
-          row: i + 1,
-          orderId: String(rawOrder || ''),
-          platform: String(v[i][2] || ''),
-          recordingType: String(rawType || 'Forward'),
-          timestamp: v[i][0] instanceof Date ? v[i][0].toISOString() : String(v[i][0] || ''),
-          packerEmail: String(v[i][3] || ''),
-          fileId: fileId,
-          playbackUrl: String(v[i][5] || (fileId ? 'https://drive.google.com/file/d/' + fileId + '/preview' : ''))
-        };
+        // Only count as duplicate if it has a valid Google Drive file ID
+        if (fileId.length > 5 && fileId !== 'undefined' && fileId !== 'null') {
+          return {
+            sourceSheet: CONFIG.ORDER_LOG_SHEET,
+            row: i + 1,
+            orderId: String(rawOrder || ''),
+            platform: String(v[i][2] || ''),
+            recordingType: String(rawType || 'Forward'),
+            timestamp: v[i][0] instanceof Date ? v[i][0].toISOString() : String(v[i][0] || ''),
+            packerEmail: String(v[i][3] || ''),
+            fileId: fileId,
+            playbackUrl: String(v[i][5] || (fileId ? 'https://drive.google.com/file/d/' + fileId + '/preview' : ''))
+          };
+        }
       }
     }
   } catch (e) {
@@ -545,25 +548,29 @@ function completedDuplicate_(order,platform,type){
         if (normTargetType && normRowType && normTargetType !== normRowType) continue;
 
         const fileId = String(r[i][4] || '').trim();
+        const rawStatus = normalize_(r[i][7] || '');
 
-        return {
-          sourceSheet: CONFIG.RETURN_LOG_SHEET,
-          row: i + 1,
-          orderId: String(rawOrder || ''),
-          platform: String(r[i][2] || ''),
-          recordingType: String(rawType || 'Return'),
-          timestamp: r[i][0] instanceof Date ? r[i][0].toISOString() : String(r[i][0] || ''),
-          packerEmail: String(r[i][3] || ''),
-          fileId: fileId,
-          playbackUrl: String(r[i][5] || (fileId ? 'https://drive.google.com/file/d/' + fileId + '/preview' : ''))
-        };
+        // Only count as duplicate if it has a valid Google Drive file ID
+        if (fileId.length > 5 && fileId !== 'undefined' && fileId !== 'null') {
+          return {
+            sourceSheet: CONFIG.RETURN_LOG_SHEET,
+            row: i + 1,
+            orderId: String(rawOrder || ''),
+            platform: String(r[i][2] || ''),
+            recordingType: String(rawType || 'Return'),
+            timestamp: r[i][0] instanceof Date ? r[i][0].toISOString() : String(r[i][0] || ''),
+            packerEmail: String(r[i][3] || ''),
+            fileId: fileId,
+            playbackUrl: String(r[i][5] || (fileId ? 'https://drive.google.com/file/d/' + fileId + '/preview' : ''))
+          };
+        }
       }
     }
   } catch (e) {
     console.warn('ReturnLog duplicate check note:', e);
   }
 
-  // 3. Check UPLOAD_LOG_SHEET next (for completed or in-flight uploads)
+  // 3. Check UPLOAD_LOG_SHEET next (ONLY completed uploads with fileId or status Completed)
   try {
     const uploadSheet = sheet_(CONFIG.UPLOAD_LOG_SHEET);
     if (uploadSheet) {
@@ -581,7 +588,8 @@ function completedDuplicate_(order,platform,type){
         const rawStage = normalize_(u[i][7] || '');
         const fileId = String(u[i][9] || '').trim();
 
-        if (rawStatus === 'completed' || rawStage === 'completed' || fileId.length > 5 || rawStatus === 'in progress' || rawStatus === 'started') {
+        // IMPORTANT: NEVER treat 'in progress' or 'started' as a duplicate - only truly completed uploads
+        if ((rawStatus === 'completed' || rawStage === 'completed' || fileId.length > 5) && fileId.length > 5) {
           return {
             sourceSheet: CONFIG.UPLOAD_LOG_SHEET,
             row: i + 1,
@@ -619,6 +627,57 @@ function checkDuplicateOrder_(p){
     };
   }
   return { success: true, isDuplicate: false };
+}
+
+/**
+ * Clean up all orphaned/stuck 'In Progress' sessions in Google Sheet and script properties
+ */
+function cleanupStuckUploads_(p){
+  const user = session_(p.token);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  let cleanedRows = 0;
+  let clearedProps = 0;
+
+  try {
+    const uploadSh = sheet_(CONFIG.UPLOAD_LOG_SHEET);
+    const data = uploadSh.getDataRange().getValues();
+    const now = Date.now();
+
+    for (let i = 1; i < data.length; i++) {
+      const rawStatus = normalize_(data[i][10] || '');
+      const fileId = String(data[i][9] || '').trim();
+      const rawDate = data[i][0];
+      const rowTime = rawDate instanceof Date ? rawDate.getTime() : new Date(rawDate).getTime();
+      const isOld = isNaN(rowTime) || (now - rowTime > 3 * 60 * 1000); // older than 3 minutes
+
+      // If status is in progress / started / initiated and has no completed fileId
+      if ((rawStatus === 'in progress' || rawStatus === 'started' || rawStatus === 'initiated' || rawStatus === 'uploading' || rawStatus === 'session created') && !fileId) {
+        uploadSh.getRange(i + 1, 11).setValue('Interrupted / Stale');
+        uploadSh.getRange(i + 1, 8).setValue('Upload session expired or reset by operator');
+        cleanedRows++;
+      }
+    }
+
+    // Clean up PropertiesService UPLOAD_* and DUPRES_* keys
+    const props = PropertiesService.getScriptProperties();
+    const allProps = props.getProperties();
+    for (const k in allProps) {
+      if (k.startsWith('UPLOAD_') || k.startsWith('DUPRES_')) {
+        props.deleteProperty(k);
+        clearedProps++;
+      }
+    }
+
+    return {
+      success: true,
+      cleanedRows: cleanedRows,
+      clearedProperties: clearedProps,
+      message: `Successfully resolved ${cleanedRows} stuck upload row(s) and cleared active session locks.`
+    };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function reservationKey_(order,platform,type){return 'DUPRES_'+Utilities.base64EncodeWebSafe(key_(order,platform,type)).replace(/=+$/,'')}
@@ -886,8 +945,9 @@ function startUpload_(p){
   if(size<=0||size>CONFIG.MAX_VIDEO_BYTES)throw new Error('Invalid video size or video exceeds 1 GB.');
 
   // Check duplicate: if duplicate exists and not explicitly bypassed, prevent duplicate upload
+  const isBypass = p.bypassDuplicate === true || String(p.bypassDuplicate) === 'true' || p.bypassDuplicate === 1 || p.bypassDuplicate === '1';
   const done = completedDuplicate_(order,platform,type);
-  if(done && p.bypassDuplicate !== true){
+  if(done && !isBypass){
     return {
       success: false,
       code: 'DUPLICATE_ORDER_ID',
@@ -1248,21 +1308,33 @@ function uploadLogs_(p){
     const pe=String(v[i][3]||'');
     if(!isAdmin && normalize_(pe)!==email) continue;
 
-    const rawStatus = String(v[i][10]||'');
-    const normSt = normalize_(rawStatus);
+    let rawStatus = String(v[i][10]||'');
+    let normSt = normalize_(rawStatus);
     const orderId = String(v[i][1]||'');
     const platform = String(v[i][2]||'');
     const recordingType = String(v[i][12]||'Forward');
     const driveFileId = String(v[i][9]||'');
     const fileName = String(v[i][4]||'');
     const uploadId = String(v[i][6]||'');
+    let stage = String(v[i][7]||'');
+
+    // Auto-detect abandoned in-progress sessions older than 10 minutes without Drive File ID
+    const rowDate = v[i][0] instanceof Date ? v[i][0].getTime() : new Date(v[i][0]).getTime();
+    const isStale = (normSt === 'in progress' || normSt === 'uploading' || normSt === 'processing' || normSt === 'started') && !driveFileId && (Date.now() - rowDate > 10 * 60 * 1000);
+    if (isStale) {
+      rawStatus = 'Interrupted / Stale';
+      normSt = 'failed';
+      if (!stage || stage === 'In Progress' || stage.startsWith('Uploading chunk')) {
+        stage = 'Upload interrupted - Session timed out';
+      }
+    }
 
     // Aggregate stats
     totalCount++;
-    if(normSt === 'completed') completedCount++;
-    else if(normSt === 'in progress' || normSt === 'uploading' || normSt === 'processing') inProgressCount++;
+    if(normSt === 'completed' || (driveFileId && driveFileId.length > 5)) completedCount++;
+    else if(normSt === 'in progress' || normSt === 'uploading' || normSt === 'processing' || normSt === 'started') inProgressCount++;
     else if(normSt === 'pending' || normSt === 'queued' || normSt === 'initiated') pendingCount++;
-    else if(normSt === 'failed' || normSt === 'paused' || normSt === 'error') failedCount++;
+    else if(normSt === 'failed' || normSt === 'paused' || normSt === 'error' || isStale) failedCount++;
     else pendingCount++;
 
     // Apply filters

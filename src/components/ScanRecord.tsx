@@ -408,13 +408,13 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
         setIsDuplicateChecking(true);
         const normTarget = normalizeOrderId(trimmed);
 
-        // 1. Check local IndexedDB queue
+        // 1. Check local IndexedDB queue (only completed records)
         const allQueue = await dbGetAllQueue();
         const localMatch = allQueue.find(
           (item) =>
             normalizeOrderId(item.orderId) === normTarget &&
-            (item.recordingType === recordingType || item.platform.toLowerCase() === effectivePlatform.toLowerCase()) &&
-            (item.status === 'completed' || item.status === 'uploading' || item.status === 'pending')
+            item.status === 'completed' &&
+            (item.fileId || item.webViewLink)
         );
 
         if (localMatch && !isCancelled) {
@@ -438,7 +438,11 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
         });
 
         if (!isCancelled) {
-          setDetectedDuplicate(remote || null);
+          if (remote && remote.fileId) {
+            setDetectedDuplicate(remote);
+          } else {
+            setDetectedDuplicate(null);
+          }
         }
       } catch (e) {
         if (!isCancelled) setDetectedDuplicate(null);
@@ -812,13 +816,13 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       try {
         const normTarget = normalizeOrderId(orderId);
 
-        // 1. Check local IndexedDB queue for completed or pending orders
+        // 1. Check local IndexedDB queue for completed orders with video files
         const allQueue = await dbGetAllQueue();
         const localMatch = allQueue.find(
           (item) =>
             normalizeOrderId(item.orderId) === normTarget &&
-            (item.recordingType === recordingType || item.platform.toLowerCase() === effectivePlatform.toLowerCase()) &&
-            (item.status === 'completed' || item.status === 'uploading' || item.status === 'pending')
+            item.status === 'completed' &&
+            (item.fileId || item.webViewLink)
         );
 
         if (localMatch) {
@@ -842,7 +846,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
           platform: effectivePlatform,
           recordingType,
         });
-        if (existing) {
+        if (existing && existing.fileId) {
           setIsDuplicateChecking(false);
           setDuplicateWarning({
             orderId: orderId.trim(),

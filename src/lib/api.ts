@@ -147,6 +147,10 @@ export async function applySheetConditionalFormatting(): Promise<ApiResponse> {
   return requestApi('applyConditionalFormatting', {});
 }
 
+export async function cleanupStuckUploads(): Promise<ApiResponse & { cleanedRows?: number; clearedProperties?: number }> {
+  return requestApi('cleanupStuckUploads', {});
+}
+
 export async function repairSheetPlaybackUrls(): Promise<ApiResponse & { fixedRows?: number }> {
   return requestApi('repairPlaybackUrls', {});
 }

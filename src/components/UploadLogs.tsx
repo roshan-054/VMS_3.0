@@ -37,7 +37,7 @@ import { User, UploadLogItem, QueueItem, PlatformType, RecordingType } from '../
 import { fetchUploadLogs, deleteLogEntry, formatFileSize } from '../lib/api';
 import { dbGetAllQueue, dbPutQueue, dbDeleteQueueItem, getStoredDriveFolderId } from '../lib/storage';
 import { canUserDeleteData } from '../lib/permissions';
-import { retryUploadItem } from '../lib/uploadWorker';
+import { retryUploadItem, fixAndCleanAllStuckUploads } from '../lib/uploadWorker';
 
 interface UploadLogsProps {
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
@@ -230,6 +230,21 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
       if (refreshTimerRef.current) clearInterval(refreshTimerRef.current);
     };
   }, [autoRefresh, searchQuery]);
+
+  const [isCleaningStuck, setIsCleaningStuck] = useState(false);
+
+  const handleCleanStuckUploads = async () => {
+    setIsCleaningStuck(true);
+    try {
+      const result = await fixAndCleanAllStuckUploads();
+      onShowToast(`🧹 ${result.message || 'Cleaned up stuck upload sessions.'}`, 'success');
+      await loadData(true);
+    } catch (e: any) {
+      onShowToast(`Failed to clean stuck uploads: ${e?.message || e}`, 'error');
+    } finally {
+      setIsCleaningStuck(false);
+    }
+  };
 
   const copyToClipboard = (text: string, label: string, id: string) => {
     navigator.clipboard.writeText(text);
@@ -801,6 +816,17 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
           </button>
 
           <button
+            id="fix-stuck-logs-btn"
+            onClick={handleCleanStuckUploads}
+            disabled={isCleaningStuck}
+            className="px-3.5 py-2 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-900 rounded-xl text-xs font-semibold transition inline-flex items-center gap-1.5 shadow-2xs cursor-pointer"
+            title="Clean up zombie in-progress upload sessions and reset upload locks"
+          >
+            <RotateCw className={`w-3.5 h-3.5 text-amber-700 ${isCleaningStuck ? 'animate-spin' : ''}`} />
+            {isCleaningStuck ? 'Cleaning…' : 'Fix Stuck Uploads'}
+          </button>
+
+          <button
             id="refresh-logs-btn"
             onClick={() => loadData(true)}
             disabled={isLoading}
@@ -1136,6 +1162,33 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
           )}
         </div>
       </div>
+
+      {/* Info banner if there are stuck processing items */}
+      {stats.processing > 0 && (
+        <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-blue-900 shadow-2xs">
+          <div className="flex items-start sm:items-center gap-3">
+            <div className="p-2 rounded-xl bg-blue-100 text-blue-700 shrink-0">
+              <Loader2 className="w-5 h-5 animate-spin" />
+            </div>
+            <div>
+              <div className="font-bold text-xs sm:text-sm text-blue-900">
+                {stats.processing} Upload Session{stats.processing > 1 ? 's' : ''} Under Processing
+              </div>
+              <div className="text-xs text-blue-700 mt-0.5">
+                If any of these uploads were interrupted by a closed tab or network timeout, click "Fix Stuck Uploads" to unfreeze them.
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={handleCleanStuckUploads}
+            disabled={isCleaningStuck}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-xs font-semibold shadow-xs transition flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
+          >
+            <RotateCw className={`w-3.5 h-3.5 ${isCleaningStuck ? 'animate-spin' : ''}`} />
+            {isCleaningStuck ? 'Cleaning…' : 'Fix Stuck Sessions'}
+          </button>
+        </div>
+      )}
 
       {/* Upload Logs Data Table */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">

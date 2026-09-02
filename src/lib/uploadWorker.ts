@@ -7,7 +7,7 @@ import {
   getStoredAutoUpload,
   getStoredAutoResume,
 } from './storage';
-import { requestApi, checkDuplicate, normalizeOrderId } from './api';
+import { requestApi, checkDuplicate, normalizeOrderId, cleanupStuckUploads } from './api';
 
 export type WorkerToastHandler = (msg: string, type: 'info' | 'success' | 'error') => void;
 
@@ -149,12 +149,13 @@ export async function triggerUploadWorker(): Promise<void> {
     if (!currentItem.bypassDuplicate) {
       const normTarget = normalizeOrderId(currentItem.orderId);
 
-      // 1. Check local completed queue
+      // 1. Check local completed queue (ONLY completed items with valid web link or fileId)
       const localDuplicate = allItems.some(
         (it) =>
           it.id !== currentItem.id &&
           normalizeOrderId(it.orderId) === normTarget &&
-          (it.status === 'completed' || it.status === 'uploading')
+          it.status === 'completed' &&
+          (it.fileId || it.webViewLink)
       );
 
       // 2. Check remote Google Sheet / Drive records
@@ -171,7 +172,7 @@ export async function triggerUploadWorker(): Promise<void> {
         }
       }
 
-      if (localDuplicate || remoteDuplicate) {
+      if (localDuplicate || (remoteDuplicate && (remoteDuplicate.fileId || remoteDuplicate.isDuplicate))) {
         currentItem.status = 'failed';
         currentItem.isDuplicate = true;
         currentItem.stage = `Blocked: Duplicate Order ID (${currentItem.orderId})`;
@@ -189,7 +190,7 @@ export async function triggerUploadWorker(): Promise<void> {
         });
 
         notify(
-          `⚠️ Duplicate Order ID blocked: Order ${currentItem.orderId} is already in Google Drive. Duplicate upload was prevented.`,
+          `⚠️ Duplicate Order ID blocked: Order ${currentItem.orderId} is already in Google Drive. Click "Bypass & Upload" if you wish to upload anyway.`,
           'error'
         );
 
@@ -246,6 +247,9 @@ export async function triggerUploadWorker(): Promise<void> {
       ) {
         currentItem.status = 'failed';
         currentItem.isDuplicate = true;
+        currentItem.progress = 0;
+        currentItem.uploadedBytes = 0;
+        currentItem.currentChunk = 0;
         currentItem.stage = `Blocked: Duplicate Order ID (${currentItem.orderId})`;
         currentItem.error = `Duplicate Order ID: Order "${currentItem.orderId}" has already been uploaded to Google Drive.`;
         currentItem.duplicateReason = errMsg;
@@ -263,6 +267,9 @@ export async function triggerUploadWorker(): Promise<void> {
       if (startRes?.isDuplicate || startRes?.code === 'DUPLICATE_ORDER_ID') {
         currentItem.status = 'failed';
         currentItem.isDuplicate = true;
+        currentItem.progress = 0;
+        currentItem.uploadedBytes = 0;
+        currentItem.currentChunk = 0;
         currentItem.stage = `Blocked: Duplicate Order ID (${currentItem.orderId})`;
         currentItem.error =
           startRes.error ||
@@ -282,9 +289,8 @@ export async function triggerUploadWorker(): Promise<void> {
     currentItem.totalChunks = totalChunks;
     currentItem.chunkSize = chunkSize;
 
-    // 2. Upload Chunks Sequentially
-    let startChunk = currentItem.currentChunk || 0;
-    if (startChunk >= totalChunks) startChunk = 0;
+    // 2. Upload Chunks Sequentially (A new uploadId always starts cleanly from chunk 0)
+    const startChunk = 0;
 
     for (let c = startChunk; c < totalChunks; c++) {
       // Re-check if item was paused by user mid-stream
@@ -508,12 +514,112 @@ export async function retryUploadItem(id: string, bypassDuplicate = false): Prom
     item.status = 'pending';
     item.error = undefined;
     item.isDuplicate = false;
-    item.stage = 'Queued for upload';
+    item.currentChunk = 0;
+    item.uploadedBytes = 0;
+    item.progress = 0;
+    item.stage = bypassDuplicate ? 'Queued for upload (Duplicate Bypassed)' : 'Queued for upload';
     if (bypassDuplicate) {
       item.bypassDuplicate = true;
     }
     await dbPutQueue(item);
+    isWorkerBusy = false;
     window.dispatchEvent(new CustomEvent('ops_queue_updated'));
     triggerUploadWorker();
   }
+}
+
+/**
+ * Force bypass duplicate protection for ALL duplicate-blocked queue items
+ */
+export async function bypassAllDuplicates(): Promise<number> {
+  const items = await dbGetAllQueue();
+  let count = 0;
+  for (const item of items) {
+    const isDup =
+      item.isDuplicate ||
+      (item.status === 'failed' &&
+        (item.error?.toLowerCase().includes('duplicate') ||
+          item.stage?.toLowerCase().includes('duplicate')));
+    if (isDup && item.blob) {
+      item.status = 'pending';
+      item.error = undefined;
+      item.isDuplicate = false;
+      item.bypassDuplicate = true;
+      item.currentChunk = 0;
+      item.uploadedBytes = 0;
+      item.progress = 0;
+      item.stage = 'Queued for upload (Duplicate Bypassed)';
+      await dbPutQueue(item);
+      count++;
+    }
+  }
+  isWorkerBusy = false;
+  updateState({ isProcessing: false, activeItemId: null, activeProgress: 0, activeStage: '' });
+  window.dispatchEvent(new CustomEvent('ops_queue_updated'));
+  setTimeout(() => triggerUploadWorker(), 200);
+  return count;
+}
+
+/**
+ * Reset local queue items that are stuck in 'uploading' or failed state back to 'pending'
+ */
+export async function resetStuckLocalQueue(): Promise<number> {
+  const items = await dbGetAllQueue();
+  let count = 0;
+  for (const item of items) {
+    if (item.status === 'uploading' || (item.status === 'failed' && item.blob)) {
+      item.status = 'pending';
+      item.stage = 'Queued for upload';
+      item.error = undefined;
+      item.isDuplicate = false;
+      item.bypassDuplicate = true; // allow retrying
+      item.currentChunk = 0;
+      item.uploadedBytes = 0;
+      item.progress = 0;
+      await dbPutQueue(item);
+      count++;
+    }
+  }
+  isWorkerBusy = false;
+  updateState({ isProcessing: false, activeItemId: null, activeProgress: 0, activeStage: '' });
+  window.dispatchEvent(new CustomEvent('ops_queue_updated'));
+  return count;
+}
+
+/**
+ * Clean up all stuck local and Google Sheet upload sessions
+ */
+export async function fixAndCleanAllStuckUploads(): Promise<{
+  localResetCount: number;
+  cloudCleanedRows: number;
+  message: string;
+}> {
+  let localResetCount = 0;
+  let cloudCleanedRows = 0;
+
+  // 1. Reset local queue
+  try {
+    localResetCount = await resetStuckLocalQueue();
+  } catch (e) {
+    console.warn('Local queue reset note:', e);
+  }
+
+  // 2. Call cloud cleanup API
+  try {
+    const res = await cleanupStuckUploads();
+    if (res && res.cleanedRows !== undefined) {
+      cloudCleanedRows = res.cleanedRows;
+    }
+  } catch (e: any) {
+    console.warn('Cloud cleanup note:', e);
+  }
+
+  // 3. Kick off upload worker cleanly
+  setTimeout(() => triggerUploadWorker(), 500);
+
+  return {
+    localResetCount,
+    cloudCleanedRows,
+    message: `Reset ${localResetCount} local queue item(s) and cleared ${cloudCleanedRows} stuck cloud session(s).`,
+  };
 }

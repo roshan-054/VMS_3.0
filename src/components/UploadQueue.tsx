@@ -35,7 +35,9 @@ import {
   pauseUploadItem,
   resumeUploadItem,
   retryUploadItem,
-  subscribeWorkerStatus
+  bypassAllDuplicates,
+  subscribeWorkerStatus,
+  fixAndCleanAllStuckUploads
 } from '../lib/uploadWorker';
 import { ManualUpload } from './ManualUpload';
 
@@ -119,6 +121,21 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
     onShowToast('Syncing all pending uploads to Google Drive…', 'info');
   };
 
+  const [isCleaningStuck, setIsCleaningStuck] = useState(false);
+  const handleFixStuckQueue = async () => {
+    setIsCleaningStuck(true);
+    try {
+      const result = await fixAndCleanAllStuckUploads();
+      loadQueue();
+      onQueueChanged();
+      onShowToast(`🧹 ${result.message || 'Reset queue and cleared stuck upload locks.'}`, 'success');
+    } catch (e: any) {
+      onShowToast(`Error cleaning stuck uploads: ${e?.message || e}`, 'error');
+    } finally {
+      setIsCleaningStuck(false);
+    }
+  };
+
   const handleToggleAutoUpload = () => {
     const next = !autoUploadEnabled;
     setAutoUploadEnabled(next);
@@ -150,6 +167,37 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
     loadQueue();
     onQueueChanged();
     onShowToast(`Duplicate check bypassed for Order ${item.orderId}. Starting upload…`, 'info');
+  };
+
+  const [isBypassingAll, setIsBypassingAll] = useState(false);
+  const handleBypassAllDuplicates = async () => {
+    setIsBypassingAll(true);
+    try {
+      const count = await bypassAllDuplicates();
+      loadQueue();
+      onQueueChanged();
+      onShowToast(`🚀 Bypassed duplicate protection for ${count} order(s). Starting upload…`, 'success');
+    } catch (e: any) {
+      onShowToast(`Error bypassing duplicates: ${e?.message || e}`, 'error');
+    } finally {
+      setIsBypassingAll(false);
+    }
+  };
+
+  const handleRemoveAllDuplicates = async () => {
+    const dups = queue.filter(
+      (i) =>
+        i.isDuplicate ||
+        (i.status === 'failed' &&
+          (i.error?.toLowerCase().includes('duplicate') ||
+            i.stage?.toLowerCase().includes('duplicate')))
+    );
+    for (const item of dups) {
+      await dbDeleteQueueItem(item.id);
+    }
+    loadQueue();
+    onQueueChanged();
+    onShowToast(`Removed ${dups.length} blocked duplicate item(s) from local queue.`, 'info');
   };
 
   const handleRestartFromScratch = async (item: QueueItem) => {
@@ -288,6 +336,30 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
           </button>
 
           <button
+            id="fix-stuck-queue-btn"
+            onClick={handleFixStuckQueue}
+            disabled={isCleaningStuck}
+            className="px-3.5 py-2 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-900 rounded-xl text-xs font-semibold transition inline-flex items-center gap-1.5 shadow-2xs cursor-pointer"
+            title="Clean and unfreeze any stuck uploads or release duplicate locks"
+          >
+            <RotateCw className={`w-3.5 h-3.5 text-amber-700 ${isCleaningStuck ? 'animate-spin' : ''}`} />
+            {isCleaningStuck ? 'Cleaning…' : 'Fix Stuck / Reset'}
+          </button>
+
+          {duplicateCount > 0 && (
+            <button
+              id="unblock-all-toolbar-btn"
+              onClick={handleBypassAllDuplicates}
+              disabled={isBypassingAll}
+              className="px-3.5 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition inline-flex items-center gap-1.5 shadow-2xs cursor-pointer"
+              title="Unblock and upload all duplicate-blocked orders"
+            >
+              <ShieldCheck className="w-3.5 h-3.5" />
+              {isBypassingAll ? 'Unblocking…' : `Unblock All (${duplicateCount})`}
+            </button>
+          )}
+
+          <button
             id="toggle-manual-upload-btn"
             onClick={() => setShowManualUpload(!showManualUpload)}
             className={`px-3.5 py-2 rounded-xl text-xs font-semibold border transition inline-flex items-center gap-1.5 cursor-pointer ${
@@ -331,27 +403,49 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
       {duplicateCount > 0 && (
         <div
           id="duplicate-alert-banner"
-          className="bg-red-50 border border-red-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-red-900 shadow-xs"
+          className="bg-red-50 border border-red-200 rounded-2xl p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4 text-red-900 shadow-xs"
         >
           <div className="flex items-start sm:items-center gap-3">
             <div className="p-2 rounded-xl bg-red-100 text-red-700 shrink-0">
               <ShieldAlert className="w-5 h-5" />
             </div>
             <div>
-              <div className="font-bold text-xs sm:text-sm text-red-900">
-                {duplicateCount} Duplicate Order ID{duplicateCount > 1 ? 's' : ''} Blocked from Upload
+              <div className="font-bold text-xs sm:text-sm text-red-900 flex items-center gap-2">
+                <span>{duplicateCount} Duplicate Order ID{duplicateCount > 1 ? 's' : ''} Blocked from Upload</span>
+                <span className="bg-red-200 text-red-900 text-[10px] font-extrabold px-2 py-0.5 rounded-full">
+                  Action Required
+                </span>
               </div>
               <div className="text-xs text-red-700 mt-0.5">
-                The system prevented these duplicate Order IDs from being uploaded because matching recordings already exist in Google Drive and Sheet logs.
+                The system detected matching Order IDs in Google Drive or logs. You can bypass protection to force upload, or remove them.
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              id="bypass-all-duplicates-banner-btn"
+              onClick={handleBypassAllDuplicates}
+              disabled={isBypassingAll}
+              className="px-3.5 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+              title="Force bypass duplicate protection and upload all blocked items"
+            >
+              <ShieldCheck className="w-4 h-4" />
+              {isBypassingAll ? 'Bypassing…' : `Bypass & Upload All (${duplicateCount})`}
+            </button>
+            <button
+              id="remove-all-duplicates-banner-btn"
+              onClick={handleRemoveAllDuplicates}
+              className="px-3 py-2 bg-white hover:bg-red-100 text-red-700 border border-red-300 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+              title="Remove all blocked duplicate items from the local queue"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Remove All
+            </button>
             <button
               onClick={() => setFilterType('duplicate')}
-              className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+              className="px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer"
             >
-              View Duplicates ({duplicateCount})
+              View Duplicates
             </button>
           </div>
         </div>
@@ -664,7 +758,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
                   <div className="w-full sm:w-44 space-y-1.5">
                     <div className="flex justify-between text-[11px] font-bold text-slate-600">
                       <span className="capitalize">{isDuplicate ? 'Duplicate Blocked' : item.status}</span>
-                      <span>{item.progress}%</span>
+                      <span>{isDuplicate ? 'Blocked' : `${item.progress}%`}</span>
                     </div>
                     <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden border border-slate-200">
                       <div
@@ -679,7 +773,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
                             ? 'bg-amber-500'
                             : 'bg-blue-600 animate-pulse'
                         }`}
-                        style={{ width: `${item.progress}%` }}
+                        style={{ width: isDuplicate ? '100%' : `${item.progress}%` }}
                       />
                     </div>
                   </div>
@@ -690,10 +784,10 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
                     {isDuplicate && (
                       <button
                         onClick={() => handleForceBypassDuplicate(item)}
-                        className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer shadow-2xs"
-                        title="Bypass duplicate protection and upload anyway"
+                        className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer shadow-2xs"
+                        title="Bypass duplicate protection and force upload now"
                       >
-                        <ShieldCheck className="w-3.5 h-3.5" />
+                        <ShieldCheck className="w-4 h-4" />
                         Bypass & Upload
                       </button>
                     )}
