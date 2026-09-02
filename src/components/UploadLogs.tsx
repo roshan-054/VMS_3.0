@@ -117,6 +117,55 @@ function getLocalDateString(offsetDays = 0): string {
   return `${year}-${month}-${day}`;
 }
 
+// Categorize log statuses into unified bucket: completed, processing, pending, failed
+export function categorizeLogStatus(
+  status: string,
+  driveFileId?: string
+): 'completed' | 'processing' | 'pending' | 'failed' {
+  const st = String(status || '').toLowerCase().trim();
+  const hasDrive = !!(driveFileId && String(driveFileId).trim().length > 5);
+
+  // 1. Completed
+  if (
+    st === 'completed' ||
+    (hasDrive &&
+      !st.includes('fail') &&
+      !st.includes('interrupt') &&
+      !st.includes('stale') &&
+      !st.includes('error') &&
+      !st.includes('pause'))
+  ) {
+    return 'completed';
+  }
+
+  // 2. Failed / Paused / Interrupted / Stale / Error / Timeout / Expired
+  if (
+    st.includes('fail') ||
+    st.includes('pause') ||
+    st.includes('error') ||
+    st.includes('interrupt') ||
+    st.includes('stale') ||
+    st.includes('timeout') ||
+    st.includes('expired')
+  ) {
+    return 'failed';
+  }
+
+  // 3. Under Processing
+  if (
+    st === 'in progress' ||
+    st === 'uploading' ||
+    st === 'processing' ||
+    st.includes('uploading chunk') ||
+    st.includes('chunk')
+  ) {
+    return 'processing';
+  }
+
+  // 4. Pending / Queued / Initiated / Started / Session Created / Waiting / Ready
+  return 'pending';
+}
+
 export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateToQueue, currentUser }) => {
   const [cloudLogs, setCloudLogs] = useState<UploadLogItem[]>([]);
   const [localQueue, setLocalQueue] = useState<QueueItem[]>([]);
@@ -142,18 +191,23 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
   const [platformFilter, setPlatformFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [sourceView, setSourceView] = useState<LogSourceView>('unified');
-  const [fromDate, setFromDate] = useState<string>(getLocalDateString(0));
-  const [toDate, setToDate] = useState<string>(getLocalDateString(0));
+  const [fromDate, setFromDate] = useState<string>('');
+  const [toDate, setToDate] = useState<string>('');
   const [pageSize, setPageSize] = useState<number>(50);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [sortField, setSortField] = useState<'timestamp' | 'orderId' | 'progress'>('timestamp');
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
 
   const refreshTimerRef = useRef<any>(null);
+  const isFetchingRef = useRef<boolean>(false);
 
   const [isSearchingCloud, setIsSearchingCloud] = useState(false);
 
   const loadData = async (showLoadingSpinner = false, customQuery?: string) => {
+    // Prevent overlapping concurrent background fetches
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
+
     if (showLoadingSpinner) setIsLoading(true);
 
     try {
@@ -172,7 +226,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
         searchQuery: queryToUse.trim() || undefined,
       });
 
-      if (res.success && res.logs) {
+      if (res.success && Array.isArray(res.logs)) {
         // Filter out any logs that have been deleted locally
         const currentDeleted = getStoredDeletedKeys();
         const cleanedLogs = res.logs.filter((log) => {
@@ -185,10 +239,17 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
           return true;
         });
         setCloudLogs(cleanedLogs);
+      } else if (!res.success) {
+        // Retain existing cloud logs on background refresh error or timeout - never wipe display
+        console.warn('Auto-refresh skipped updating cloud logs due to remote failure:', res.error);
+        if (showLoadingSpinner) {
+          onShowToast('Could not sync with Google Sheets. Displaying cached records.', 'info');
+        }
       }
     } catch (err: any) {
       console.warn('Failed to load upload logs:', err);
     } finally {
+      isFetchingRef.current = false;
       if (showLoadingSpinner) setIsLoading(false);
       setIsSearchingCloud(false);
     }
@@ -525,56 +586,20 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
     return [...uniqueLocal, ...cloudLogs];
   }, [sourceView, cloudLogs, localAsLogs]);
 
-  // Compute Overall Stats from merged logs
-  const stats = useMemo(() => {
-    let total = mergedLogs.length;
-    let completed = 0;
-    let processing = 0;
-    let pending = 0;
-    let failed = 0;
-
-    for (const log of mergedLogs) {
-      const st = String(log.status || '').toLowerCase();
-      if (st === 'completed') {
-        completed++;
-      } else if (st === 'in progress' || st === 'uploading' || st === 'processing') {
-        processing++;
-      } else if (st === 'pending' || st === 'queued' || st === 'initiated') {
-        pending++;
-      } else if (st === 'failed' || st === 'paused' || st === 'error') {
-        failed++;
-      } else {
-        pending++;
-      }
-    }
-
-    const successRate = total > 0 ? Math.round((completed / total) * 100) : 100;
-
-    return { total, completed, processing, pending, failed, successRate };
-  }, [mergedLogs]);
-
-  // Filter & Search Logs
-  const filteredLogs = useMemo(() => {
+  // Scoped Logs: Filtered by platform, type, date range, and search query (before applying status tab filter)
+  const scopedLogs = useMemo(() => {
     return mergedLogs.filter((log) => {
-      const st = String(log.status || '').toLowerCase();
-
-      // 1. Status Filter
-      if (statusFilter === 'completed' && st !== 'completed') return false;
-      if (statusFilter === 'processing' && st !== 'in progress' && st !== 'uploading' && st !== 'processing') return false;
-      if (statusFilter === 'pending' && st !== 'pending' && st !== 'queued' && st !== 'initiated') return false;
-      if (statusFilter === 'failed' && st !== 'failed' && st !== 'paused' && st !== 'error') return false;
-
-      // 2. Platform Filter
+      // 1. Platform Filter
       if (platformFilter !== 'all' && String(log.platform || '').toLowerCase() !== platformFilter.toLowerCase()) {
         return false;
       }
 
-      // 3. Type Filter
+      // 2. Type Filter
       if (typeFilter !== 'all' && String(log.recordingType || '').toLowerCase() !== typeFilter.toLowerCase()) {
         return false;
       }
 
-      // 4. Date Range Filter (Bypassed if user is typing an Order ID/search query)
+      // 3. Date Range Filter (Bypassed if user is actively searching an Order ID or query)
       if (!searchQuery.trim() && (fromDate || toDate)) {
         const logDateStr = extractDateStr(log.timestamp);
         if (logDateStr) {
@@ -583,7 +608,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
         }
       }
 
-      // 5. Search Query
+      // 4. Search Query
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
         const matchesOrder = String(log.orderId || '').toLowerCase().includes(q);
@@ -598,7 +623,43 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
 
       return true;
     });
-  }, [mergedLogs, statusFilter, platformFilter, typeFilter, fromDate, toDate, searchQuery]);
+  }, [mergedLogs, platformFilter, typeFilter, fromDate, toDate, searchQuery]);
+
+  // Compute Overall Stats from scoped logs so counts always match visible items
+  const stats = useMemo(() => {
+    let total = scopedLogs.length;
+    let completed = 0;
+    let processing = 0;
+    let pending = 0;
+    let failed = 0;
+
+    for (const log of scopedLogs) {
+      const cat = categorizeLogStatus(log.status, log.driveFileId);
+      if (cat === 'completed') {
+        completed++;
+      } else if (cat === 'processing') {
+        processing++;
+      } else if (cat === 'failed') {
+        failed++;
+      } else {
+        pending++;
+      }
+    }
+
+    const successRate = total > 0 ? Math.round((completed / total) * 100) : 100;
+
+    return { total, completed, processing, pending, failed, successRate };
+  }, [scopedLogs]);
+
+  // Filter Logs by statusFilter
+  const filteredLogs = useMemo(() => {
+    if (statusFilter === 'all') return scopedLogs;
+
+    return scopedLogs.filter((log) => {
+      const cat = categorizeLogStatus(log.status, log.driveFileId);
+      return cat === statusFilter;
+    });
+  }, [scopedLogs, statusFilter]);
 
   // Sort Logs
   const sortedLogs = useMemo(() => {
@@ -725,11 +786,11 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
     }
   };
 
-  const getStatusBadge = (status: string, progress: string | number) => {
-    const st = String(status || '').toLowerCase();
+  const getStatusBadge = (status: string, progress: string | number, driveFileId?: string) => {
+    const cat = categorizeLogStatus(status, driveFileId);
     const pct = Math.round(Number(progress) || 0);
 
-    if (st === 'completed') {
+    if (cat === 'completed') {
       return (
         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
           <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
@@ -737,34 +798,34 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
         </span>
       );
     }
-    if (st === 'in progress' || st === 'uploading' || st === 'processing') {
+    if (cat === 'processing') {
       return (
         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200 animate-pulse">
           <Loader2 className="w-3.5 h-3.5 text-blue-600 animate-spin" />
-          Processing ({pct}%)
+          Processing {pct > 0 ? `(${pct}%)` : ''}
         </span>
       );
     }
-    if (st === 'pending' || st === 'queued' || st === 'initiated') {
-      return (
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-          <Clock className="w-3.5 h-3.5 text-amber-600" />
-          Pending
-        </span>
-      );
-    }
-    if (st === 'failed' || st === 'paused' || st === 'error') {
+    if (cat === 'failed') {
+      const stLower = String(status || '').toLowerCase();
+      const isPaused = stLower === 'paused';
+      const isInterrupted = stLower.includes('interrupt') || stLower.includes('stale');
       return (
         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200">
           <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
-          {st === 'paused' ? 'Paused' : 'Failed'}
+          {isPaused ? 'Paused' : isInterrupted ? 'Interrupted / Stale' : 'Failed'}
         </span>
       );
     }
 
+    // Pending / Queued / Initiated
+    const stLower = String(status || '').toLowerCase();
+    const isStarted = stLower === 'started';
+    const isQueued = stLower === 'queued';
     return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-        {status}
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+        <Clock className="w-3.5 h-3.5 text-amber-600" />
+        {isStarted ? 'Started' : isQueued ? 'Queued' : 'Pending'}
       </span>
     );
   };
@@ -873,7 +934,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
               onChange={(e) => setAutoRefresh(e.target.checked)}
               className="rounded text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
             />
-            <span>Auto-refresh (6s)</span>
+            <span>Auto-refresh (10s)</span>
           </label>
         </div>
       </div>
@@ -1171,6 +1232,16 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
         <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500 pt-1">
           <span className="font-medium text-slate-400">Quick Dates:</span>
           <button
+            onClick={() => applyDatePreset('all')}
+            className={`px-2.5 py-1 rounded-lg border text-[11px] font-medium transition cursor-pointer ${
+              !fromDate && !toDate
+                ? 'bg-blue-600 text-white border-blue-600 shadow-xs font-semibold'
+                : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            All Dates
+          </button>
+          <button
             onClick={() => applyDatePreset('today')}
             className={`px-2.5 py-1 rounded-lg border text-[11px] font-medium transition cursor-pointer ${
               fromDate === getLocalDateString(0) && toDate === getLocalDateString(0)
@@ -1351,9 +1422,10 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
               ) : (
                 paginatedLogs.map((log, idx) => {
                   const pct = Math.round(Number(log.progress) || 0);
-                  const isCompleted = String(log.status).toLowerCase() === 'completed';
-                  const isProcessing = String(log.status).toLowerCase() === 'in progress' || String(log.status).toLowerCase() === 'uploading';
-                  const isFailed = String(log.status).toLowerCase() === 'failed' || String(log.status).toLowerCase() === 'paused';
+                  const cat = categorizeLogStatus(log.status, log.driveFileId);
+                  const isCompleted = cat === 'completed';
+                  const isProcessing = cat === 'processing';
+                  const isFailed = cat === 'failed';
                   const rowKey = `${log.uploadId || log.orderId}_${idx}`;
 
                   return (
@@ -1408,7 +1480,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
 
                       {/* Status */}
                       <td className="py-3.5 px-4 whitespace-nowrap">
-                        {getStatusBadge(log.status, log.progress)}
+                        {getStatusBadge(log.status, log.progress, log.driveFileId)}
                         {log.error && (
                           <div className="text-[10px] text-rose-600 mt-1 max-w-[150px] truncate" title={log.error}>
                             {log.error}

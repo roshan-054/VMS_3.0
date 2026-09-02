@@ -1380,18 +1380,18 @@ function uploadLogs_(p){
 
     // Aggregate stats
     totalCount++;
-    if(normSt === 'completed' || (driveFileId && driveFileId.length > 5)) completedCount++;
-    else if(normSt === 'in progress' || normSt === 'uploading' || normSt === 'processing' || normSt === 'started') inProgressCount++;
-    else if(normSt === 'pending' || normSt === 'queued' || normSt === 'initiated') pendingCount++;
-    else if(normSt === 'failed' || normSt === 'paused' || normSt === 'error' || isStale) failedCount++;
+    if(normSt === 'completed' || (driveFileId && driveFileId.length > 5 && !isStale && normSt !== 'failed')) completedCount++;
+    else if(normSt === 'failed' || normSt === 'paused' || normSt === 'error' || isStale || normSt.includes('interrupt') || normSt.includes('stale') || normSt.includes('expired') || normSt.includes('timeout')) failedCount++;
+    else if(normSt === 'in progress' || normSt === 'uploading' || normSt === 'processing') inProgressCount++;
+    else if(normSt === 'pending' || normSt === 'queued' || normSt === 'initiated' || normSt === 'started' || normSt === 'session created' || normSt === 'waiting') pendingCount++;
     else pendingCount++;
 
     // Apply filters
     if(filterStatus && filterStatus !== 'all') {
       if(filterStatus === 'completed' && normSt !== 'completed') continue;
       if((filterStatus === 'in progress' || filterStatus === 'processing') && normSt !== 'in progress' && normSt !== 'uploading' && normSt !== 'processing') continue;
-      if((filterStatus === 'pending' || filterStatus === 'queued') && normSt !== 'pending' && normSt !== 'queued' && normSt !== 'initiated') continue;
-      if((filterStatus === 'failed' || filterStatus === 'paused') && normSt !== 'failed' && normSt !== 'paused' && normSt !== 'error') continue;
+      if((filterStatus === 'pending' || filterStatus === 'queued') && normSt !== 'pending' && normSt !== 'queued' && normSt !== 'initiated' && normSt !== 'started' && normSt !== 'session created' && normSt !== 'waiting') continue;
+      if((filterStatus === 'failed' || filterStatus === 'paused') && normSt !== 'failed' && normSt !== 'paused' && normSt !== 'error' && !normSt.includes('interrupt') && !normSt.includes('stale') && !isStale) continue;
     }
 
     if(filterOrder && !normalize_(orderId).includes(filterOrder)) continue;

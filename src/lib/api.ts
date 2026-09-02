@@ -299,6 +299,7 @@ export async function fetchUploadLogs(params: {
     pending: number;
     failed: number;
   };
+  error?: string;
 }> {
   try {
     const res = await requestApi<{ logs: import('../types').UploadLogItem[]; stats?: any }>('getUploadLogs', params);
@@ -307,48 +308,13 @@ export async function fetchUploadLogs(params: {
       logs: res.logs || [],
       stats: res.stats,
     };
-  } catch (err) {
-    try {
-      const localItems = await dbGetAllQueue();
-      const logs = localItems.map((item): import('../types').UploadLogItem => ({
-        timestamp: new Date(item.createdAt).toISOString(),
-        orderId: item.orderId,
-        platform: item.platform,
-        recordingType: item.recordingType,
-        fileName: item.fileName,
-        fileSize: String(item.fileSize),
-        status: item.status === 'completed' ? 'Completed' : item.status === 'failed' ? 'Failed' : 'Under Processing',
-        stage: item.stage || item.status,
-        progress: item.progress ?? (item.status === 'completed' ? 100 : 0),
-        packerEmail: 'operator@vms.local',
-        driveFileId: item.fileId || '',
-        playbackUrl: item.webViewLink,
-        uploadId: item.uploadId || item.id,
-        queueJobId: item.id,
-      }));
-
-      const completed = logs.filter(l => l.status === 'Completed').length;
-      const inProgress = logs.filter(l => l.status === 'Under Processing').length;
-      const failed = logs.filter(l => l.status === 'Failed').length;
-
-      return {
-        success: true,
-        logs,
-        stats: {
-          total: logs.length,
-          completed,
-          inProgress,
-          pending: 0,
-          failed,
-        },
-      };
-    } catch (dbErr) {
-      return {
-        success: true,
-        logs: [],
-        stats: { total: 0, completed: 0, inProgress: 0, pending: 0, failed: 0 },
-      };
-    }
+  } catch (err: any) {
+    console.warn('fetchUploadLogs remote request failed:', err?.message || err);
+    return {
+      success: false,
+      logs: [],
+      error: err?.message || 'Failed to fetch logs from Google Sheets',
+    };
   }
 }
 
