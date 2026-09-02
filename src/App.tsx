@@ -21,7 +21,7 @@ import {
   ChevronRight
 } from 'lucide-react';
 import { User, QueueItem } from './types';
-import { getStoredToken, setStoredToken, dbGetAllQueue, getStoredAutoRefreshInterval } from './lib/storage';
+import { getStoredToken, setStoredToken, dbGetAllQueue, getStoredAutoRefreshInterval, getStoredNightMode, setStoredNightMode } from './lib/storage';
 import { getStoredBranding, subscribeBranding, applyFavicon, BrandingConfig } from './lib/branding';
 import { initUploadWorker } from './lib/uploadWorker';
 import { ScanRecord } from './components/ScanRecord';
@@ -101,6 +101,10 @@ export function App() {
     const unsubscribe = subscribeBranding((updated) => {
       setBranding(updated);
     });
+
+    // Initialize Night Mode state
+    setStoredNightMode(getStoredNightMode());
+
     return () => unsubscribe();
   }, []);
 

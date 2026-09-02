@@ -167,7 +167,16 @@ export function categorizeLogStatus(
 }
 
 export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateToQueue, currentUser }) => {
-  const [cloudLogs, setCloudLogs] = useState<UploadLogItem[]>([]);
+  const [cloudLogs, setCloudLogs] = useState<UploadLogItem[]>(() => {
+    try {
+      const cached = localStorage.getItem('vms_cached_cloud_logs');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {}
+    return [];
+  });
   const [localQueue, setLocalQueue] = useState<QueueItem[]>([]);
   const [deletedKeys, setDeletedKeys] = useState<Set<string>>(() => getStoredDeletedKeys());
   const [isLoading, setIsLoading] = useState(false);
@@ -247,6 +256,9 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
           console.warn('Background refresh received 0 logs from Sheets; preserving active cached logs to prevent UI flicker.');
         } else {
           setCloudLogs(cleanedLogs);
+          try {
+            localStorage.setItem('vms_cached_cloud_logs', JSON.stringify(cleanedLogs.slice(0, 500)));
+          } catch (e) {}
         }
       } else if (!res.success) {
         // Retain existing cloud logs on background refresh error or timeout - never wipe display

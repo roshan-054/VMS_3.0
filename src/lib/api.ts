@@ -41,16 +41,35 @@ export async function requestApi<T = any>(
     action === 'adminDeleteUser';
 
   try {
-    const response = await fetch(url, {
-      method: 'POST',
-      mode: 'cors',
-      redirect: 'follow',
-      credentials: 'omit',
-      headers: {
-        'Content-Type': 'text/plain;charset=utf-8',
-      },
-      body,
-    });
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        mode: 'cors',
+        redirect: 'follow',
+        credentials: 'omit',
+        headers: {
+          'Content-Type': 'text/plain;charset=utf-8',
+        },
+        body,
+      });
+    } catch (fetchErr: any) {
+      if (action.startsWith('get') || action === 'uploadLogs' || action === 'checkDuplicateOrder' || action === 'getUploadLogs') {
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        response = await fetch(url, {
+          method: 'POST',
+          mode: 'cors',
+          redirect: 'follow',
+          credentials: 'omit',
+          headers: {
+            'Content-Type': 'text/plain;charset=utf-8',
+          },
+          body,
+        });
+      } else {
+        throw fetchErr;
+      }
+    }
 
     const text = await response.text();
     let data: ApiResponse<T>;

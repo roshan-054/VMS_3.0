@@ -276,3 +276,26 @@ export function getStoredMaxVideoSizeMb(): number {
 export function setStoredMaxVideoSizeMb(sizeMb: number): void {
   localStorage.setItem('ops_max_video_size_mb', sizeMb.toString());
 }
+
+export function getStoredNightMode(): boolean {
+  return localStorage.getItem('vms_night_mode') === 'true';
+}
+
+export function setStoredNightMode(enabled: boolean): void {
+  localStorage.setItem('vms_night_mode', enabled ? 'true' : 'false');
+  if (enabled) {
+    document.documentElement.classList.add('dark');
+  } else {
+    document.documentElement.classList.remove('dark');
+  }
+}
+
+export function getStoredMaxConcurrentUploads(): number {
+  const val = parseInt(localStorage.getItem('ops_max_concurrent_uploads') || '1', 10);
+  return isNaN(val) || val < 1 ? 1 : Math.min(3, val);
+}
+
+export function setStoredMaxConcurrentUploads(val: number): void {
+  const sanitized = Math.min(3, Math.max(1, val));
+  localStorage.setItem('ops_max_concurrent_uploads', sanitized.toString());
+}

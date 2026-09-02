@@ -30,7 +30,10 @@ import {
   EyeOff,
   Lock,
   Edit3,
-  UserCog
+  UserCog,
+  Moon,
+  Sun,
+  Layers
 } from 'lucide-react';
 import { User, UserRole, UserStatus, AdminPermissions } from '../types';
 import { requestApi, checkBackendHealth, uploadBrandingImage, repairSheetPlaybackUrls, runSystemSetup } from '../lib/api';
@@ -67,6 +70,10 @@ import {
   setStoredAutoRefreshInterval,
   getStoredDuplicatePolicy,
   setStoredDuplicatePolicy,
+  getStoredNightMode,
+  setStoredNightMode,
+  getStoredMaxConcurrentUploads,
+  setStoredMaxConcurrentUploads,
   DuplicatePolicy,
   clearAllApplicationCacheAndStorage
 } from '../lib/storage';
@@ -141,6 +148,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
   const [autoUploadInput, setAutoUploadInput] = useState<boolean>(getStoredAutoUpload());
   const [autoResumeInput, setAutoResumeInput] = useState<boolean>(getStoredAutoResume());
   const [autoRefreshIntervalInput, setAutoRefreshIntervalInput] = useState<number>(getStoredAutoRefreshInterval());
+  const [nightModeInput, setNightModeInput] = useState<boolean>(getStoredNightMode());
+  const [maxConcurrentInput, setMaxConcurrentInput] = useState<number>(getStoredMaxConcurrentUploads());
   const [clearingCache, setClearingCache] = useState(false);
   const [testingHealth, setTestingHealth] = useState(false);
   const [repairingUrls, setRepairingUrls] = useState(false);
@@ -170,6 +179,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
     setAutoUploadInput(getStoredAutoUpload());
     setAutoResumeInput(getStoredAutoResume());
     setAutoRefreshIntervalInput(getStoredAutoRefreshInterval());
+    setNightModeInput(getStoredNightMode());
+    setMaxConcurrentInput(getStoredMaxConcurrentUploads());
   }, []);
 
   const handleClearAllCache = async () => {
@@ -228,12 +239,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
     setStoredAutoUpload(autoUploadInput);
     setStoredAutoResume(autoResumeInput);
     setStoredAutoRefreshInterval(autoRefreshIntervalInput);
+    setStoredNightMode(nightModeInput);
+    setStoredMaxConcurrentUploads(maxConcurrentInput);
 
     window.dispatchEvent(new CustomEvent('ops_config_updated', { detail: { chunkSizeMb: chunkSizeMbInput } }));
     window.dispatchEvent(new CustomEvent('ops_queue_updated'));
 
     onShowToast(
-      `Drive & System configuration saved! Chunk size set to ${chunkSizeMbInput} MB. Auto-refresh set to ${autoRefreshIntervalInput}s interval.`,
+      `Drive & System configuration saved! Concurrency set to ${maxConcurrentInput} video(s). Night mode ${nightModeInput ? 'enabled' : 'disabled'}.`,
       'success'
     );
   };
@@ -991,6 +1004,115 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                       className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 disabled:opacity-50"
                     />
                   </label>
+                </div>
+              </div>
+
+              {/* 5. Upload Stream Concurrency (1-by-1 or Simultaneous up to 3) */}
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center font-bold text-xs">
+                      5
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900">Upload Concurrency Mode</h4>
+                      <p className="text-[11px] text-slate-500">Allow 1-by-1 sequential upload or simultaneous parallel uploads (up to 3 videos)</p>
+                    </div>
+                  </div>
+
+                  <span className="bg-purple-50 text-purple-700 text-xs font-bold px-2.5 py-1 rounded-lg border border-purple-200 flex items-center gap-1">
+                    <Layers className="w-3.5 h-3.5 text-purple-600" />
+                    {maxConcurrentInput === 1 ? '1 Video at a Time' : `${maxConcurrentInput} Videos Parallel`}
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-2">
+                    Select Upload Concurrency Limit
+                  </label>
+                  <div className="grid grid-cols-3 gap-3">
+                    {[
+                      { count: 1, label: '1 Video at a Time', desc: 'Sequential (Default)' },
+                      { count: 2, label: '2 Videos Parallel', desc: 'Simultaneous Dual Upload' },
+                      { count: 3, label: '3 Videos Parallel', desc: 'Maximum Speed (Triple Stream)' },
+                    ].map((mode) => (
+                      <button
+                        key={mode.count}
+                        type="button"
+                        disabled={disableSettings}
+                        onClick={() => {
+                          setMaxConcurrentInput(mode.count);
+                          setStoredMaxConcurrentUploads(mode.count);
+                        }}
+                        className={`p-3 rounded-xl border text-left transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                          maxConcurrentInput === mode.count
+                            ? 'bg-purple-600 text-white border-purple-600 shadow-xs'
+                            : 'bg-slate-50 text-slate-800 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        <div className="text-xs font-bold">{mode.label}</div>
+                        <div className={`text-[10px] mt-0.5 ${maxConcurrentInput === mode.count ? 'text-purple-100' : 'text-slate-500'}`}>
+                          {mode.desc}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-2">
+                    <strong>1 Video at a Time</strong> guarantees stable upload on standard networks. <strong>2 or 3 Parallel Streams</strong> accelerates queue drain time on high-speed warehouse connections.
+                  </p>
+                </div>
+              </div>
+
+              {/* 6. Night Mode / Dark Theme Toggle */}
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-xs">
+                      6
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900">Night Mode / Dark Theme</h4>
+                      <p className="text-[11px] text-slate-500">Toggle dark visual canvas for low-light warehouse packing stations</p>
+                    </div>
+                  </div>
+
+                  <span className={`text-xs font-bold px-2.5 py-1 rounded-lg border flex items-center gap-1 ${
+                    nightModeInput
+                      ? 'bg-slate-900 text-amber-300 border-slate-700'
+                      : 'bg-amber-50 text-amber-700 border-amber-200'
+                  }`}>
+                    {nightModeInput ? <Moon className="w-3.5 h-3.5" /> : <Sun className="w-3.5 h-3.5" />}
+                    {nightModeInput ? 'Night Mode Active' : 'Light Mode Active'}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <div>
+                    <span className="text-xs font-semibold text-slate-800 block">
+                      Enable Warehouse Night Mode
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      Reduces screen glare and eye strain during evening packing shifts
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={disableSettings}
+                    onClick={() => {
+                      const next = !nightModeInput;
+                      setNightModeInput(next);
+                      setStoredNightMode(next);
+                    }}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer ${
+                      nightModeInput
+                        ? 'bg-slate-900 text-amber-300 border border-slate-700 shadow-xs'
+                        : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-100'
+                    }`}
+                  >
+                    {nightModeInput ? <Moon className="w-4 h-4 text-amber-300" /> : <Sun className="w-4 h-4 text-amber-500" />}
+                    {nightModeInput ? 'Night Mode ON' : 'Night Mode OFF'}
+                  </button>
                 </div>
               </div>
 
