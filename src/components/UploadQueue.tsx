@@ -61,6 +61,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
   const [isApplyingFormatting, setIsApplyingFormatting] = useState(false);
   const [filterType, setFilterType] = useState<'all' | 'pending' | 'duplicate' | 'completed'>('all');
   const [autoUploadEnabled, setAutoUploadEnabled] = useState(getStoredAutoUpload());
+  const [currentChunkSizeMb, setCurrentChunkSizeMb] = useState(getStoredChunkSizeMb());
   const [workerState, setWorkerState] = useState({
     isProcessing: false,
     activeItemId: null as string | null,
@@ -119,11 +120,15 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
     // Listen for custom queue updates
     const handleQueueUpdate = () => {
       loadQueue();
+      setCurrentChunkSizeMb(getStoredChunkSizeMb());
       onQueueChanged();
     };
 
     window.addEventListener('ops_queue_updated', handleQueueUpdate);
-    const interval = setInterval(loadQueue, 3000);
+    const interval = setInterval(() => {
+      loadQueue();
+      setCurrentChunkSizeMb(getStoredChunkSizeMb());
+    }, 3000);
 
     return () => {
       unsubscribeWorker();
@@ -332,8 +337,6 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
       prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
     );
   };
-
-  const currentChunkSizeMb = getStoredChunkSizeMb();
 
   // Filtered queue items
   const filteredQueue = queue.filter((item) => {

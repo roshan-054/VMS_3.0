@@ -495,7 +495,6 @@ function driveExists_(id){
 function completedDuplicate_(order,platform,type){
   const normTargetOrder = normalizeOrderId_(order);
   if (!normTargetOrder) return null;
-  const normTargetType = normalize_(type || 'Forward');
 
   // 1. Check ORDER_LOG_SHEET first
   try {
@@ -508,10 +507,6 @@ function completedDuplicate_(order,platform,type){
         if (!normRowOrder || normRowOrder !== normTargetOrder) continue;
 
         const rawType = v[i][8] || 'Forward';
-        const normRowType = normalize_(rawType);
-        if (normTargetType && normRowType && normTargetType !== normRowType) continue;
-
-        const rawStatus = normalize_(v[i][7] || '');
         const fileId = String(v[i][4] || '').trim();
 
         // Only count as duplicate if it has a valid Google Drive file ID
@@ -545,11 +540,7 @@ function completedDuplicate_(order,platform,type){
         if (!normRowOrder || normRowOrder !== normTargetOrder) continue;
 
         const rawType = r[i][8] || 'Return';
-        const normRowType = normalize_(rawType);
-        if (normTargetType && normRowType && normTargetType !== normRowType) continue;
-
         const fileId = String(r[i][4] || '').trim();
-        const rawStatus = normalize_(r[i][7] || '');
 
         // Only count as duplicate if it has a valid Google Drive file ID
         if (fileId.length > 5 && fileId !== 'undefined' && fileId !== 'null') {
@@ -582,9 +573,6 @@ function completedDuplicate_(order,platform,type){
         if (!normRowOrder || normRowOrder !== normTargetOrder) continue;
 
         const rawType = u[i][12] || 'Forward';
-        const normRowType = normalize_(rawType);
-        if (normTargetType && normRowType && normTargetType !== normRowType) continue;
-
         const rawStatus = normalize_(u[i][10] || '');
         const rawStage = normalize_(u[i][7] || '');
         const fileId = String(u[i][9] || '').trim();
