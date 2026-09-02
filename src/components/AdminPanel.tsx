@@ -896,7 +896,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                         <span>{size} MB</span>
                         {size === 16 && (
                           <span className={`text-[9px] uppercase tracking-wider ${chunkSizeMbInput === size ? 'text-blue-100' : 'text-blue-600'}`}>
-                            Default
+                            Default ★
                           </span>
                         )}
                       </button>
