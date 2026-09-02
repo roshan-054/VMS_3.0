@@ -378,13 +378,15 @@ export async function triggerUploadWorker(): Promise<void> {
     }
 
     const uploadId = startRes.uploadId;
+    const directUploadUrl = startRes.uploadUrl || '';
     currentItem.uploadId = uploadId;
     currentItem.totalChunks = totalChunks;
     currentItem.chunkSize = chunkSize;
 
-    // 2. Upload Chunks Sequentially (Optimized Direct Apps Script Pipeline)
+    // 2. Upload Chunks Sequentially (High-Speed Direct Drive Stream + Fast Apps Script Fallback)
     let finalFileId = '';
     let finalWebViewLink = '';
+    let useDirectStreaming = Boolean(directUploadUrl);
 
     for (let c = 0; c < totalChunks; c++) {
       // Re-check if item was paused by user mid-stream
@@ -425,15 +427,17 @@ export async function triggerUploadWorker(): Promise<void> {
 
       const stageDesc =
         totalChunks === 1
-          ? 'Uploading video to Google Drive...'
+          ? 'Streaming video to Google Drive...'
           : `Uploading chunk ${c + 1} of ${totalChunks} (${Math.round((endByte / (1024 * 1024)) * 10) / 10} MB / ${Math.round((totalBytes / (1024 * 1024)) * 10) / 10} MB)...`;
 
       currentItem.currentChunk = c;
       currentItem.stage = stageDesc;
       currentItem.uploadedBytes = endByte;
-      currentItem.progress = totalChunks === 1 ? 65 : Math.min(95, Math.round((endByte / totalBytes) * 100));
+      currentItem.progress = totalChunks === 1 ? 75 : Math.min(95, Math.round((endByte / totalBytes) * 100));
 
       await dbPutQueue(currentItem);
+      window.dispatchEvent(new CustomEvent('ops_queue_updated'));
+
       updateState({
         isProcessing: true,
         activeItemId: currentItem.id,
@@ -443,40 +447,97 @@ export async function triggerUploadWorker(): Promise<void> {
         totalChunks: totalChunks,
       });
 
-      // High-speed Base64 encoding
-      const base64 = await blobToBase64(chunkBlob);
+      let chunkSuccess = false;
       let attempt = 0;
-      let proxySuccess = false;
-      let chunkRes: any = null;
 
-      while (attempt < 3 && !proxySuccess) {
-        attempt++;
+      // FAST PATH: Direct Binary Stream to Google Drive Resumable URL
+      if (useDirectStreaming && directUploadUrl) {
         try {
-          chunkRes = await requestApi('uploadChunk', {
-            uploadId: uploadId,
-            chunkIndex: c,
-            totalChunks: totalChunks,
-            startByte: startByte,
-            endByte: endByte,
-            totalSize: totalBytes,
-            base64: base64,
-            driveFolderId: driveFolderId,
-            queueJobId: currentItem.id,
+          const contentRange = `bytes ${startByte}-${endByte - 1}/${totalBytes}`;
+          const driveResp = await fetch(directUploadUrl, {
+            method: 'PUT',
+            headers: {
+              'Content-Range': contentRange,
+            },
+            body: chunkBlob,
           });
 
-          if (chunkRes?.success) {
-            proxySuccess = true;
-            if (chunkRes?.fileId) {
-              finalFileId = chunkRes.fileId;
-              finalWebViewLink = chunkRes.webViewLink || chunkRes.playbackUrl;
+          if (driveResp.status === 308) {
+            // Intermediate chunk accepted by Google Drive
+            chunkSuccess = true;
+          } else if (driveResp.status === 200 || driveResp.status === 201) {
+            // Final chunk accepted and file created by Google Drive
+            chunkSuccess = true;
+            try {
+              const driveData = await driveResp.json();
+              if (driveData?.id) {
+                finalFileId = driveData.id;
+                finalWebViewLink = `https://drive.google.com/file/d/${driveData.id}/preview`;
+              }
+            } catch (_) {}
+
+            // Call finishUpload to log row into Google Sheet
+            try {
+              const finishRes = await requestApi('finishUpload', {
+                uploadId: uploadId,
+                fileId: finalFileId,
+                orderId: currentItem.orderId,
+                platform: currentItem.platform,
+                recordingType: currentItem.recordingType,
+                fileName: currentItem.fileName,
+                fileSize: totalBytes,
+                mimeType: currentItem.mimeType,
+                queueJobId: currentItem.id,
+                driveFolderId: driveFolderId,
+              });
+              if (finishRes?.fileId) {
+                finalFileId = finishRes.fileId;
+                finalWebViewLink = finishRes.webViewLink || finishRes.playbackUrl || finalWebViewLink;
+              }
+            } catch (finErr) {
+              console.warn('finishUpload note:', finErr);
             }
           } else {
-            throw new Error(chunkRes?.error || 'Chunk upload returned false');
+            console.warn(`Direct Drive PUT returned status ${driveResp.status}, falling back to proxy`);
+            useDirectStreaming = false;
           }
-        } catch (cErr: any) {
-          console.warn(`Upload chunk ${c + 1} attempt ${attempt} note:`, cErr);
-          if (attempt >= 3) {
-            // Check if backend actually received and finished it despite client timeout
+        } catch (directErr) {
+          console.warn('Direct Drive stream failed, falling back to Apps Script proxy:', directErr);
+          useDirectStreaming = false;
+        }
+      }
+
+      // FALLBACK PATH: Apps Script Upload Chunk Proxy
+      if (!chunkSuccess) {
+        const base64 = await blobToBase64(chunkBlob);
+        while (attempt < 3 && !chunkSuccess) {
+          attempt++;
+          try {
+            const chunkRes: any = await requestApi('uploadChunk', {
+              uploadId: uploadId,
+              chunkIndex: c,
+              totalChunks: totalChunks,
+              startByte: startByte,
+              endByte: endByte,
+              totalSize: totalBytes,
+              base64: base64,
+              driveFolderId: driveFolderId,
+              queueJobId: currentItem.id,
+            });
+
+            if (chunkRes?.success) {
+              chunkSuccess = true;
+              if (chunkRes?.fileId) {
+                finalFileId = chunkRes.fileId;
+                finalWebViewLink = chunkRes.webViewLink || chunkRes.playbackUrl;
+              }
+            } else {
+              throw new Error(chunkRes?.error || 'Chunk upload returned false');
+            }
+          } catch (cErr: any) {
+            console.warn(`Upload chunk ${c + 1} attempt ${attempt} note:`, cErr);
+
+            // Double check if backend already received it and finalized Drive file
             try {
               const verified = await checkDuplicate({
                 orderId: currentItem.orderId,
@@ -486,28 +547,26 @@ export async function triggerUploadWorker(): Promise<void> {
               if (verified && verified.fileId) {
                 finalFileId = verified.fileId;
                 finalWebViewLink = verified.webViewLink || `https://drive.google.com/file/d/${verified.fileId}/preview`;
-                proxySuccess = true;
+                chunkSuccess = true;
                 break;
               }
             } catch (_) {}
 
-            if (!proxySuccess) {
+            if (attempt >= 3 && !chunkSuccess) {
               throw new Error(
-                `Chunk ${c + 1}/${totalChunks} failed after 3 attempts: ${cErr.message || cErr}`
+                `Chunk ${c + 1}/${totalChunks} failed: ${cErr.message || cErr}`
               );
             }
+            await new Promise((r) => setTimeout(r, 600 * attempt));
           }
-          await new Promise((r) => setTimeout(r, 800 * attempt));
         }
       }
 
-      // If final chunk reached, immediately mark completed (100%)
-      if (isFinalChunk) {
-        const resolvedFileId = finalFileId || chunkRes?.fileId || '';
+      // If final chunk reached or file ID obtained, immediately mark completed (100%)
+      if (isFinalChunk || finalFileId) {
+        const resolvedFileId = finalFileId || '';
         const resolvedWebLink =
           finalWebViewLink ||
-          chunkRes?.webViewLink ||
-          chunkRes?.playbackUrl ||
           (resolvedFileId ? `https://drive.google.com/file/d/${resolvedFileId}/preview` : '');
 
         currentItem.status = 'completed';
@@ -519,6 +578,8 @@ export async function triggerUploadWorker(): Promise<void> {
         currentItem.fileId = resolvedFileId;
 
         await dbPutQueue(currentItem);
+        window.dispatchEvent(new CustomEvent('ops_queue_updated'));
+
         updateState({
           isProcessing: false,
           activeItemId: null,
@@ -558,6 +619,7 @@ export async function triggerUploadWorker(): Promise<void> {
           currentItem.error = undefined;
           currentItem.isDuplicate = false;
           await dbPutQueue(currentItem);
+          window.dispatchEvent(new CustomEvent('ops_queue_updated'));
           verifiedAfterError = true;
           notify(`✅ Order ${currentItem.orderId} verified as uploaded to Google Drive!`, 'success');
         } else {
@@ -565,6 +627,7 @@ export async function triggerUploadWorker(): Promise<void> {
           currentItem.error = err.message || 'Upload transmission error';
           currentItem.stage = 'Upload interrupted - Ready to resume';
           await dbPutQueue(currentItem);
+          window.dispatchEvent(new CustomEvent('ops_queue_updated'));
         }
       }
     } catch (_) {}

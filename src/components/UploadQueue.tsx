@@ -83,15 +83,18 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
   const loadQueue = async () => {
     try {
       const localItems = await dbGetAllQueue();
-      // Auto-heal any items that completed or have a valid Drive fileId so they never linger at 99%
+      // Auto-heal any items that completed or have a valid Drive fileId / all bytes uploaded so they never linger
       let healed = false;
       for (const item of localItems) {
-        if (
-          (item.fileId ||
-            item.webViewLink ||
-            (item.progress && item.progress >= 99 && item.stage?.toLowerCase().includes('uploaded'))) &&
-          item.status !== 'completed'
-        ) {
+        const isDoneOrFinished = Boolean(
+          item.fileId ||
+          item.webViewLink ||
+          (item.status === 'uploading' && item.progress && item.progress >= 95 && !workerState.isProcessing) ||
+          (item.uploadedBytes && item.fileSize && item.uploadedBytes >= item.fileSize && item.status !== 'completed' && !workerState.isProcessing) ||
+          (item.progress && item.progress >= 99 && item.stage?.toLowerCase().includes('upload'))
+        );
+
+        if (isDoneOrFinished && item.status !== 'completed') {
           item.status = 'completed';
           item.progress = 100;
           item.stage = 'Uploaded to Google Drive';
