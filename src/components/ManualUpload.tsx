@@ -236,9 +236,6 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
             ? 'video/quicktime'
             : 'video/mp4');
 
-        // Extract pure Blob from File to prevent DOM descriptor / structured clone issues
-        const cleanBlob = item.file.slice(0, item.file.size, mimeType);
-
         const queueItem: QueueItem = {
           id: crypto.randomUUID(),
           createdAt: Date.now(),
@@ -249,7 +246,7 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
           fileSize: item.file.size,
           mimeType: mimeType,
           source: 'Manual Backup Upload',
-          blob: cleanBlob,
+          blob: item.file, // Keep as raw File object to prevent IndexedDB memory cloning issues with large files
           status: 'pending',
           progress: 0,
           driveFolderId: driveFolderId,
