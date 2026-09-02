@@ -19,17 +19,20 @@ import {
   ShieldAlert,
   ShieldCheck,
   ArrowRight,
-  Filter
+  Filter,
+  Loader2,
+  Layers
 } from 'lucide-react';
 import { QueueItem } from '../types';
 import {
   dbGetAllQueue,
   dbDeleteQueueItem,
+  dbPutQueue,
   getStoredChunkSizeMb,
   getStoredAutoUpload,
   setStoredAutoUpload
 } from '../lib/storage';
-import { applySheetConditionalFormatting, fetchUploadLogs } from '../lib/api';
+import { applySheetConditionalFormatting, fetchUploadLogs, deleteLogEntry } from '../lib/api';
 import {
   triggerUploadWorker,
   pauseUploadItem,
@@ -67,13 +70,38 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
     totalChunks: 0
   });
 
+  // Deletion Confirmation Modal State
+  const [itemToDelete, setItemToDelete] = useState<QueueItem | null>(null);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [deleteFromSheetsOption, setDeleteFromSheetsOption] = useState(true);
+  const [deleteDriveOption, setDeleteDriveOption] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isProcessingDelete, setIsProcessingDelete] = useState(false);
+
   const loadQueue = async () => {
     try {
       const localItems = await dbGetAllQueue();
-      // Only show active/pending/uploading/paused/failed items in upload queue (completed items belong in Upload Logs)
-      const activeItems = localItems.filter((item) => item.status !== 'completed');
-      activeItems.sort((a, b) => b.createdAt - a.createdAt);
-      setQueue(activeItems);
+      // Auto-heal any items that completed or have a valid Drive fileId so they never linger at 99%
+      let healed = false;
+      for (const item of localItems) {
+        if (
+          (item.fileId ||
+            item.webViewLink ||
+            (item.progress && item.progress >= 99 && item.stage?.toLowerCase().includes('uploaded'))) &&
+          item.status !== 'completed'
+        ) {
+          item.status = 'completed';
+          item.progress = 100;
+          item.stage = 'Uploaded to Google Drive';
+          item.isDuplicate = false;
+          item.error = undefined;
+          await dbPutQueue(item);
+          healed = true;
+        }
+      }
+      const all = healed ? await dbGetAllQueue() : localItems;
+      all.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      setQueue(all);
     } catch (e) {
       console.warn('Load queue error:', e);
     }
@@ -207,11 +235,78 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
     onShowToast(`Restarting upload for Order ${item.orderId}…`, 'info');
   };
 
-  const handleRemove = async (id: string, orderId: string) => {
-    await dbDeleteQueueItem(id);
-    loadQueue();
-    onQueueChanged();
-    onShowToast(`Removed Order ${orderId} from local upload queue.`, 'info');
+  const handlePromptDeleteOne = (item: QueueItem) => {
+    setItemToDelete(item);
+    setIsBulkDeleting(false);
+    setDeleteFromSheetsOption(true);
+    setDeleteDriveOption(false);
+    setIsDeleteModalOpen(true);
+  };
+
+  const handlePromptDeleteBulk = () => {
+    if (selectedQueueIds.length === 0) return;
+    setItemToDelete(null);
+    setIsBulkDeleting(true);
+    setDeleteFromSheetsOption(true);
+    setDeleteDriveOption(false);
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    setIsProcessingDelete(true);
+    try {
+      if (isBulkDeleting) {
+        const itemsToDelete = queue.filter((i) => selectedQueueIds.includes(i.id));
+        for (const item of itemsToDelete) {
+          await dbDeleteQueueItem(item.id);
+          if (deleteFromSheetsOption || deleteDriveOption) {
+            try {
+              await deleteLogEntry({
+                orderId: item.orderId,
+                uploadId: item.uploadId || item.uploadSessionId,
+                driveFileId: item.fileId || item.driveFileId,
+                deleteFromSheets: deleteFromSheetsOption,
+                deleteFromDrive: deleteDriveOption,
+              });
+            } catch (e) {
+              console.warn('Remote bulk delete note:', e);
+            }
+          }
+        }
+        const count = itemsToDelete.length;
+        setSelectedQueueIds([]);
+        loadQueue();
+        onQueueChanged();
+        const sheetMsg = deleteFromSheetsOption ? ' and Google Sheet logs' : '';
+        onShowToast(`Deleted ${count} item(s) from local queue${sheetMsg}.`, 'success');
+      } else if (itemToDelete) {
+        await dbDeleteQueueItem(itemToDelete.id);
+        if (deleteFromSheetsOption || deleteDriveOption) {
+          try {
+            await deleteLogEntry({
+              orderId: itemToDelete.orderId,
+              uploadId: itemToDelete.uploadId || itemToDelete.uploadSessionId,
+              driveFileId: itemToDelete.fileId || itemToDelete.driveFileId,
+              deleteFromSheets: deleteFromSheetsOption,
+              deleteFromDrive: deleteDriveOption,
+            });
+          } catch (e) {
+            console.warn('Remote single delete note:', e);
+          }
+        }
+        loadQueue();
+        onQueueChanged();
+        const sheetMsg = deleteFromSheetsOption ? ' and Google Sheet logs' : '';
+        onShowToast(`Removed Order ${itemToDelete.orderId} from upload queue${sheetMsg}.`, 'success');
+      }
+    } catch (err: any) {
+      onShowToast(`Delete error: ${err.message || err}`, 'error');
+    } finally {
+      setIsProcessingDelete(false);
+      setIsDeleteModalOpen(false);
+      setItemToDelete(null);
+      setIsBulkDeleting(false);
+    }
   };
 
   const handleClearCompleted = async () => {
@@ -238,18 +333,6 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
     );
   };
 
-  const handleBulkDelete = async () => {
-    if (selectedQueueIds.length === 0) return;
-    for (const id of selectedQueueIds) {
-      await dbDeleteQueueItem(id);
-    }
-    const count = selectedQueueIds.length;
-    setSelectedQueueIds([]);
-    loadQueue();
-    onQueueChanged();
-    onShowToast(`Successfully deleted ${count} selected queue item(s).`, 'success');
-  };
-
   const currentChunkSizeMb = getStoredChunkSizeMb();
 
   // Filtered queue items
@@ -258,12 +341,19 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
       return item.status === 'pending' || item.status === 'uploading' || item.status === 'paused';
     }
     if (filterType === 'duplicate') {
-      return item.isDuplicate || (item.status === 'failed' && (item.error?.toLowerCase().includes('duplicate') || item.stage?.toLowerCase().includes('duplicate')));
+      return (
+        !item.fileId &&
+        (item.isDuplicate ||
+          (item.status === 'failed' &&
+            (item.error?.toLowerCase().includes('duplicate') ||
+              item.stage?.toLowerCase().includes('duplicate'))))
+      );
     }
     if (filterType === 'completed') {
       return item.status === 'completed';
     }
-    return true;
+    // Default 'all' in active queue shows non-completed items (completed files belong in Upload Logs)
+    return item.status !== 'completed';
   });
 
   const duplicateCount = queue.filter(
@@ -285,9 +375,9 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
               <h2 className="text-lg font-bold text-slate-900 tracking-tight">
                 Automatic Upload Queue & Duplicate Guard
               </h2>
-              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
-                Auto-Sequence Active
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
+                Sequential Upload: 1-by-1 FIFO
               </span>
               <span className="bg-blue-50 text-blue-700 text-[10px] font-bold px-2 py-0.5 rounded-full border border-blue-200 flex items-center gap-1">
                 <Zap className="w-3 h-3 text-amber-500" />
@@ -295,7 +385,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
               </span>
             </div>
             <p className="text-xs text-slate-500 mt-1">
-              Uploads progress continuously one after another in small intervals. Duplicate Order IDs are automatically detected and blocked from corrupting cloud records.
+              Strict sequential upload system: Files upload one after another. As soon as one file finishes, the next one begins automatically.
             </p>
           </div>
         </div>
@@ -579,7 +669,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
 
             {selectedQueueIds.length > 0 && (
               <button
-                onClick={handleBulkDelete}
+                onClick={handlePromptDeleteBulk}
                 className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
               >
                 <Trash2 className="w-3.5 h-3.5" />
@@ -593,11 +683,19 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
             const fileSizeMb = item.fileSize ? (item.fileSize / (1024 * 1024)).toFixed(2) : '0';
             const uploadedMb = item.uploadedBytes ? (item.uploadedBytes / (1024 * 1024)).toFixed(2) : '0';
             const isDuplicate =
-              item.isDuplicate ||
-              (item.status === 'failed' &&
-                (item.error?.toLowerCase().includes('duplicate') ||
-                  item.stage?.toLowerCase().includes('duplicate')));
+              !item.fileId &&
+              (item.isDuplicate ||
+                (item.status === 'failed' &&
+                  (item.error?.toLowerCase().includes('duplicate') ||
+                    item.stage?.toLowerCase().includes('duplicate'))));
             const isSelected = selectedQueueIds.includes(item.id);
+
+            // Compute sequential queue position
+            const pendingOrActiveList = queue.filter(
+              (i) => i.status === 'pending' || i.status === 'uploading'
+            );
+            const queuePosition = pendingOrActiveList.findIndex((i) => i.id === item.id) + 1;
+            const isCompleted = item.status === 'completed' || !!item.fileId;
 
             return (
               <div
@@ -667,38 +765,38 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
                         </span>
                       )}
 
-                      {!isDuplicate && item.status === 'completed' && (
+                      {!isDuplicate && isCompleted && (
                         <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
                           <Check className="w-3 h-3" />
-                          Uploaded to Drive
+                          Uploaded to Drive (100%)
                         </span>
                       )}
 
-                      {!isDuplicate && isItemUploading && (
+                      {!isDuplicate && !isCompleted && isItemUploading && (
                         <span className="bg-blue-100 text-blue-800 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
                           <RefreshCw className="w-3 h-3 animate-spin" />
-                          Uploading ({item.progress}%)
+                          Uploading ({item.progress}%) [Active #1]
                         </span>
                       )}
 
-                      {!isDuplicate && item.status === 'paused' && (
+                      {!isDuplicate && !isCompleted && item.status === 'paused' && (
                         <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
                           <Pause className="w-3 h-3" />
                           Paused ({item.progress}%)
                         </span>
                       )}
 
-                      {!isDuplicate && item.status === 'failed' && (
+                      {!isDuplicate && !isCompleted && item.status === 'failed' && (
                         <span className="bg-red-100 text-red-800 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
                           <AlertTriangle className="w-3 h-3" />
                           Upload Interrupted (Resumable)
                         </span>
                       )}
 
-                      {!isDuplicate && item.status === 'pending' && !isItemUploading && (
-                        <span className="bg-slate-100 text-slate-700 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                      {!isDuplicate && !isCompleted && item.status === 'pending' && !isItemUploading && (
+                        <span className="bg-indigo-50 text-indigo-700 text-[10px] font-bold px-2.5 py-0.5 rounded-full border border-indigo-200 flex items-center gap-1">
                           <ArrowRight className="w-3 h-3" />
-                          In Queue (Auto-Sync)
+                          {queuePosition > 1 ? `In Queue (Position #${queuePosition})` : 'In Queue (Next to Upload)'}
                         </span>
                       )}
                     </div>
@@ -757,13 +855,13 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
                 <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 w-full lg:w-auto justify-between lg:justify-end shrink-0">
                   <div className="w-full sm:w-44 space-y-1.5">
                     <div className="flex justify-between text-[11px] font-bold text-slate-600">
-                      <span className="capitalize">{isDuplicate ? 'Duplicate Blocked' : item.status}</span>
-                      <span>{isDuplicate ? 'Blocked' : `${item.progress}%`}</span>
+                      <span className="capitalize">{isDuplicate ? 'Duplicate Blocked' : isCompleted ? 'Completed' : item.status}</span>
+                      <span>{isDuplicate ? 'Blocked' : isCompleted ? '100%' : `${item.progress}%`}</span>
                     </div>
                     <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden border border-slate-200">
                       <div
-                        className={`h-full transition-all duration-300 ${
-                          item.status === 'completed'
+                        className={`h-full transition-all duration-300 rounded-full ${
+                          isCompleted
                             ? 'bg-emerald-500'
                             : isDuplicate
                             ? 'bg-red-400'
@@ -773,7 +871,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
                             ? 'bg-amber-500'
                             : 'bg-blue-600 animate-pulse'
                         }`}
-                        style={{ width: isDuplicate ? '100%' : `${item.progress}%` }}
+                        style={{ width: isDuplicate ? '100%' : isCompleted ? '100%' : `${item.progress}%` }}
                       />
                     </div>
                   </div>
@@ -827,11 +925,11 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
                       </button>
                     )}
 
-                    {/* Remove from Local Queue Only Button */}
+                    {/* Remove from Local Queue with Option to Delete from Sheet Logs */}
                     <button
-                      onClick={() => handleRemove(item.id, item.orderId)}
+                      onClick={() => handlePromptDeleteOne(item)}
                       className="px-2.5 py-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-200 rounded-lg text-xs font-semibold transition flex items-center gap-1 cursor-pointer"
-                      title="Remove from queue"
+                      title="Remove from queue & delete options"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                       <span className="hidden sm:inline">Remove</span>
@@ -841,6 +939,101 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal with option to delete from Google Sheet Logs */}
+      {isDeleteModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 flex items-center justify-center border border-rose-200 shrink-0">
+                <Trash2 className="w-5 h-5 text-rose-600" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">
+                  {isBulkDeleting
+                    ? `Delete ${selectedQueueIds.length} Queue Items`
+                    : `Delete Order: ${itemToDelete?.orderId || 'Item'}`}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Select whether you also want to remove data from Google Sheet logs.
+                </p>
+              </div>
+            </div>
+
+            {/* Deletion Scope Options */}
+            <div className="space-y-2.5 pt-1">
+              {/* Checkbox 1: Delete data from Google Sheets logs */}
+              <label className="flex items-start gap-2.5 p-3 rounded-xl border border-rose-200 bg-rose-50/60 hover:bg-rose-50 cursor-pointer transition select-none">
+                <input
+                  type="checkbox"
+                  checked={deleteFromSheetsOption}
+                  onChange={(e) => setDeleteFromSheetsOption(e.target.checked)}
+                  className="mt-0.5 rounded text-rose-600 focus:ring-rose-500 w-4 h-4"
+                />
+                <div>
+                  <span className="font-bold text-slate-900 text-xs">Also delete data from Google Sheet Logs</span>
+                  <p className="text-[11px] text-slate-600 mt-0.5">
+                    {deleteFromSheetsOption
+                      ? 'Permanently deletes matching rows from OrderLog, ReturnLog & UploadLog Google Sheets.'
+                      : 'Leaves Google Sheet records intact. Only removes this item from the local device upload queue.'}
+                  </p>
+                </div>
+              </label>
+
+              {/* Checkbox 2: Move video recording in Google Drive to Trash */}
+              <label className="flex items-start gap-2.5 p-3 rounded-xl border border-blue-200 bg-blue-50/50 hover:bg-blue-50 cursor-pointer transition select-none">
+                <input
+                  type="checkbox"
+                  checked={deleteDriveOption}
+                  onChange={(e) => setDeleteDriveOption(e.target.checked)}
+                  className="mt-0.5 rounded text-blue-600 focus:ring-blue-500 w-4 h-4"
+                />
+                <div>
+                  <span className="font-bold text-slate-900 text-xs">Also move video recording in Google Drive to Trash</span>
+                  <p className="text-[11px] text-slate-600 mt-0.5">
+                    Moves the associated video recording in Google Drive to trash if it was uploaded.
+                  </p>
+                </div>
+              </label>
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                disabled={isProcessingDelete}
+                onClick={() => {
+                  setIsDeleteModalOpen(false);
+                  setItemToDelete(null);
+                  setIsBulkDeleting(false);
+                }}
+                className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-center transition cursor-pointer text-xs"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                disabled={isProcessingDelete}
+                onClick={handleConfirmDelete}
+                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-semibold rounded-xl text-center transition flex items-center justify-center gap-1.5 shadow-sm disabled:opacity-50 cursor-pointer text-xs"
+              >
+                {isProcessingDelete ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Deleting…
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Confirm Delete
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

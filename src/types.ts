@@ -32,6 +32,8 @@ export interface VideoRecord {
   fileName: string;
   fileSize: string;
   driveLink?: string;
+  webViewLink?: string;
+  playbackUrl?: string;
   fileId?: string;
   packerEmail: string;
   status: string;

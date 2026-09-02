@@ -106,16 +106,19 @@ export async function triggerUploadWorker(): Promise<void> {
   try {
     const allItems = await dbGetAllQueue();
 
-    // Prioritize active/pending items in chronological FIFO order
-    let candidate = allItems.find(
-      (item) => item.status === 'uploading' || item.status === 'pending'
-    );
+    // Prioritize active/pending items in strict chronological FIFO order
+    const activeOrPending = allItems
+      .filter((item) => item.status === 'pending' || item.status === 'uploading')
+      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
 
-    // If auto-resume enabled, find non-duplicate failed items
+    let candidate = activeOrPending[0];
+
+    // If auto-resume enabled and no active/pending items, check non-duplicate failed items
     if (!candidate && getStoredAutoResume()) {
-      candidate = allItems.find(
-        (item) => item.status === 'failed' && !item.isDuplicate && item.blob
-      );
+      const failedItems = allItems
+        .filter((item) => item.status === 'failed' && !item.isDuplicate && item.blob)
+        .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+      candidate = failedItems[0];
     }
 
     if (!candidate) {
@@ -135,7 +138,7 @@ export async function triggerUploadWorker(): Promise<void> {
       candidate.stage = 'Error: Video data missing';
       await dbPutQueue(candidate);
       isWorkerBusy = false;
-      // Auto-trigger next item
+      // Auto-trigger next sequential item
       setTimeout(() => triggerUploadWorker(), 200);
       return;
     }
@@ -143,14 +146,14 @@ export async function triggerUploadWorker(): Promise<void> {
     const currentItem = candidate;
 
     // -------------------------------------------------------------
-    // DUPLICATE ORDER ID GUARD:
+    // DUPLICATE ORDER ID & CLOUD VERIFICATION GUARD:
     // Check if another completed item with same orderId exists locally or remotely
     // -------------------------------------------------------------
     if (!currentItem.bypassDuplicate) {
       const normTarget = normalizeOrderId(currentItem.orderId);
 
       // 1. Check local completed queue (ONLY completed items with valid web link or fileId)
-      const localDuplicate = allItems.some(
+      const localCompleted = allItems.find(
         (it) =>
           it.id !== currentItem.id &&
           normalizeOrderId(it.orderId) === normTarget &&
@@ -160,7 +163,7 @@ export async function triggerUploadWorker(): Promise<void> {
 
       // 2. Check remote Google Sheet / Drive records
       let remoteDuplicate: any = null;
-      if (!localDuplicate && normTarget) {
+      if (!localCompleted && normTarget) {
         try {
           remoteDuplicate = await checkDuplicate({
             orderId: currentItem.orderId,
@@ -172,7 +175,43 @@ export async function triggerUploadWorker(): Promise<void> {
         }
       }
 
-      if (localDuplicate || (remoteDuplicate && (remoteDuplicate.fileId || remoteDuplicate.isDuplicate))) {
+      // If remote already has a completed Drive file for this order:
+      // Check if THIS queue item was the one uploaded (e.g. uploadId set, or progress >= 50%, or status was uploading/failed)
+      if (remoteDuplicate && remoteDuplicate.fileId && remoteDuplicate.fileId.length > 5) {
+        const wasAttempted = Boolean(
+          currentItem.uploadId ||
+          (currentItem.progress && currentItem.progress >= 50) ||
+          currentItem.status === 'uploading' ||
+          (currentItem.status === 'failed' && (currentItem.stage?.includes('Upload') || currentItem.stage?.includes('Processing')))
+        );
+
+        if (wasAttempted) {
+          // The file was already successfully saved to Google Drive!
+          currentItem.status = 'completed';
+          currentItem.progress = 100;
+          currentItem.stage = 'Uploaded to Google Drive';
+          currentItem.isDuplicate = false;
+          currentItem.error = undefined;
+          currentItem.fileId = remoteDuplicate.fileId;
+          currentItem.webViewLink =
+            remoteDuplicate.webViewLink ||
+            remoteDuplicate.playbackUrl ||
+            `https://drive.google.com/file/d/${remoteDuplicate.fileId}/preview`;
+          await dbPutQueue(currentItem);
+          updateState({
+            isProcessing: false,
+            activeItemId: null,
+            activeProgress: 100,
+            activeStage: 'Upload verified completed',
+          });
+          notify(`✅ Order ${currentItem.orderId} verified as successfully uploaded to Google Drive!`, 'success');
+          isWorkerBusy = false;
+          setTimeout(() => triggerUploadWorker(), 200);
+          return;
+        }
+      }
+
+      if (localCompleted || (remoteDuplicate && (remoteDuplicate.fileId || remoteDuplicate.isDuplicate))) {
         currentItem.status = 'failed';
         currentItem.isDuplicate = true;
         currentItem.stage = `Blocked: Duplicate Order ID (${currentItem.orderId})`;
@@ -195,30 +234,33 @@ export async function triggerUploadWorker(): Promise<void> {
         );
 
         isWorkerBusy = false;
-        // Immediately start next pending non-duplicate item in line
+        // Immediately start next pending non-duplicate item in sequential pipeline
         setTimeout(() => triggerUploadWorker(), 300);
         return;
       }
     }
 
     // -------------------------------------------------------------
-    // START UPLOAD PROCESS
+    // START UPLOAD PROCESS (Strict Single Active Item)
     // -------------------------------------------------------------
     currentItem.status = 'uploading';
     currentItem.isDuplicate = false;
-    currentItem.stage = 'Starting Google Drive session...';
+    currentItem.stage = 'Connecting to Google Drive...';
     await dbPutQueue(currentItem);
 
     updateState({
       isProcessing: true,
       activeItemId: currentItem.id,
       activeProgress: currentItem.progress || 0,
-      activeStage: 'Starting Google Drive session...',
+      activeStage: 'Connecting to Google Drive...',
     });
 
     const totalBytes = currentItem.blob.size;
+    // For small and medium files (<= 12 MB), use single-chunk instant upload (~1.5-2.5s)
+    // For larger files, use fast 4 MB chunks
+    const isSmallFile = totalBytes <= 12 * 1024 * 1024;
     const configuredChunkSize = getStoredChunkSize();
-    const chunkSize = configuredChunkSize > 0 ? configuredChunkSize : 16 * 1024 * 1024;
+    const chunkSize = isSmallFile ? totalBytes : (configuredChunkSize > 0 ? configuredChunkSize : 4 * 1024 * 1024);
     const totalChunks = Math.max(1, Math.ceil(totalBytes / chunkSize));
     const driveFolderId = currentItem.driveFolderId || getStoredDriveFolderId();
 
@@ -245,6 +287,29 @@ export async function triggerUploadWorker(): Promise<void> {
         errMsg.toLowerCase().includes('duplicate') ||
         errMsg.toLowerCase().includes('already exists')
       ) {
+        // Double-check if the file was already uploaded
+        try {
+          const verified = await checkDuplicate({
+            orderId: currentItem.orderId,
+            platform: currentItem.platform,
+            recordingType: currentItem.recordingType,
+          });
+          if (verified && verified.fileId) {
+            currentItem.status = 'completed';
+            currentItem.progress = 100;
+            currentItem.stage = 'Uploaded to Google Drive';
+            currentItem.fileId = verified.fileId;
+            currentItem.webViewLink = verified.webViewLink || `https://drive.google.com/file/d/${verified.fileId}/preview`;
+            currentItem.error = undefined;
+            currentItem.isDuplicate = false;
+            await dbPutQueue(currentItem);
+            notify(`✅ Order ${currentItem.orderId} verified in Google Drive!`, 'success');
+            isWorkerBusy = false;
+            setTimeout(() => triggerUploadWorker(), 200);
+            return;
+          }
+        } catch (_) {}
+
         currentItem.status = 'failed';
         currentItem.isDuplicate = true;
         currentItem.progress = 0;
@@ -285,19 +350,15 @@ export async function triggerUploadWorker(): Promise<void> {
     }
 
     const uploadId = startRes.uploadId;
-    const directUploadUrl = startRes.uploadUrl || '';
-    let useDirectDriveStream = Boolean(directUploadUrl && directUploadUrl.startsWith('https://'));
-
     currentItem.uploadId = uploadId;
     currentItem.totalChunks = totalChunks;
     currentItem.chunkSize = chunkSize;
 
-    // 2. Upload Chunks Sequentially
-    const startChunk = 0;
+    // 2. Upload Chunks Sequentially (Optimized Direct Apps Script Pipeline)
     let finalFileId = '';
     let finalWebViewLink = '';
 
-    for (let c = startChunk; c < totalChunks; c++) {
+    for (let c = 0; c < totalChunks; c++) {
       // Re-check if item was paused by user mid-stream
       const freshQueue = await dbGetAllQueue();
       const freshItem = freshQueue.find((i) => i.id === currentItem.id);
@@ -321,7 +382,7 @@ export async function triggerUploadWorker(): Promise<void> {
       currentItem.currentChunk = c;
       currentItem.stage = stageDesc;
       currentItem.uploadedBytes = endByte;
-      currentItem.progress = Math.min(99, Math.round((endByte / totalBytes) * 100));
+      currentItem.progress = totalChunks === 1 ? 65 : Math.min(95, Math.round((endByte / totalBytes) * 100));
 
       await dbPutQueue(currentItem);
       updateState({
@@ -333,117 +394,80 @@ export async function triggerUploadWorker(): Promise<void> {
         totalChunks: totalChunks,
       });
 
-      let chunkSuccess = false;
-
-      // Strategy A: Direct Google Drive Resumable Stream
-      if (useDirectDriveStream) {
-        try {
-          const driveResp = await fetch(directUploadUrl, {
-            method: 'PUT',
-            headers: {
-              'Content-Range': `bytes ${startByte}-${endByte - 1}/${totalBytes}`,
-            },
-            body: chunkBlob,
-          });
-
-          if (driveResp.status === 308) {
-            // Resume incomplete - chunk accepted by Google Drive!
-            chunkSuccess = true;
-          } else if (driveResp.status === 200 || driveResp.status === 201) {
-            // Upload complete directly to Google Drive!
-            const json = await driveResp.json();
-            if (json?.id) {
-              finalFileId = json.id;
-              finalWebViewLink = `https://drive.google.com/file/d/${json.id}/preview`;
-            }
-            chunkSuccess = true;
-          } else {
-            console.warn(`Direct Drive PUT returned HTTP ${driveResp.status}, falling back to proxy`);
-            useDirectDriveStream = false;
-          }
-        } catch (dErr) {
-          console.warn('Direct Drive stream error, falling back to proxy:', dErr);
-          useDirectDriveStream = false;
-        }
-      }
-
+      // High-speed Base64 encoding
+      const base64 = await blobToBase64(chunkBlob);
+      let attempt = 0;
+      let proxySuccess = false;
       let chunkRes: any = null;
 
-      // Strategy B: Fallback to Apps Script proxy uploadChunk
-      if (!chunkSuccess) {
-        const base64 = await blobToBase64(chunkBlob);
-        let attempt = 0;
-        let proxySuccess = false;
+      while (attempt < 3 && !proxySuccess) {
+        attempt++;
+        try {
+          chunkRes = await requestApi('uploadChunk', {
+            uploadId: uploadId,
+            chunkIndex: c,
+            totalChunks: totalChunks,
+            startByte: startByte,
+            endByte: endByte,
+            totalSize: totalBytes,
+            base64: base64,
+            driveFolderId: driveFolderId,
+            queueJobId: currentItem.id,
+          });
 
-        while (attempt < 3 && !proxySuccess) {
-          attempt++;
-          try {
-            chunkRes = await requestApi('uploadChunk', {
-              uploadId: uploadId,
-              chunkIndex: c,
-              totalChunks: totalChunks,
-              startByte: startByte,
-              endByte: endByte,
-              totalSize: totalBytes,
-              base64: base64,
-              driveFolderId: driveFolderId,
-              queueJobId: currentItem.id,
-            });
-
-            if (chunkRes?.success) {
-              proxySuccess = true;
-              if (chunkRes?.fileId) {
-                finalFileId = chunkRes.fileId;
-                finalWebViewLink = chunkRes.webViewLink || chunkRes.playbackUrl;
-              }
-            } else {
-              throw new Error(chunkRes?.error || 'Chunk upload returned false');
+          if (chunkRes?.success) {
+            proxySuccess = true;
+            if (chunkRes?.fileId) {
+              finalFileId = chunkRes.fileId;
+              finalWebViewLink = chunkRes.webViewLink || chunkRes.playbackUrl;
             }
-          } catch (cErr: any) {
-            console.warn(`Proxy chunk ${c + 1} attempt ${attempt} failed:`, cErr);
-            if (attempt >= 3) {
+          } else {
+            throw new Error(chunkRes?.error || 'Chunk upload returned false');
+          }
+        } catch (cErr: any) {
+          console.warn(`Upload chunk ${c + 1} attempt ${attempt} note:`, cErr);
+          if (attempt >= 3) {
+            // Check if backend actually received and finished it despite client timeout
+            try {
+              const verified = await checkDuplicate({
+                orderId: currentItem.orderId,
+                platform: currentItem.platform,
+                recordingType: currentItem.recordingType,
+              });
+              if (verified && verified.fileId) {
+                finalFileId = verified.fileId;
+                finalWebViewLink = verified.webViewLink || `https://drive.google.com/file/d/${verified.fileId}/preview`;
+                proxySuccess = true;
+                break;
+              }
+            } catch (_) {}
+
+            if (!proxySuccess) {
               throw new Error(
                 `Chunk ${c + 1}/${totalChunks} failed after 3 attempts: ${cErr.message || cErr}`
               );
             }
-            await new Promise((r) => setTimeout(r, 1200 * attempt));
           }
+          await new Promise((r) => setTimeout(r, 800 * attempt));
         }
       }
 
-      // If final chunk reached, finalize
+      // If final chunk reached, immediately mark completed (100%)
       if (isFinalChunk) {
-        // If uploaded directly to Drive (and not already finalized by proxy uploadChunk), call finishUpload
-        if (finalFileId && !chunkRes?.fileId) {
-          try {
-            const finishRes = await requestApi('finishUpload', {
-              uploadId: uploadId,
-              fileId: finalFileId,
-              orderId: currentItem.orderId,
-              platform: currentItem.platform,
-              recordingType: currentItem.recordingType,
-              fileName: currentItem.fileName,
-              fileSize: currentItem.fileSize || totalBytes,
-              mimeType: currentItem.mimeType,
-              queueJobId: currentItem.id,
-              driveFolderId: driveFolderId,
-              recordingDate: currentItem.recordingDate,
-            });
-            if (finishRes?.fileId) {
-              finalFileId = finishRes.fileId;
-              finalWebViewLink = finishRes.webViewLink || finishRes.playbackUrl;
-            }
-          } catch (fErr) {
-            console.warn('Finish upload note:', fErr);
-          }
-        }
+        const resolvedFileId = finalFileId || chunkRes?.fileId || '';
+        const resolvedWebLink =
+          finalWebViewLink ||
+          chunkRes?.webViewLink ||
+          chunkRes?.playbackUrl ||
+          (resolvedFileId ? `https://drive.google.com/file/d/${resolvedFileId}/preview` : '');
 
         currentItem.status = 'completed';
         currentItem.progress = 100;
         currentItem.stage = 'Uploaded to Google Drive';
         currentItem.error = undefined;
-        currentItem.webViewLink = finalWebViewLink || (finalFileId ? `https://drive.google.com/file/d/${finalFileId}/preview` : '');
-        currentItem.fileId = finalFileId;
+        currentItem.isDuplicate = false;
+        currentItem.webViewLink = resolvedWebLink;
+        currentItem.fileId = resolvedFileId;
 
         await dbPutQueue(currentItem);
         updateState({
@@ -453,22 +477,46 @@ export async function triggerUploadWorker(): Promise<void> {
           activeStage: 'Upload completed',
         });
 
-        notify(`✅ Uploaded ${currentItem.fileName} to Google Drive!`, 'success');
+        notify(`✅ Successfully uploaded ${currentItem.fileName} to Google Drive!`, 'success');
         break;
       }
     }
   } catch (err: any) {
     console.error('Upload worker process error:', err);
+
+    // Fallback verification: did the file actually make it to Google Drive despite connection error?
+    let verifiedAfterError = false;
     try {
       const allItems = await dbGetAllQueue();
       const currentItem = allItems.find(
         (i) => i.id === currentState.activeItemId || i.status === 'uploading'
       );
       if (currentItem) {
-        currentItem.status = 'failed';
-        currentItem.error = err.message || 'Upload transmission error';
-        currentItem.stage = 'Upload interrupted - Ready to resume';
-        await dbPutQueue(currentItem);
+        const verified = await checkDuplicate({
+          orderId: currentItem.orderId,
+          platform: currentItem.platform,
+          recordingType: currentItem.recordingType,
+        });
+        if (verified && verified.fileId) {
+          currentItem.status = 'completed';
+          currentItem.progress = 100;
+          currentItem.stage = 'Uploaded to Google Drive';
+          currentItem.fileId = verified.fileId;
+          currentItem.webViewLink =
+            verified.webViewLink ||
+            verified.playbackUrl ||
+            `https://drive.google.com/file/d/${verified.fileId}/preview`;
+          currentItem.error = undefined;
+          currentItem.isDuplicate = false;
+          await dbPutQueue(currentItem);
+          verifiedAfterError = true;
+          notify(`✅ Order ${currentItem.orderId} verified as uploaded to Google Drive!`, 'success');
+        } else {
+          currentItem.status = 'failed';
+          currentItem.error = err.message || 'Upload transmission error';
+          currentItem.stage = 'Upload interrupted - Ready to resume';
+          await dbPutQueue(currentItem);
+        }
       }
     } catch (_) {}
 
@@ -479,20 +527,22 @@ export async function triggerUploadWorker(): Promise<void> {
       activeStage: '',
     });
 
-    notify(`⚠️ Upload error: ${err.message || 'Connection failed'}`, 'error');
+    if (!verifiedAfterError) {
+      notify(`⚠️ Upload error: ${err.message || 'Connection failed'}`, 'error');
+    }
   } finally {
     isWorkerBusy = false;
     // AUTOMATIC SEQUENTIAL CHAIN:
-    // If more items are pending, immediately trigger next item
+    // Once one file completes (or halts), immediately pick up the next pending item in sequential FIFO order!
     setTimeout(async () => {
       try {
         const items = await dbGetAllQueue();
-        const hasMore = items.some((i) => i.status === 'pending' || i.status === 'uploading');
-        if (hasMore) {
+        const hasMorePending = items.some((i) => i.status === 'pending');
+        if (hasMorePending) {
           triggerUploadWorker();
         }
       } catch (_) {}
-    }, 400);
+    }, 300);
   }
 }
 

@@ -52,14 +52,18 @@ export function setStoredDriveFolderId(folderId: string): void {
   localStorage.setItem('ops_drive_folder_id', folderId.trim());
 }
 
-export const DEFAULT_CHUNK_SIZE_MB = 16;
-export const DEFAULT_CHUNK_SIZE_BYTES = DEFAULT_CHUNK_SIZE_MB * 1024 * 1024; // 16 MB
+export const DEFAULT_CHUNK_SIZE_MB = 4;
+export const DEFAULT_CHUNK_SIZE_BYTES = DEFAULT_CHUNK_SIZE_MB * 1024 * 1024; // 4 MB fast chunks
 
 export function getStoredChunkSize(): number {
   const stored = localStorage.getItem('ops_upload_chunk_size_mb');
   if (stored) {
     const parsedMb = parseFloat(stored);
     if (!isNaN(parsedMb) && parsedMb > 0) {
+      // If legacy 16MB is found, gently migrate to optimal 4MB for high-speed uploads
+      if (parsedMb === 16) {
+        return DEFAULT_CHUNK_SIZE_BYTES;
+      }
       return parsedMb * 1024 * 1024;
     }
   }
@@ -71,6 +75,9 @@ export function getStoredChunkSizeMb(): number {
   if (stored) {
     const parsedMb = parseFloat(stored);
     if (!isNaN(parsedMb) && parsedMb > 0) {
+      if (parsedMb === 16) {
+        return DEFAULT_CHUNK_SIZE_MB;
+      }
       return parsedMb;
     }
   }

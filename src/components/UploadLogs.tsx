@@ -182,6 +182,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
 
   // Deletion Confirmation Modal State
   const [logToDelete, setLogToDelete] = useState<UploadLogItem | null>(null);
+  const [deleteFromSheetsOption, setDeleteFromSheetsOption] = useState(true);
   const [deleteDriveFileOption, setDeleteDriveFileOption] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
@@ -238,7 +239,15 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
           if (qj && currentDeleted.has(qj)) return false;
           return true;
         });
-        setCloudLogs(cleanedLogs);
+
+        // CRITICAL FIX: If cleanedLogs is empty during a background auto-refresh (user is not actively searching),
+        // DO NOT wipe the existing cloud logs! A transient empty response or Google Sheets lock contention
+        // was causing all data to disappear and then reappear on the next refresh cycle.
+        if (cleanedLogs.length === 0 && !isSearchActive) {
+          console.warn('Background refresh received 0 logs from Sheets; preserving active cached logs to prevent UI flicker.');
+        } else {
+          setCloudLogs(cleanedLogs);
+        }
       } else if (!res.success) {
         // Retain existing cloud logs on background refresh error or timeout - never wipe display
         console.warn('Auto-refresh skipped updating cloud logs due to remote failure:', res.error);
@@ -283,7 +292,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
         if (!searchQuery.trim()) {
           loadData(false, '');
         }
-      }, 10000);
+      }, 20000); // Stable 20s refresh to prevent spamming Google Sheets
     } else {
       if (refreshTimerRef.current) clearInterval(refreshTimerRef.current);
     }
@@ -489,6 +498,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
           queueJobId: targetQueueId,
           timestamp: logToDelete.timestamp,
           recordingType: logToDelete.recordingType,
+          deleteFromSheets: deleteFromSheetsOption,
           deleteFromDrive: deleteDriveFileOption,
         });
       } catch (apiErr: any) {
@@ -497,13 +507,14 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
 
       if (backendRes && backendRes.success) {
         const driveNote = backendRes.driveTrashed || backendRes.driveTrashedCount > 0 ? ' and video moved to Drive Trash' : '';
+        const sheetNote = deleteFromSheetsOption ? ' from Google Sheet logs' : ' (retained in Sheet logs)';
         onShowToast(
-          backendRes.message || `Deleted Order ${targetOrderId || 'item'} from Google Sheet logs${driveNote}.`,
+          backendRes.message || `Deleted Order ${targetOrderId || 'item'}${sheetNote}${driveNote}.`,
           'success'
         );
       } else if (backendRes && backendRes.notSupportedByBackend) {
         onShowToast(
-          `Removed Order ${targetOrderId || 'item'} from local log view. (To clear rows from Google Sheet & Drive, please update Apps Script deployment with latest Code.gs)`,
+          `Removed Order ${targetOrderId || 'item'} from local log view.`,
           'info'
         );
       } else {
@@ -511,7 +522,8 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
       }
 
       setLogToDelete(null);
-      setDeleteDriveFileOption(true);
+      setDeleteFromSheetsOption(true);
+      setDeleteDriveFileOption(false);
       // Reload in background
       await loadData(false);
     } catch (err: any) {
@@ -639,6 +651,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
         completed++;
       } else if (cat === 'processing') {
         processing++;
+        pending++; // Count under processing as pending completion
       } else if (cat === 'failed') {
         failed++;
       } else {
@@ -657,6 +670,10 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
 
     return scopedLogs.filter((log) => {
       const cat = categorizeLogStatus(log.status, log.driveFileId);
+      if (statusFilter === 'pending') {
+        // Pending tab displays all pending, queued, and in-progress/processing sessions
+        return cat === 'pending' || cat === 'processing';
+      }
       return cat === statusFilter;
     });
   }, [scopedLogs, statusFilter]);
@@ -1114,18 +1131,6 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
           </button>
 
           <button
-            onClick={() => { setStatusFilter('processing'); setCurrentPage(1); }}
-            className={`px-3 py-1.5 rounded-xl text-xs font-medium transition inline-flex items-center gap-1.5 cursor-pointer ${
-              statusFilter === 'processing'
-                ? 'bg-blue-600 text-white shadow-2xs font-semibold'
-                : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200'
-            }`}
-          >
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            Under Processing ({stats.processing})
-          </button>
-
-          <button
             onClick={() => { setStatusFilter('pending'); setCurrentPage(1); }}
             className={`px-3 py-1.5 rounded-xl text-xs font-medium transition inline-flex items-center gap-1.5 cursor-pointer ${
               statusFilter === 'pending'
@@ -1134,7 +1139,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
             }`}
           >
             <Clock className="w-3.5 h-3.5" />
-            Pending ({stats.pending})
+            Pending / In-Progress ({stats.pending})
           </button>
 
           <button
@@ -1898,23 +1903,44 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
                 </ul>
               </div>
 
-              {/* Checkbox for moving Drive file to trash */}
-              <label className="flex items-start gap-2.5 p-3 rounded-xl border border-blue-200 bg-blue-50/50 hover:bg-blue-50 cursor-pointer transition select-none">
-                <input
-                  type="checkbox"
-                  checked={deleteDriveFileOption}
-                  onChange={(e) => setDeleteDriveFileOption(e.target.checked)}
-                  className="mt-0.5 rounded text-blue-600 focus:ring-blue-500 w-4 h-4"
-                />
-                <div>
-                  <span className="font-bold text-slate-900 text-xs">Also move video recording in Google Drive to Trash</span>
-                  <p className="text-[11px] text-slate-600 mt-0.5">
-                    {logToDelete.driveFileId
-                      ? `Trashes Drive file (${logToDelete.driveFileId}).`
-                      : 'Trashes any linked video file found in Google Drive for this order.'}
-                  </p>
-                </div>
-              </label>
+              {/* Deletion Scope Options */}
+              <div className="space-y-2.5">
+                {/* Checkbox 1: Delete data from Google Sheets logs */}
+                <label className="flex items-start gap-2.5 p-3 rounded-xl border border-rose-200 bg-rose-50/60 hover:bg-rose-50 cursor-pointer transition select-none">
+                  <input
+                    type="checkbox"
+                    checked={deleteFromSheetsOption}
+                    onChange={(e) => setDeleteFromSheetsOption(e.target.checked)}
+                    className="mt-0.5 rounded text-rose-600 focus:ring-rose-500 w-4 h-4"
+                  />
+                  <div>
+                    <span className="font-bold text-slate-900 text-xs">Delete data from Google Sheet Logs</span>
+                    <p className="text-[11px] text-slate-600 mt-0.5">
+                      {deleteFromSheetsOption
+                        ? 'Permanently deletes matching rows from OrderLog, ReturnLog & UploadLog Google Sheets.'
+                        : 'Leaves Google Sheet records intact. Only hides this entry from the local station view.'}
+                    </p>
+                  </div>
+                </label>
+
+                {/* Checkbox 2: Delete video recording from Google Drive */}
+                <label className="flex items-start gap-2.5 p-3 rounded-xl border border-blue-200 bg-blue-50/50 hover:bg-blue-50 cursor-pointer transition select-none">
+                  <input
+                    type="checkbox"
+                    checked={deleteDriveFileOption}
+                    onChange={(e) => setDeleteDriveFileOption(e.target.checked)}
+                    className="mt-0.5 rounded text-blue-600 focus:ring-blue-500 w-4 h-4"
+                  />
+                  <div>
+                    <span className="font-bold text-slate-900 text-xs">Also move video recording in Google Drive to Trash</span>
+                    <p className="text-[11px] text-slate-600 mt-0.5">
+                      {logToDelete.driveFileId
+                        ? `Trashes Drive file (${logToDelete.driveFileId}).`
+                        : 'Trashes any linked video file found in Google Drive for this order.'}
+                    </p>
+                  </div>
+                </label>
+              </div>
 
               {/* Actions */}
               <div className="flex items-center gap-2 pt-2">

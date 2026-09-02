@@ -326,6 +326,7 @@ export async function deleteLogEntry(params: {
   timestamp?: string;
   recordingType?: string;
   deleteFromDrive?: boolean;
+  deleteFromSheets?: boolean;
 }): Promise<{
   success: boolean;
   message?: string;
