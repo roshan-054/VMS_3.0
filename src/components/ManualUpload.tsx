@@ -16,7 +16,7 @@ import {
   X
 } from 'lucide-react';
 import { PlatformType, RecordingType, QueueItem } from '../types';
-import { dbPutQueue, getStoredDriveFolderId } from '../lib/storage';
+import { dbPutQueue, getStoredDriveFolderId, manualFileCache } from '../lib/storage';
 import { checkDuplicate } from '../lib/api';
 import { triggerUploadWorker } from '../lib/uploadWorker';
 
@@ -112,8 +112,15 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
     if (!files || files.length === 0) return;
 
     const newItems: StagedFile[] = [];
+    const maxSizeBytes = (parseInt(localStorage.getItem('ops_max_video_size_mb') || '1024', 10)) * 1024 * 1024;
+    let skippedSize = 0;
+
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
+      if (file.size > maxSizeBytes) {
+        skippedSize++;
+        continue;
+      }
       if (!file.type.includes('video') && !file.name.match(/\.(mp4|webm|mov|mkv|avi)$/i)) {
         onShowToast(`Skipped non-video file: ${file.name}`, 'info');
         continue;
@@ -135,9 +142,17 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
 
     if (newItems.length > 0) {
       setStagedFiles((prev) => [...prev, ...newItems]);
-      onShowToast(`Added ${newItems.length} video(s). Target date folders auto-detected.`, 'success');
+      
+      if (skippedSize > 0) {
+        onShowToast(`Added ${newItems.length} video(s). Skipped ${skippedSize} file(s) exceeding max limit (${maxSizeBytes / (1024 * 1024)} MB).`, 'info');
+      } else {
+        onShowToast(`Added ${newItems.length} video(s). Target date folders auto-detected.`, 'success');
+      }
+      
       // Run duplicate check on new items
       checkDuplicatesForBatch(newItems);
+    } else if (skippedSize > 0) {
+      onShowToast(`Skipped ${skippedSize} file(s) because they exceed the max configured size limit (${maxSizeBytes / (1024 * 1024)} MB).`, 'error');
     }
   };
 
@@ -236,8 +251,20 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
             ? 'video/quicktime'
             : 'video/mp4');
 
+        const itemId = crypto.randomUUID();
+        let finalBlob: Blob | undefined = item.file;
+        let isInMemory = false;
+
+        // Browsers often crash or throw QuotaExceededError/DataCloneError 
+        // when trying to put large File objects (e.g. >50MB) into IndexedDB.
+        if (item.file.size > 50 * 1024 * 1024) {
+          manualFileCache.set(itemId, item.file);
+          finalBlob = new Blob([''], { type: mimeType }); // Lightweight placeholder
+          isInMemory = true;
+        }
+
         const queueItem: QueueItem = {
-          id: crypto.randomUUID(),
+          id: itemId,
           createdAt: Date.now(),
           orderId: item.orderId.trim(),
           platform: effectivePlatform,
@@ -246,7 +273,8 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
           fileSize: item.file.size,
           mimeType: mimeType,
           source: 'Manual Backup Upload',
-          blob: item.file, // Keep as raw File object to prevent IndexedDB memory cloning issues with large files
+          blob: finalBlob,
+          isInMemory: isInMemory,
           status: 'pending',
           progress: 0,
           driveFolderId: driveFolderId,

@@ -1,5 +1,7 @@
 import { QueueItem } from '../types';
 
+export const manualFileCache = new Map<string, File>();
+
 const DB_NAME = 'OrderPackingVideoSystemCleanDB';
 const DB_VERSION = 1;
 const STORE_NAME = 'queue';
@@ -266,4 +268,11 @@ export async function dbDeleteQueueItem(id: string): Promise<void> {
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
   });
+}
+export function getStoredMaxVideoSizeMb(): number {
+  return parseInt(localStorage.getItem('ops_max_video_size_mb') || '1024', 10);
+}
+
+export function setStoredMaxVideoSizeMb(sizeMb: number): void {
+  localStorage.setItem('ops_max_video_size_mb', sizeMb.toString());
 }

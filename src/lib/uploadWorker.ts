@@ -6,6 +6,7 @@ import {
   getStoredChunkSize,
   getStoredAutoUpload,
   getStoredAutoResume,
+  manualFileCache,
 } from './storage';
 import { requestApi, checkDuplicate, normalizeOrderId, cleanupStuckUploads } from './api';
 
@@ -369,7 +370,25 @@ export async function triggerUploadWorker(): Promise<void> {
 
       const startByte = c * chunkSize;
       const endByte = Math.min(startByte + chunkSize, totalBytes);
-      const chunkBlob = currentItem.blob.slice(startByte, endByte);
+      
+      let chunkBlob: Blob;
+      if (currentItem.isInMemory) {
+        const realFile = manualFileCache.get(currentItem.id);
+        if (!realFile) {
+          currentItem.status = 'failed';
+          currentItem.error = 'File lost from memory due to page reload. Please re-queue the video.';
+          await dbPutQueue(currentItem);
+          window.dispatchEvent(new CustomEvent('ops_queue_updated'));
+          isWorkerBusy = false;
+          triggerUploadWorker();
+          return;
+        }
+        chunkBlob = realFile.slice(startByte, endByte);
+      } else {
+        if (!currentItem.blob) throw new Error('Missing Blob data.');
+        chunkBlob = currentItem.blob.slice(startByte, endByte);
+      }
+
       const isFinalChunk = c === totalChunks - 1 || endByte >= totalBytes;
 
       const stageDesc =

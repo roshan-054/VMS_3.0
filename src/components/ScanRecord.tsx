@@ -37,7 +37,7 @@ import {
   XCircle
 } from 'lucide-react';
 import { PlatformType, RecordingType, QueueItem } from '../types';
-import { dbPutQueue, dbGetAllQueue, getStoredDuplicatePolicy, DuplicatePolicy } from '../lib/storage';
+import { dbPutQueue, dbGetAllQueue, getStoredDuplicatePolicy, DuplicatePolicy, getStoredMaxVideoSizeMb } from '../lib/storage';
 import { checkDuplicate, requestApi, normalizeOrderId } from '../lib/api';
 import { triggerUploadWorker } from '../lib/uploadWorker';
 
@@ -967,6 +967,13 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
 
       const blob = new Blob(recordedChunksRef.current, { type: mimeType });
       const sizeMb = (blob.size / (1024 * 1024)).toFixed(2);
+      const maxSizeBytes = getStoredMaxVideoSizeMb() * 1024 * 1024;
+      
+      if (blob.size > maxSizeBytes) {
+        onShowToast(`Recorded video (${sizeMb} MB) exceeds maximum allowed size (${getStoredMaxVideoSizeMb()} MB). Adjust limits in Admin panel if needed.`, 'error');
+        // We still trigger download so they don't lose the footage
+      }
+
       const todayDateStr = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD
 
       // Automatically download to computer's local drive
@@ -978,6 +985,15 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+
+      if (blob.size > maxSizeBytes) {
+        setOrderId('');
+        setRecordingType('Forward');
+        setPlatform('Amazon');
+        setIsRecording(false);
+        recordedChunksRef.current = [];
+        return;
+      }
 
       // Video recorded successfully and stored automatically in IndexedDB & queued for Google Drive sync without prompting Save As dialog
       const queueItem: QueueItem = {

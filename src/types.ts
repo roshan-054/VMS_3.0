@@ -51,6 +51,7 @@ export interface QueueItem {
   mimeType: string;
   source: string;
   blob?: Blob;
+  isInMemory?: boolean;
   status: 'pending' | 'uploading' | 'completed' | 'failed' | 'paused';
   progress: number;
   stage?: string;

@@ -35,7 +35,7 @@ const CONFIG = {
   BRANDING_SHEET: 'Branding',
 
   // Limits
-  MAX_VIDEO_BYTES: 1024 * 1024 * 1024, // 1 GB
+  MAX_VIDEO_BYTES: 1024 * 1024 * 1024 * 5, // 5 GB
   DEFAULT_CHUNK_BYTES: 16 * 1024 * 1024, // 16 MB
   SESSION_SECONDS: 86400, // 24 hours
   RESERVATION_SECONDS: 86400,
@@ -939,7 +939,7 @@ function startUpload_(p){
 
   if(!order||!platform)throw new Error('Order ID and platform are required.');
   if(!['Forward','Return'].includes(type))throw new Error('Invalid recording type.');
-  if(size<=0||size>CONFIG.MAX_VIDEO_BYTES)throw new Error('Invalid video size or video exceeds 1 GB.');
+  if(size<=0||size>CONFIG.MAX_VIDEO_BYTES)throw new Error('Invalid video size or video exceeds maximum backend limits (5 GB).');
 
   // Check duplicate: if duplicate exists and not explicitly bypassed, prevent duplicate upload
   const isBypass = p.bypassDuplicate === true || String(p.bypassDuplicate) === 'true' || p.bypassDuplicate === 1 || p.bypassDuplicate === '1';
@@ -1574,7 +1574,7 @@ function deleteLogEntry_(p){
       const logSheetsToClean = [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET];
       logSheetsToClean.forEach(function(sheetName) {
         try {
-          const targetSh = ss.getSheetByName(sheetName);
+          const targetSh = sheet_(sheetName);
           if (!targetSh) return;
           const targetData = targetSh.getDataRange().getValues();
           // Headers: [Timestamp, Order ID, Platform, Packer Email, Video Drive ID, Video Playback URL, Package Weight, Status, Recording Type, Queue Job ID, Video MIME Type, Playback Status]
