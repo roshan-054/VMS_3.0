@@ -499,34 +499,61 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
       }
 
       // 3. Optimistically update local states immediately for ONLY the target item
-      setCloudLogs((prev) =>
-        prev.filter((l) => {
-          if (targetDriveId && (l.driveFileId === targetDriveId || (l.playbackUrl && l.playbackUrl.includes(targetDriveId)))) return false;
-          if (targetUploadId && l.uploadId === targetUploadId) return false;
-          if (targetQueueId && l.queueJobId === targetQueueId) return false;
-          if (!targetDriveId && !targetUploadId && !targetQueueId && targetOrderId && l.orderId === targetOrderId) {
+      setCloudLogs((prev) => {
+        let deletedOne = false;
+        return prev.filter((l) => {
+          if (deletedOne) return true;
+          if (targetDriveId && (l.driveFileId === targetDriveId || (l.playbackUrl && l.playbackUrl.includes(targetDriveId)))) {
+            deletedOne = true;
+            return false;
+          }
+          if (targetUploadId && l.uploadId === targetUploadId) {
+            deletedOne = true;
+            return false;
+          }
+          if (targetQueueId && l.queueJobId === targetQueueId) {
+            deletedOne = true;
+            return false;
+          }
+          if (targetOrderId && l.orderId === targetOrderId) {
             if (logToDelete.timestamp && l.timestamp && l.timestamp !== logToDelete.timestamp) return true;
+            if (logToDelete.recordingType && l.recordingType && l.recordingType !== logToDelete.recordingType) return true;
+            deletedOne = true;
             return false;
           }
           return true;
-        })
-      );
-      setLocalQueue((prev) =>
-        prev.filter((q) => {
-          if (targetDriveId && q.fileId === targetDriveId) return false;
-          if (targetUploadId && (q.uploadId === targetUploadId || q.id === targetUploadId)) return false;
-          if (targetQueueId && q.id === targetQueueId) return false;
-          if (!targetDriveId && !targetUploadId && !targetQueueId && targetOrderId && q.orderId === targetOrderId) return false;
+        });
+      });
+      setLocalQueue((prev) => {
+        let deletedOne = false;
+        return prev.filter((q) => {
+          if (deletedOne) return true;
+          if (targetDriveId && q.fileId === targetDriveId) {
+            deletedOne = true;
+            return false;
+          }
+          if (targetUploadId && (q.uploadId === targetUploadId || q.id === targetUploadId)) {
+            deletedOne = true;
+            return false;
+          }
+          if (targetQueueId && q.id === targetQueueId) {
+            deletedOne = true;
+            return false;
+          }
+          if (targetOrderId && q.orderId === targetOrderId) {
+            deletedOne = true;
+            return false;
+          }
           return true;
-        })
-      );
+        });
+      });
 
       // Close modals if active for this specific log
       if (playbackLog && (
         (targetDriveId && playbackLog.driveFileId === targetDriveId) ||
         (targetUploadId && playbackLog.uploadId === targetUploadId) ||
         (targetQueueId && playbackLog.queueJobId === targetQueueId) ||
-        (!targetDriveId && !targetUploadId && !targetQueueId && playbackLog.orderId === targetOrderId)
+        (!targetDriveId && !targetUploadId && !targetQueueId && playbackLog.orderId === targetOrderId && playbackLog.timestamp === logToDelete.timestamp)
       )) {
         handleClosePlayback();
       }
@@ -534,7 +561,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
         (targetDriveId && selectedLog.driveFileId === targetDriveId) ||
         (targetUploadId && selectedLog.uploadId === targetUploadId) ||
         (targetQueueId && selectedLog.queueJobId === targetQueueId) ||
-        (!targetDriveId && !targetUploadId && !targetQueueId && selectedLog.orderId === targetOrderId)
+        (!targetDriveId && !targetUploadId && !targetQueueId && selectedLog.orderId === targetOrderId && selectedLog.timestamp === logToDelete.timestamp)
       )) {
         setSelectedLog(null);
       }
@@ -549,6 +576,8 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
           queueJobId: targetQueueId,
           timestamp: logToDelete.timestamp,
           recordingType: logToDelete.recordingType,
+          platform: logToDelete.platform,
+          fileName: logToDelete.fileName,
           deleteFromSheets: deleteFromSheetsOption,
           deleteFromDrive: deleteDriveFileOption,
         });

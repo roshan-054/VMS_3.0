@@ -754,13 +754,14 @@ function advancedSearch_(p){
   const limit = hasSpecificSearch ? Math.min(10000, Math.max(1, Number(p.limit||5000))) : Math.min(1000, Math.max(1, Number(p.limit||100)));
   const rows = [];
   const seenFids = {};
+  const seenJobIds = {};
 
   const sheetsToScan = [
     { name: CONFIG.ORDER_LOG_SHEET, defaultType: 'Forward' },
     { name: CONFIG.RETURN_LOG_SHEET, defaultType: 'Return' }
   ];
 
-  // 1. Scan OrderLog and ReturnLog Sheets
+  // 1. Scan OrderLog and ReturnLog Sheets (Completed Video Records)
   sheetsToScan.forEach(target => {
     try {
       const sh = ss_().getSheetByName(target.name);
@@ -774,8 +775,13 @@ function advancedSearch_(p){
         const pf = String(v[i][2] || '').trim();
         const pe = String(v[i][3] || '').trim();
         const fid = String(v[i][4] || '').trim();
+        const pUrl = String(v[i][5] || '').trim();
         const st = String(v[i][7] || 'Completed').trim();
         const rt = String(v[i][8] || target.defaultType).trim();
+        const jid = String(v[i][9] || '').trim();
+
+        // Must have at least an Order ID or Drive File ID
+        if (!oid && !fid) continue;
 
         if (!isAdmin && normalize_(pe) !== email) continue;
 
@@ -796,6 +802,7 @@ function advancedSearch_(p){
         if (to && ts > to) continue;
 
         if (fid) seenFids[fid] = true;
+        if (jid) seenJobIds[jid] = true;
 
         rows.push({
           timestamp: ts instanceof Date && !isNaN(ts.getTime()) ? ts.toISOString() : String(v[i][0]||''),
@@ -804,11 +811,12 @@ function advancedSearch_(p){
           packerEmail: pe,
           fileId: fid,
           fileName: oid + '_' + pf + '_' + rt + '.mp4',
-          playbackUrl: String(v[i][5] || (fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : '')),
+          playbackUrl: pUrl || (fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : ''),
           downloadUrl: fid ? 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid) : '',
           status: st || 'Completed',
           recordingType: rt,
-          sheet: target.name
+          sheet: target.name,
+          queueJobId: jid
         });
 
         if (rows.length >= limit) break;
@@ -818,7 +826,7 @@ function advancedSearch_(p){
     }
   });
 
-  // 2. Scan UploadLog Sheet for any additional or in-progress/uploaded records
+  // 2. Scan UploadLog Sheet: Only include entries that have a real Drive File ID uploaded
   try {
     if (rows.length < limit) {
       const u = sheet_(CONFIG.UPLOAD_LOG_SHEET).getDataRange().getValues();
@@ -830,11 +838,19 @@ function advancedSearch_(p){
         const pf = String(u[i][2] || '').trim();
         const pe = String(u[i][3] || '').trim();
         const fn = String(u[i][4] || '').trim();
+        const fsz = String(u[i][5] || '').trim();
+        const upId = String(u[i][6] || '').trim();
         const fid = String(u[i][9] || '').trim();
-        const st = String(u[i][10] || 'Completed').trim();
+        const st = String(u[i][10] || '').trim();
         const rt = String(u[i][12] || 'Forward').trim();
+        const jid = String(u[i][14] || '').trim();
 
-        if (fid && seenFids[fid]) continue; // already recorded
+        // CRITICAL FIX: If no file ID exists (file was never actually uploaded or session abandoned),
+        // do not present it as a completed video record in Search Packing Videos
+        if (!fid || fid.length < 5) continue;
+        if (seenFids[fid]) continue; // already recorded from OrderLog
+        if (jid && seenJobIds[jid]) continue;
+
         if (!isAdmin && normalize_(pe) !== email) continue;
 
         if (rawOrder) {
@@ -852,7 +868,8 @@ function advancedSearch_(p){
         if (from && ts < from) continue;
         if (to && ts > to) continue;
 
-        if (fid) seenFids[fid] = true;
+        seenFids[fid] = true;
+        if (jid) seenJobIds[jid] = true;
 
         rows.push({
           timestamp: ts instanceof Date && !isNaN(ts.getTime()) ? ts.toISOString() : String(u[i][0]||''),
@@ -861,11 +878,14 @@ function advancedSearch_(p){
           packerEmail: pe,
           fileId: fid,
           fileName: fn || (oid + '_' + pf + '_' + rt + '.mp4'),
-          playbackUrl: fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : '',
-          downloadUrl: fid ? 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid) : '',
+          fileSize: fsz,
+          uploadId: upId,
+          playbackUrl: 'https://drive.google.com/file/d/' + fid + '/preview',
+          downloadUrl: 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid),
           status: st || 'Completed',
           recordingType: rt,
-          sheet: CONFIG.UPLOAD_LOG_SHEET
+          sheet: CONFIG.UPLOAD_LOG_SHEET,
+          queueJobId: jid
         });
 
         if (rows.length >= limit) break;
@@ -901,6 +921,7 @@ function advancedSearch_(p){
           packerEmail: user.email || 'packer@vms.local',
           fileId: fid,
           fileName: fName,
+          fileSize: String(file.getSize() || ''),
           playbackUrl: 'https://drive.google.com/file/d/' + fid + '/preview',
           downloadUrl: 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid),
           status: 'Completed',
@@ -1403,8 +1424,11 @@ function uploadLogs_(p){
   const isSearchActive = !!(filterOrder || searchQ || (p.fromDate && p.fromDate !== '') || (p.toDate && p.toDate !== ''));
   const limit = isSearchActive ? Math.min(10000, Math.max(1, Number(p.limit || 5000))) : Math.min(2000, Math.max(1, Number(p.limit || 500)));
 
-  // 1. Index completed orders from OrderLog & ReturnLog sheets for instant zero-latency cross-referencing
-  const completedOrders = {};
+  // 1. Index completed orders from OrderLog & ReturnLog sheets by unique Queue Job ID, Upload ID, and Drive File ID
+  const completedByJobId = {};
+  const completedByUploadId = {};
+  const completedByFileId = {};
+
   const orderSheets = [
     { name: CONFIG.ORDER_LOG_SHEET, defType: 'Forward' },
     { name: CONFIG.RETURN_LOG_SHEET, defType: 'Return' }
@@ -1412,16 +1436,17 @@ function uploadLogs_(p){
   for (let s = 0; s < orderSheets.length; s++) {
     try {
       const oSh = sheet_(orderSheets[s].name);
+      if (!oSh) continue;
       const oData = oSh.getDataRange().getValues();
       for (let r = 1; r < oData.length; r++) {
         const oId = String(oData[r][1] || '').trim();
-        const oType = String(oData[r][5] || orderSheets[s].defType).trim();
+        const oType = String(oData[r][8] || orderSheets[s].defType).trim();
         const oPlatform = String(oData[r][2] || '').trim();
-        const oUrl = String(oData[r][4] || '').trim();
-        const oFileId = extractDriveId_(oUrl);
-        if (oId && oFileId) {
-          const key = normalizeOrderId_(oId) + '_' + normalize_(oType);
-          completedOrders[key] = {
+        const oFileId = String(oData[r][4] || '').trim() || extractDriveId_(String(oData[r][5] || ''));
+        const oUrl = String(oData[r][5] || '').trim();
+        const oJobId = String(oData[r][9] || '').trim();
+        if (oFileId) {
+          const item = {
             orderId: oId,
             platform: oPlatform,
             type: oType,
@@ -1430,13 +1455,21 @@ function uploadLogs_(p){
             packerEmail: String(oData[r][3] || ''),
             timestamp: oData[r][0]
           };
+          completedByFileId[oFileId] = item;
+          if (oJobId) {
+            completedByJobId[oJobId] = item;
+            completedByUploadId[oJobId] = item;
+          }
         }
       }
     } catch(e) {}
   }
 
   const v=sheet_(CONFIG.UPLOAD_LOG_SHEET).getDataRange().getValues(), logs=[];
-  const seenOrderTypes = {};
+  const seenFids = {};
+  const seenUploadIds = {};
+  const seenJobIds = {};
+
   let totalCount = 0;
   let completedCount = 0;
   let inProgressCount = 0;
@@ -1456,13 +1489,15 @@ function uploadLogs_(p){
     const uploadId = String(v[i][6]||'');
     let stage = String(v[i][7]||'');
     let progress = String(v[i][8]||'');
+    const queueJobId = String(v[i][14]||'');
 
-    const orderKey = normalizeOrderId_(orderId) + '_' + normalize_(recordingType);
-    const completedMatch = completedOrders[orderKey];
+    // Cross-reference strictly by unique identifiers (Job ID, Upload ID, or existing Drive File ID)
+    const matchedCompleted = (queueJobId && completedByJobId[queueJobId]) || 
+                             (uploadId && completedByUploadId[uploadId]) || 
+                             (driveFileId && completedByFileId[driveFileId]);
 
-    // If order is completed in OrderLog/ReturnLog, instantly resolve Completed status
-    if (completedMatch) {
-      if (!driveFileId) driveFileId = completedMatch.fileId;
+    if (matchedCompleted) {
+      if (!driveFileId) driveFileId = matchedCompleted.fileId;
       rawStatus = 'Completed';
       normSt = 'completed';
       stage = 'Uploaded to Google Drive';
@@ -1477,10 +1512,10 @@ function uploadLogs_(p){
     // Auto-detect abandoned in-progress sessions older than 10 minutes without Drive File ID
     const rowDate = v[i][0] instanceof Date ? v[i][0].getTime() : new Date(v[i][0]).getTime();
     const isStale = (normSt === 'in progress' || normSt === 'uploading' || normSt === 'processing' || normSt === 'started') && !driveFileId && (Date.now() - rowDate > 10 * 60 * 1000);
-    if (isStale && !completedMatch) {
+    if (isStale && !matchedCompleted) {
       rawStatus = 'Interrupted / Stale';
       normSt = 'failed';
-      if (!stage || stage === 'In Progress' || stage.startsWith('Uploading chunk')) {
+      if (!stage || stage === 'In Progress' || stage.startsWith('Uploading chunk') || stage === 'Session started') {
         stage = 'Upload interrupted - Session timed out';
       }
     }
@@ -1513,7 +1548,9 @@ function uploadLogs_(p){
     if(filterType && filterType !== 'all' && normalize_(recordingType) !== filterType) continue;
 
     if(logs.length < limit) {
-      seenOrderTypes[orderKey] = true;
+      if (driveFileId) seenFids[driveFileId] = true;
+      if (uploadId) seenUploadIds[uploadId] = true;
+      if (queueJobId) seenJobIds[queueJobId] = true;
 
       logs.push({
         timestamp: v[i][0] instanceof Date ? v[i][0].toISOString() : String(v[i][0]||''),
@@ -1526,11 +1563,11 @@ function uploadLogs_(p){
         stage: stage,
         progress: progress,
         driveFileId: driveFileId,
-        status: rawStatus || 'Completed',
+        status: rawStatus || (driveFileId ? 'Completed' : 'In Progress'),
         error: String(v[i][11]||''),
         recordingType: recordingType,
-        source: String(v[i][13]||''),
-        queueJobId: String(v[i][14]||''),
+        source: String(v[i][13]||CONFIG.UPLOAD_LOG_SHEET),
+        queueJobId: queueJobId,
         playbackUrl: driveFileId ? 'https://drive.google.com/file/d/' + driveFileId + '/preview' : '',
         downloadUrl: driveFileId ? 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(driveFileId) : ''
       });
@@ -1539,11 +1576,6 @@ function uploadLogs_(p){
 
   // Also include completed records from OrderLog & ReturnLog sheets if not already in UploadLog
   if (logs.length < limit && (!filterStatus || filterStatus === 'all' || filterStatus === 'completed')) {
-    const orderSheets = [
-      { name: CONFIG.ORDER_LOG_SHEET, defType: 'Forward' },
-      { name: CONFIG.RETURN_LOG_SHEET, defType: 'Return' }
-    ];
-
     for (let s = 0; s < orderSheets.length; s++) {
       if (logs.length >= limit) break;
       try {
@@ -1562,9 +1594,13 @@ function uploadLogs_(p){
           const rt = String(odata[i][8] || orderSheets[s].defType).trim();
           const jid = String(odata[i][9] || '').trim();
 
-          const orderKey = normalizeOrderId_(oid) + '_' + normalize_(rt);
-          if (seenOrderTypes[orderKey]) continue;
-          seenOrderTypes[orderKey] = true;
+          // If this exact video file or job ID is already listed in logs, avoid duplicate row
+          if (fid && seenFids[fid]) continue;
+          if (jid && seenJobIds[jid]) continue;
+          if (jid && seenUploadIds[jid]) continue;
+
+          if (fid) seenFids[fid] = true;
+          if (jid) seenJobIds[jid] = true;
 
           totalCount++;
           completedCount++;
@@ -1646,231 +1682,238 @@ function deleteLogEntry_(p){
   const queueJobId = String(p.queueJobId || p.jobId || '').trim();
   const targetTimestampStr = String(p.timestamp || '').trim();
   const targetType = String(p.recordingType || '').trim();
+  const targetPlatform = String(p.platform || '').trim();
+  const targetFileName = String(p.fileName || '').trim();
+  const deleteAllForOrder = p.deleteAllForOrder === true;
   const deleteFromDrive = p.deleteFromDrive !== false;
   const deleteFromSheets = p.deleteFromSheets !== false;
 
-  if (!orderId && !uploadId && !driveFileId && !queueJobId) {
+  if (!orderId && !uploadId && !driveFileId && !queueJobId && !targetFileName) {
     throw new Error('Order ID, Upload ID, Drive File ID, or Queue Job ID is required to remove log entries.');
   }
 
   return withScriptLock_(function() {
     let orderLogsRemoved = 0;
-  let uploadLogsRemoved = 0;
-  let downloadLogsRemoved = 0;
-  const discoveredDriveIds = [];
+    let uploadLogsRemoved = 0;
+    let downloadLogsRemoved = 0;
+    const discoveredDriveIds = [];
 
-  if (driveFileId && driveFileId.length > 5) {
-    discoveredDriveIds.push(driveFileId);
-  }
+    if (driveFileId && driveFileId.length > 5) {
+      discoveredDriveIds.push(driveFileId);
+    }
 
-  // Has specific unique pointer to ONE log entry?
-  const hasSpecificId = Boolean((driveFileId && driveFileId.length > 5) || (uploadId && uploadId.length > 5) || (queueJobId && queueJobId.length > 5));
+    // Has specific unique pointer to ONE log entry?
+    const hasSpecificId = Boolean((driveFileId && driveFileId.length > 5) || (uploadId && uploadId.length > 5) || (queueJobId && queueJobId.length > 5) || (targetFileName && targetFileName.length > 5));
 
-  try {
-    if (deleteFromSheets) {
-      // 1. Delete matching entries from OrderLog and ReturnLog sheets
-      const logSheetsToClean = [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET];
-      logSheetsToClean.forEach(function(sheetName) {
+    try {
+      if (deleteFromSheets) {
+        // 1. Delete matching entry from OrderLog and ReturnLog sheets
+        const logSheetsToClean = [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET];
+        logSheetsToClean.forEach(function(sheetName) {
+          try {
+            const targetSh = sheet_(sheetName);
+            if (!targetSh) return;
+            const targetData = targetSh.getDataRange().getValues();
+            // Headers: [Timestamp, Order ID, Platform, Packer Email, Video Drive ID, Video Playback URL, Package Weight, Status, Recording Type, Queue Job ID, Video MIME Type, Playback Status]
+            for (let i = targetData.length - 1; i >= 1; i--) {
+              const rowTimestamp = targetData[i][0] instanceof Date ? targetData[i][0].toISOString() : String(targetData[i][0] || '').trim();
+              const rowOrderId = String(targetData[i][1] || '').trim();
+              const rowPlatform = String(targetData[i][2] || '').trim();
+              const rowDriveId = String(targetData[i][4] || '').trim();
+              const rowPlayback = String(targetData[i][5] || '').trim();
+              const rowType = String(targetData[i][8] || '').trim();
+              const rowJobId = String(targetData[i][9] || '').trim();
+
+              let match = false;
+              if (hasSpecificId) {
+                // Strict specific match: only match the exact Drive ID, Upload ID, or Queue Job ID
+                if (driveFileId && rowDriveId && rowDriveId === driveFileId) match = true;
+                else if (driveFileId && rowPlayback && rowPlayback.indexOf(driveFileId) !== -1) match = true;
+                else if (uploadId && rowJobId && rowJobId === uploadId) match = true;
+                else if (queueJobId && rowJobId && rowJobId === queueJobId) match = true;
+              } else {
+                // Fallback: match by order ID + platform + recordingType + timestamp
+                if (orderId && rowOrderId && normalizeOrderId_(rowOrderId) === normalizeOrderId_(orderId)) {
+                  let passFilter = true;
+                  if (targetType && rowType && normalize_(targetType) !== normalize_(rowType)) passFilter = false;
+                  if (targetPlatform && rowPlatform && normalize_(targetPlatform) !== normalize_(rowPlatform)) passFilter = false;
+                  
+                  if (passFilter && targetTimestampStr && rowTimestamp) {
+                    const diffMs = Math.abs(new Date(rowTimestamp).getTime() - new Date(targetTimestampStr).getTime());
+                    if (!isNaN(diffMs)) {
+                      passFilter = diffMs <= 3000;
+                    } else {
+                      passFilter = rowTimestamp === targetTimestampStr || rowTimestamp.includes(targetTimestampStr.substring(0, 16));
+                    }
+                  }
+                  if (passFilter) match = true;
+                }
+              }
+
+              if (match) {
+                if (rowDriveId && rowDriveId.length > 5 && !discoveredDriveIds.includes(rowDriveId)) {
+                  discoveredDriveIds.push(rowDriveId);
+                }
+                targetSh.deleteRow(i + 1);
+                orderLogsRemoved++;
+                if (!deleteAllForOrder) {
+                  break;
+                }
+              }
+            }
+          } catch(e) {
+            console.warn('Note deleting from ' + sheetName + ':', e);
+          }
+        });
+
+        // 2. Delete matching entry from UploadLog sheet
         try {
-          const targetSh = sheet_(sheetName);
-          if (!targetSh) return;
-          const targetData = targetSh.getDataRange().getValues();
-          // Headers: [Timestamp, Order ID, Platform, Packer Email, Video Drive ID, Video Playback URL, Package Weight, Status, Recording Type, Queue Job ID, Video MIME Type, Playback Status]
-          for (let i = targetData.length - 1; i >= 1; i--) {
-            const rowTimestamp = targetData[i][0] instanceof Date ? targetData[i][0].toISOString() : String(targetData[i][0] || '').trim();
-            const rowOrderId = String(targetData[i][1] || '').trim();
-            const rowDriveId = String(targetData[i][4] || '').trim();
-            const rowPlayback = String(targetData[i][5] || '').trim();
-            const rowType = String(targetData[i][8] || '').trim();
-            const rowJobId = String(targetData[i][9] || '').trim();
+          const uploadSh = sheet_(CONFIG.UPLOAD_LOG_SHEET);
+          const uploadData = uploadSh.getDataRange().getValues();
+          // Headers: [Timestamp, Order ID, Platform, Packer Email, File Name, File Size, Upload ID, Stage, Progress, Drive File ID, Status, Error, Recording Type, Source, Queue Job ID]
+          for (let i = uploadData.length - 1; i >= 1; i--) {
+            const rowTimestamp = uploadData[i][0] instanceof Date ? uploadData[i][0].toISOString() : String(uploadData[i][0] || '').trim();
+            const rowOrderId = String(uploadData[i][1] || '').trim();
+            const rowPlatform = String(uploadData[i][2] || '').trim();
+            const rowFileName = String(uploadData[i][4] || '').trim();
+            const rowUploadId = String(uploadData[i][6] || '').trim();
+            const rowDriveId = String(uploadData[i][9] || '').trim();
+            const rowType = String(uploadData[i][12] || '').trim();
+            const rowJobId = String(uploadData[i][14] || '').trim();
 
             let match = false;
             if (hasSpecificId) {
-              // Strict specific match: only match the exact Drive ID, Upload ID, or Queue Job ID
+              // Strict specific match: only match the exact Drive ID, Upload ID, Queue Job ID, or File Name
               if (driveFileId && rowDriveId && rowDriveId === driveFileId) match = true;
-              else if (driveFileId && rowPlayback && rowPlayback.indexOf(driveFileId) !== -1) match = true;
+              else if (uploadId && rowUploadId && rowUploadId === uploadId) match = true;
               else if (uploadId && rowJobId && rowJobId === uploadId) match = true;
               else if (queueJobId && rowJobId && rowJobId === queueJobId) match = true;
+              else if (queueJobId && rowUploadId && rowUploadId === queueJobId) match = true;
+              else if (targetFileName && rowFileName && rowFileName === targetFileName) match = true;
             } else {
-              // Fallback: match by order ID, and if timestamp or recordingType is provided, refine to that specific entry
+              // Fallback: match by order ID + platform + recordingType + timestamp
               if (orderId && rowOrderId && normalizeOrderId_(rowOrderId) === normalizeOrderId_(orderId)) {
-                if (targetType && rowType && normalize_(targetType) !== normalize_(rowType)) {
-                  match = false;
-                } else if (targetTimestampStr && rowTimestamp) {
+                let passFilter = true;
+                if (targetType && rowType && normalize_(targetType) !== normalize_(rowType)) passFilter = false;
+                if (targetPlatform && rowPlatform && normalize_(targetPlatform) !== normalize_(rowPlatform)) passFilter = false;
+                
+                if (passFilter && targetTimestampStr && rowTimestamp) {
                   const diffMs = Math.abs(new Date(rowTimestamp).getTime() - new Date(targetTimestampStr).getTime());
-                  if (!isNaN(diffMs) && diffMs < 120000) {
-                    match = true;
-                  } else if (isNaN(diffMs) && (rowTimestamp.includes(targetTimestampStr.substring(0, 10)) || targetTimestampStr.includes(rowTimestamp.substring(0, 10)))) {
-                    match = true;
+                  if (!isNaN(diffMs)) {
+                    passFilter = diffMs <= 3000;
+                  } else {
+                    passFilter = rowTimestamp === targetTimestampStr || rowTimestamp.includes(targetTimestampStr.substring(0, 16));
                   }
-                } else {
-                  match = true;
                 }
+                if (passFilter) match = true;
               }
             }
 
             if (match) {
               if (rowDriveId && rowDriveId.length > 5 && !discoveredDriveIds.includes(rowDriveId)) {
-                if (!hasSpecificId) discoveredDriveIds.push(rowDriveId);
+                discoveredDriveIds.push(rowDriveId);
               }
-              targetSh.deleteRow(i + 1);
-              orderLogsRemoved++;
-            }
-          }
-
-          // Prune completely empty ghost rows
-          const refreshedTargetData = targetSh.getDataRange().getValues();
-          for (let i = refreshedTargetData.length - 1; i >= 1; i--) {
-            const rowOrderId = String(refreshedTargetData[i][1] || '').trim();
-            const rowDriveId = String(refreshedTargetData[i][4] || '').trim();
-            const rowTimestamp = String(refreshedTargetData[i][0] || '').trim();
-            if (!rowOrderId && !rowDriveId && !rowTimestamp) {
-              targetSh.deleteRow(i + 1);
+              uploadSh.deleteRow(i + 1);
+              uploadLogsRemoved++;
+              if (!deleteAllForOrder) {
+                break;
+              }
             }
           }
         } catch(e) {
-          console.warn('Note deleting from ' + sheetName + ':', e);
+          console.warn('Note deleting from UploadLog:', e);
         }
-      });
 
-      // 2. Delete matching entries from UploadLog sheet
-      try {
-        const uploadSh = sheet_(CONFIG.UPLOAD_LOG_SHEET);
-        const uploadData = uploadSh.getDataRange().getValues();
-        // Headers: [Timestamp, Order ID, Platform, Packer Email, File Name, File Size, Upload ID, Stage, Progress, Drive File ID, Status, Error, Recording Type, Source, Queue Job ID]
-        for (let i = uploadData.length - 1; i >= 1; i--) {
-          const rowTimestamp = uploadData[i][0] instanceof Date ? uploadData[i][0].toISOString() : String(uploadData[i][0] || '').trim();
-          const rowOrderId = String(uploadData[i][1] || '').trim();
-          const rowUploadId = String(uploadData[i][6] || '').trim();
-          const rowDriveId = String(uploadData[i][9] || '').trim();
-          const rowType = String(uploadData[i][12] || '').trim();
-          const rowJobId = String(uploadData[i][14] || '').trim();
-
-          let match = false;
-          if (hasSpecificId) {
-            // Strict specific match: only match the exact Drive ID, Upload ID, or Queue Job ID
-            if (driveFileId && rowDriveId && rowDriveId === driveFileId) match = true;
-            else if (uploadId && rowUploadId && rowUploadId === uploadId) match = true;
-            else if (uploadId && rowJobId && rowJobId === uploadId) match = true;
-            else if (queueJobId && rowJobId && rowJobId === queueJobId) match = true;
-            else if (queueJobId && rowUploadId && rowUploadId === queueJobId) match = true;
-          } else {
-            // Fallback: match by order ID, and if timestamp or recordingType is provided, refine to that specific entry
-            if (orderId && rowOrderId && normalizeOrderId_(rowOrderId) === normalizeOrderId_(orderId)) {
-              if (targetType && rowType && normalize_(targetType) !== normalize_(rowType)) {
-                match = false;
-              } else if (targetTimestampStr && rowTimestamp) {
-                const diffMs = Math.abs(new Date(rowTimestamp).getTime() - new Date(targetTimestampStr).getTime());
-                if (!isNaN(diffMs) && diffMs < 120000) {
-                  match = true;
-                } else if (isNaN(diffMs) && (rowTimestamp.includes(targetTimestampStr.substring(0, 10)) || targetTimestampStr.includes(rowTimestamp.substring(0, 10)))) {
+        // 3. Delete matching entry from DownloadLog sheet
+        if (orderId) {
+          try {
+            const dlSh = sheet_(CONFIG.DOWNLOAD_LOG_SHEET);
+            const dlData = dlSh.getDataRange().getValues();
+            for (let i = dlData.length - 1; i >= 1; i--) {
+              const rowOrderId = String(dlData[i][1] || '').trim();
+              const rowTimestamp = dlData[i][0] instanceof Date ? dlData[i][0].toISOString() : String(dlData[i][0] || '').trim();
+              let match = false;
+              if (rowOrderId && normalizeOrderId_(rowOrderId) === normalizeOrderId_(orderId)) {
+                if (targetTimestampStr && rowTimestamp) {
+                  const diffMs = Math.abs(new Date(rowTimestamp).getTime() - new Date(targetTimestampStr).getTime());
+                  if (!isNaN(diffMs) && diffMs <= 3000) match = true;
+                } else if (!targetTimestampStr) {
                   match = true;
                 }
-              } else {
-                match = true;
+              }
+              if (match) {
+                dlSh.deleteRow(i + 1);
+                downloadLogsRemoved++;
+                if (!deleteAllForOrder) break;
               }
             }
-          }
-
-          if (match) {
-            if (rowDriveId && rowDriveId.length > 5 && !discoveredDriveIds.includes(rowDriveId)) {
-              if (!hasSpecificId) discoveredDriveIds.push(rowDriveId);
-            }
-            uploadSh.deleteRow(i + 1);
-            uploadLogsRemoved++;
-          }
+          } catch(e) {}
         }
 
-        // Prune completely empty ghost rows from UploadLog
-        const refreshedUploadData = uploadSh.getDataRange().getValues();
-        for (let i = refreshedUploadData.length - 1; i >= 1; i--) {
-          const rowOrderId = String(refreshedUploadData[i][1] || '').trim();
-          const rowUploadId = String(refreshedUploadData[i][6] || '').trim();
-          const rowTimestamp = String(refreshedUploadData[i][0] || '').trim();
-          if (!rowOrderId && !rowUploadId && !rowTimestamp) {
-            uploadSh.deleteRow(i + 1);
-          }
-        }
-      } catch(e) {
-        console.warn('Note deleting from UploadLog:', e);
+        // 4. Force immediate flush to ensure Google Sheets commits deletions permanently
+        SpreadsheetApp.flush();
       }
 
-      // 3. Delete matching entries from DownloadLog sheet if matching orderId
+      // 5. Delete / trash only the specific video files in Google Drive if requested
+      let driveTrashedCount = 0;
+      if (deleteFromDrive && discoveredDriveIds.length > 0) {
+        discoveredDriveIds.forEach(function(dId) {
+          if (dId && dId.length > 5) {
+            try {
+              const file = DriveApp.getFileById(dId);
+              file.setTrashed(true);
+              driveTrashedCount++;
+            } catch(e) {
+              console.warn('Could not trash drive file ' + dId + ':', e);
+            }
+          }
+        });
+      }
+
+      // 6. Clean up active upload session properties & duplicate reservation locks
+      if (uploadId) {
+        try {
+          PropertiesService.getScriptProperties().deleteProperty('UPLOAD_' + uploadId);
+        } catch(_) {}
+      }
       if (orderId) {
         try {
-          const dlSh = sheet_(CONFIG.DOWNLOAD_LOG_SHEET);
-          const dlData = dlSh.getDataRange().getValues();
-          for (let i = dlData.length - 1; i >= 1; i--) {
-            const rowOrderId = String(dlData[i][1] || '').trim();
-            if (rowOrderId && normalizeOrderId_(rowOrderId) === normalizeOrderId_(orderId)) {
-              dlSh.deleteRow(i + 1);
-              downloadLogsRemoved++;
-            }
-          }
-        } catch(e) {}
+          ['Amazon', 'D2C', 'JioMart', 'Custom'].forEach(function(pf) {
+            ['Forward', 'Return'].forEach(function(tp) {
+              const k = reservationKey_(orderId, pf, tp);
+              releaseReservation_(k);
+            });
+          });
+        } catch(_) {}
       }
 
-      // 4. Force immediate flush to ensure Google Sheets commits deletions permanently
-      SpreadsheetApp.flush();
-    }
-
-    // 5. Delete / trash all discovered video files in Google Drive if requested
-    let driveTrashedCount = 0;
-    if (deleteFromDrive && discoveredDriveIds.length > 0) {
-      discoveredDriveIds.forEach(function(dId) {
-        if (dId && dId.length > 5) {
-          try {
-            const file = DriveApp.getFileById(dId);
-            file.setTrashed(true);
-            driveTrashedCount++;
-          } catch(e) {
-            console.warn('Could not trash drive file ' + dId + ':', e);
-          }
-        }
-      });
-    }
-
-    // 6. Clean up any active upload session properties & duplicate reservation locks
-    if (uploadId) {
+      // 7. Log security event for audit tracking
       try {
-        PropertiesService.getScriptProperties().deleteProperty('UPLOAD_' + uploadId);
-      } catch(_) {}
-    }
-    if (orderId) {
-      try {
-        ['Amazon', 'D2C', 'JioMart', 'Custom'].forEach(function(pf) {
-          ['Forward', 'Return'].forEach(function(tp) {
-            const k = reservationKey_(orderId, pf, tp);
-            releaseReservation_(k);
-          });
-        });
-      } catch(_) {}
-    }
+        sheet_(CONFIG.SECURITY_LOG_SHEET).appendRow([
+          new Date(),
+          user.email,
+          'DELETE_LOG_ENTRY',
+          'SUCCESS',
+          `Removed logs for Order: ${orderId || 'N/A'}, UploadId: ${uploadId || 'N/A'}, DriveIds: [${discoveredDriveIds.join(', ')}]. Removed ${orderLogsRemoved} OrderLog rows, ${uploadLogsRemoved} UploadLog rows, trashed ${driveTrashedCount} Drive files.`
+        ]);
+        SpreadsheetApp.flush();
+      } catch(e){}
 
-    // 7. Log security event for audit tracking
-    try {
-      sheet_(CONFIG.SECURITY_LOG_SHEET).appendRow([
-        new Date(),
-        user.email,
-        'DELETE_LOG_ENTRY',
-        'SUCCESS',
-        `Removed logs for Order: ${orderId || 'N/A'}, UploadId: ${uploadId || 'N/A'}, DriveIds: [${discoveredDriveIds.join(', ')}]. Removed ${orderLogsRemoved} OrderLog rows, ${uploadLogsRemoved} UploadLog rows, trashed ${driveTrashedCount} Drive files.`
-      ]);
-      SpreadsheetApp.flush();
-    } catch(e){}
-
-    return {
-      success: true,
-      message: (deleteFromSheets
-        ? `Entry removed from Google Sheet logs (${orderLogsRemoved} OrderLog, ${uploadLogsRemoved} UploadLog rows deleted).`
-        : 'Logs retained in Google Sheets.') +
-        (driveTrashedCount > 0 ? ` ${driveTrashedCount} video file(s) moved to Google Drive Trash.` : ''),
-      orderLogsRemoved: orderLogsRemoved,
-      uploadLogsRemoved: uploadLogsRemoved,
-      downloadLogsRemoved: downloadLogsRemoved,
-      driveTrashedCount: driveTrashedCount,
-      driveTrashed: driveTrashedCount > 0
-    };
+      return {
+        success: true,
+        message: (deleteFromSheets
+          ? `Entry removed from Google Sheet logs (${orderLogsRemoved} OrderLog, ${uploadLogsRemoved} UploadLog rows deleted).`
+          : 'Logs retained in Google Sheets.') +
+          (driveTrashedCount > 0 ? ` ${driveTrashedCount} video file(s) moved to Google Drive Trash.` : ''),
+        orderLogsRemoved: orderLogsRemoved,
+        uploadLogsRemoved: uploadLogsRemoved,
+        downloadLogsRemoved: downloadLogsRemoved,
+        driveTrashedCount: driveTrashedCount,
+        driveTrashed: driveTrashedCount > 0
+      };
+    } catch(err) {
+      return { success: false, error: err.message || String(err) };
+    }
   }, 12000);
 }
 

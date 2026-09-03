@@ -337,6 +337,9 @@ export async function deleteLogEntry(params: {
   queueJobId?: string;
   timestamp?: string;
   recordingType?: string;
+  platform?: string;
+  fileName?: string;
+  deleteAllForOrder?: boolean;
   deleteFromDrive?: boolean;
   deleteFromSheets?: boolean;
 }): Promise<{
