@@ -26,10 +26,12 @@ import {
   Trash2,
   Cloud,
   Database,
-  AlertTriangle
+  AlertTriangle,
+  Loader2,
+  RotateCw
 } from 'lucide-react';
 import { VideoRecord, User } from '../types';
-import { requestApi, formatFileSize, deleteLogEntry } from '../lib/api';
+import { requestApi, formatFileSize, deleteLogEntry, fetchDriveFileSize } from '../lib/api';
 import { canUserDeleteData } from '../lib/permissions';
 
 interface SearchOrdersProps {
@@ -52,7 +54,42 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast, current
   const [results, setResults] = useState<VideoRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<VideoRecord | null>(null);
+  const [isResolvingSize, setIsResolvingSize] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  // Auto-resolve live file size from Google Drive if unrecorded or showing —
+  useEffect(() => {
+    if (!selectedRecord) return;
+    const curFormatted = formatFileSize(selectedRecord.fileSize);
+    if ((curFormatted === '—' || !selectedRecord.fileSize) && selectedRecord.fileId) {
+      let isMounted = true;
+      setIsResolvingSize(true);
+      fetchDriveFileSize({
+        driveFileId: selectedRecord.fileId,
+        orderId: selectedRecord.orderId,
+      })
+        .then((resolved) => {
+          if (!isMounted) return;
+          setIsResolvingSize(false);
+          if (resolved && resolved !== '—') {
+            setSelectedRecord((prev) => (prev ? { ...prev, fileSize: resolved } : null));
+            setResults((prev) =>
+              prev.map((item) =>
+                item.fileId === selectedRecord.fileId || (item.orderId && item.orderId === selectedRecord.orderId)
+                  ? { ...item, fileSize: resolved }
+                  : item
+              )
+            );
+          }
+        })
+        .catch(() => {
+          if (isMounted) setIsResolvingSize(false);
+        });
+      return () => {
+        isMounted = false;
+      };
+    }
+  }, [selectedRecord?.fileId, selectedRecord?.orderId]);
 
   // Deletion modal state
   const [recordToDelete, setRecordToDelete] = useState<VideoRecord | null>(null);
@@ -803,9 +840,50 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast, current
 
                   {/* File Size */}
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase">Video File Size</span>
-                    <p className="text-xs font-mono font-medium text-slate-800">
-                      {formatFileSize(selectedRecord.fileSize) || 'Standard 1080p'}
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase">Video File Size</span>
+                      {selectedRecord.fileId && (
+                        <button
+                          type="button"
+                          disabled={isResolvingSize}
+                          onClick={async () => {
+                            setIsResolvingSize(true);
+                            const res = await fetchDriveFileSize({
+                              driveFileId: selectedRecord.fileId!,
+                              orderId: selectedRecord.orderId,
+                            });
+                            setIsResolvingSize(false);
+                            if (res && res !== '—') {
+                              setSelectedRecord((prev) => (prev ? { ...prev, fileSize: res } : null));
+                              setResults((prev) =>
+                                prev.map((item) =>
+                                  item.fileId === selectedRecord.fileId ||
+                                  (item.orderId && item.orderId === selectedRecord.orderId)
+                                    ? { ...item, fileSize: res }
+                                    : item
+                                )
+                              );
+                              onShowToast(`File size updated: ${res}`, 'success');
+                            } else {
+                              onShowToast('Could not fetch file size from Drive.', 'error');
+                            }
+                          }}
+                          className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 hover:bg-slate-200 text-slate-600 border border-slate-200 transition cursor-pointer flex items-center gap-1"
+                          title="Fetch live file size from Google Drive"
+                        >
+                          <RotateCw className={`w-2.5 h-2.5 ${isResolvingSize ? 'animate-spin' : ''}`} />
+                          Check Size
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-xs font-mono font-semibold text-slate-800 mt-1">
+                      {isResolvingSize ? (
+                        <span className="inline-flex items-center gap-1 text-blue-500 text-xs">
+                          <Loader2 className="w-3 h-3 animate-spin" /> Querying Drive...
+                        </span>
+                      ) : (
+                        formatFileSize(selectedRecord.fileSize)
+                      )}
                     </p>
                   </div>
 

@@ -34,7 +34,7 @@ import {
   Share2
 } from 'lucide-react';
 import { User, UploadLogItem, QueueItem, PlatformType, RecordingType } from '../types';
-import { fetchUploadLogs, deleteLogEntry, formatFileSize } from '../lib/api';
+import { fetchUploadLogs, deleteLogEntry, formatFileSize, fetchDriveFileSize } from '../lib/api';
 import { dbGetAllQueue, dbPutQueue, dbDeleteQueueItem, getStoredDriveFolderId, getStoredAutoRefreshInterval } from '../lib/storage';
 import { canUserDeleteData } from '../lib/permissions';
 import { retryUploadItem, fixAndCleanAllStuckUploads, subscribeWorkerStatus } from '../lib/uploadWorker';
@@ -199,7 +199,44 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
   const [isLoading, setIsLoading] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [selectedLog, setSelectedLog] = useState<UploadLogItem | null>(null);
+  const [isResolvingSize, setIsResolvingSize] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  // Auto-resolve live file size from Google Drive if unrecorded or showing —
+  useEffect(() => {
+    if (!selectedLog) return;
+    const curFormatted = formatFileSize(selectedLog.fileSize);
+    if ((curFormatted === '—' || !selectedLog.fileSize) && selectedLog.driveFileId) {
+      let isMounted = true;
+      setIsResolvingSize(true);
+      fetchDriveFileSize({
+        driveFileId: selectedLog.driveFileId,
+        orderId: selectedLog.orderId,
+      })
+        .then((resolved) => {
+          if (!isMounted) return;
+          setIsResolvingSize(false);
+          if (resolved && resolved !== '—') {
+            setSelectedLog((prev) => (prev ? { ...prev, fileSize: resolved } : null));
+            setCloudLogs((prev) =>
+              prev.map((item) =>
+                (item.uploadId && item.uploadId === selectedLog.uploadId) ||
+                (item.driveFileId && item.driveFileId === selectedLog.driveFileId) ||
+                (item.orderId && item.orderId === selectedLog.orderId)
+                  ? { ...item, fileSize: resolved }
+                  : item
+              )
+            );
+          }
+        })
+        .catch(() => {
+          if (isMounted) setIsResolvingSize(false);
+        });
+      return () => {
+        isMounted = false;
+      };
+    }
+  }, [selectedLog?.uploadId, selectedLog?.driveFileId]);
 
   // Playback Modal State
   const [playbackLog, setPlaybackLog] = useState<UploadLogItem | null>(null);
@@ -2249,9 +2286,53 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
                   <span className="ml-2 font-mono text-slate-800">{selectedLog.fileName}</span>
                 </div>
 
-                <div>
-                  <span className="text-slate-400 font-medium">File Size:</span>
-                  <span className="ml-2 font-mono text-slate-800">{formatFileSize(selectedLog.fileSize)}</span>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-slate-400 font-medium">File Size:</span>
+                    <span className="ml-2 font-mono text-slate-800 font-semibold">
+                      {isResolvingSize ? (
+                        <span className="inline-flex items-center gap-1 text-blue-500 text-xs">
+                          <Loader2 className="w-3 h-3 animate-spin" /> Querying Drive...
+                        </span>
+                      ) : (
+                        formatFileSize(selectedLog.fileSize)
+                      )}
+                    </span>
+                  </div>
+                  {selectedLog.driveFileId && (
+                    <button
+                      type="button"
+                      disabled={isResolvingSize}
+                      onClick={async () => {
+                        setIsResolvingSize(true);
+                        const res = await fetchDriveFileSize({
+                          driveFileId: selectedLog.driveFileId!,
+                          orderId: selectedLog.orderId,
+                        });
+                        setIsResolvingSize(false);
+                        if (res && res !== '—') {
+                          setSelectedLog((prev) => (prev ? { ...prev, fileSize: res } : null));
+                          setCloudLogs((prev) =>
+                            prev.map((item) =>
+                              (item.uploadId && item.uploadId === selectedLog.uploadId) ||
+                              (item.driveFileId && item.driveFileId === selectedLog.driveFileId) ||
+                              (item.orderId && item.orderId === selectedLog.orderId)
+                                ? { ...item, fileSize: res }
+                                : item
+                            )
+                          );
+                          onShowToast(`File size updated: ${res}`, 'success');
+                        } else {
+                          onShowToast('Could not fetch file size from Drive.', 'error');
+                        }
+                      }}
+                      className="px-2 py-0.5 rounded text-[10px] font-medium bg-slate-100 hover:bg-slate-200 text-slate-600 border border-slate-200 transition cursor-pointer flex items-center gap-1"
+                      title="Fetch live file size from Google Drive"
+                    >
+                      <RotateCw className={`w-2.5 h-2.5 ${isResolvingSize ? 'animate-spin' : ''}`} />
+                      Check Size
+                    </button>
+                  )}
                 </div>
 
                 <div>

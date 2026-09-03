@@ -13,124 +13,190 @@ html.dark body {
   color-scheme: dark;
 }
 
-/* Backgrounds */
-html.dark .bg-white {
+/* Backgrounds - Comprehensive wildcard matching */
+html.dark .bg-white,
+html.dark [class*="bg-white"] {
   background-color: #151d30 !important;
 }
 
-html.dark .bg-slate-50 {
+html.dark .bg-slate-50,
+html.dark [class*="bg-slate-50"],
+html.dark [class*="bg-gray-50"],
+html.dark [class*="bg-zinc-50"],
+html.dark [class*="bg-neutral-50"] {
   background-color: #0f172a !important;
 }
 
-html.dark .bg-slate-100 {
-  background-color: #0b0f19 !important;
+html.dark .bg-slate-100,
+html.dark [class*="bg-slate-100"],
+html.dark [class*="bg-gray-100"],
+html.dark [class*="bg-zinc-100"],
+html.dark [class*="bg-neutral-100"] {
+  background-color: #0f172a !important;
 }
 
-html.dark .bg-slate-200 {
+html.dark .bg-slate-200,
+html.dark [class*="bg-slate-200"],
+html.dark [class*="bg-gray-200"],
+html.dark [class*="bg-zinc-200"],
+html.dark [class*="bg-neutral-200"] {
   background-color: #1e293b !important;
 }
 
-html.dark .bg-slate-300 {
+html.dark .bg-slate-300,
+html.dark [class*="bg-slate-300"],
+html.dark [class*="bg-gray-300"] {
   background-color: #334155 !important;
 }
 
-html.dark .bg-slate-50\/50 {
-  background-color: rgba(15, 23, 42, 0.6) !important;
-}
-
-html.dark .bg-blue-50 {
+/* Colored Container Tints */
+html.dark [class*="bg-blue-50"] {
   background-color: rgba(30, 58, 138, 0.25) !important;
 }
 
-html.dark .bg-emerald-50 {
+html.dark [class*="bg-purple-50"],
+html.dark [class*="bg-purple-100"] {
+  background-color: rgba(88, 28, 135, 0.25) !important;
+}
+
+html.dark [class*="bg-emerald-50"],
+html.dark [class*="bg-emerald-100"] {
   background-color: rgba(6, 78, 59, 0.25) !important;
 }
 
-html.dark .bg-amber-50 {
+html.dark [class*="bg-amber-50"],
+html.dark [class*="bg-amber-100"] {
   background-color: rgba(120, 53, 15, 0.25) !important;
 }
 
-html.dark .bg-red-50 {
+html.dark [class*="bg-red-50"],
+html.dark [class*="bg-red-100"],
+html.dark [class*="bg-rose-50"],
+html.dark [class*="bg-rose-100"] {
   background-color: rgba(127, 29, 29, 0.25) !important;
 }
 
-html.dark .bg-indigo-50 {
+html.dark [class*="bg-indigo-50"],
+html.dark [class*="bg-indigo-100"] {
   background-color: rgba(49, 46, 129, 0.25) !important;
 }
 
+html.dark [class*="bg-sky-50"],
+html.dark [class*="bg-sky-100"] {
+  background-color: rgba(12, 74, 110, 0.25) !important;
+}
+
 /* Text Colors */
-html.dark .text-slate-900,
-html.dark .text-slate-800 {
+html.dark [class*="text-slate-900"],
+html.dark [class*="text-slate-800"],
+html.dark [class*="text-gray-900"],
+html.dark [class*="text-gray-800"] {
   color: #f8fafc !important;
 }
 
-html.dark .text-slate-700 {
+html.dark [class*="text-slate-700"],
+html.dark [class*="text-gray-700"] {
   color: #cbd5e1 !important;
 }
 
-html.dark .text-slate-600 {
+html.dark [class*="text-slate-600"],
+html.dark [class*="text-gray-600"] {
   color: #94a3b8 !important;
 }
 
-html.dark .text-slate-500 {
+html.dark [class*="text-slate-500"],
+html.dark [class*="text-gray-500"],
+html.dark [class*="text-slate-400"],
+html.dark [class*="text-gray-400"] {
   color: #64748b !important;
 }
 
-html.dark .text-slate-400 {
-  color: #64748b !important;
-}
-
-html.dark .text-blue-700,
-html.dark .text-blue-800,
-html.dark .text-blue-900 {
+html.dark [class*="text-blue-600"],
+html.dark [class*="text-blue-700"],
+html.dark [class*="text-blue-800"],
+html.dark [class*="text-blue-900"] {
   color: #60a5fa !important;
 }
 
-html.dark .text-emerald-700,
-html.dark .text-emerald-800 {
+html.dark [class*="text-purple-600"],
+html.dark [class*="text-purple-700"],
+html.dark [class*="text-purple-800"],
+html.dark [class*="text-purple-900"] {
+  color: #c084fc !important;
+}
+
+html.dark [class*="text-emerald-600"],
+html.dark [class*="text-emerald-700"],
+html.dark [class*="text-emerald-800"] {
   color: #34d399 !important;
 }
 
-html.dark .text-amber-700,
-html.dark .text-amber-800,
-html.dark .text-amber-900 {
+html.dark [class*="text-amber-600"],
+html.dark [class*="text-amber-700"],
+html.dark [class*="text-amber-800"],
+html.dark [class*="text-amber-900"] {
   color: #fbbf24 !important;
 }
 
-html.dark .text-red-700,
-html.dark .text-red-800 {
+html.dark [class*="text-red-600"],
+html.dark [class*="text-red-700"],
+html.dark [class*="text-red-800"],
+html.dark [class*="text-rose-600"],
+html.dark [class*="text-rose-700"],
+html.dark [class*="text-rose-800"] {
   color: #f87171 !important;
 }
 
-html.dark .text-indigo-600,
-html.dark .text-indigo-700 {
+html.dark [class*="text-indigo-600"],
+html.dark [class*="text-indigo-700"] {
   color: #818cf8 !important;
 }
 
+html.dark [class*="text-sky-700"],
+html.dark [class*="text-sky-800"] {
+  color: #38bdf8 !important;
+}
+
 /* Borders */
-html.dark .border-slate-100,
-html.dark .border-slate-200,
-html.dark .border-slate-300 {
+html.dark [class*="border-slate-100"],
+html.dark [class*="border-slate-200"],
+html.dark [class*="border-slate-300"],
+html.dark [class*="border-gray-100"],
+html.dark [class*="border-gray-200"],
+html.dark [class*="border-gray-300"] {
   border-color: #1e293b !important;
 }
 
-html.dark .border-blue-200,
-html.dark .border-blue-300 {
+html.dark [class*="border-blue-100"],
+html.dark [class*="border-blue-200"],
+html.dark [class*="border-blue-300"] {
   border-color: rgba(59, 130, 246, 0.3) !important;
 }
 
-html.dark .border-emerald-200,
-html.dark .border-emerald-300 {
+html.dark [class*="border-purple-100"],
+html.dark [class*="border-purple-200"],
+html.dark [class*="border-purple-300"] {
+  border-color: rgba(168, 85, 247, 0.3) !important;
+}
+
+html.dark [class*="border-emerald-100"],
+html.dark [class*="border-emerald-200"],
+html.dark [class*="border-emerald-300"] {
   border-color: rgba(16, 185, 129, 0.3) !important;
 }
 
-html.dark .border-amber-200,
-html.dark .border-amber-300 {
+html.dark [class*="border-amber-100"],
+html.dark [class*="border-amber-200"],
+html.dark [class*="border-amber-300"] {
   border-color: rgba(245, 158, 11, 0.3) !important;
 }
 
-html.dark .border-red-200,
-html.dark .border-red-300 {
+html.dark [class*="border-red-100"],
+html.dark [class*="border-red-200"],
+html.dark [class*="border-red-300"],
+html.dark [class*="border-rose-100"],
+html.dark [class*="border-rose-200"],
+html.dark [class*="border-rose-300"] {
   border-color: rgba(239, 68, 68, 0.3) !important;
 }
 
@@ -187,10 +253,14 @@ html.dark .shadow-2xl {
 
 /* Hover effects */
 html.dark .hover\:bg-slate-50:hover,
-html.dark .hover\:bg-slate-100:hover {
+html.dark .hover\:bg-slate-100:hover,
+html.dark .hover\:bg-gray-50:hover,
+html.dark .hover\:bg-gray-100:hover {
   background-color: #1e293b !important;
 }
 
-html.dark .hover\:bg-slate-200:hover {
+html.dark .hover\:bg-slate-200:hover,
+html.dark .hover\:bg-gray-200:hover {
   background-color: #334155 !important;
 }
+

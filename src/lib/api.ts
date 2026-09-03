@@ -493,3 +493,28 @@ export async function uploadBrandingImage(params: {
     message: res.message,
   };
 }
+
+export async function fetchDriveFileSize(params: {
+  driveFileId: string;
+  orderId?: string;
+}): Promise<string | null> {
+  if (!params.driveFileId) return null;
+  try {
+    const res = await requestApi<{
+      success: boolean;
+      fileSize?: number | string;
+      fileName?: string;
+      error?: string;
+    }>('getDriveFileSize', {
+      driveFileId: params.driveFileId,
+      orderId: params.orderId || '',
+    });
+    if (res && res.success && res.fileSize) {
+      return formatFileSize(res.fileSize);
+    }
+  } catch (e) {
+    console.warn('fetchDriveFileSize note:', e);
+  }
+  return null;
+}
+

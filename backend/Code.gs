@@ -97,6 +97,7 @@ function doPost(e) {
       case 'getBranding': return output_(getBrandingConfig_());
       case 'saveBranding': return output_(saveBrandingConfig_(p));
       case 'uploadBrandingImage': return output_(uploadBrandingImage_(p));
+      case 'getDriveFileSize': return output_(getDriveFileSize_(p));
       default: return output_({success:false, error:'Unknown action: '+a});
     }
   } catch(err) {
@@ -804,6 +805,7 @@ function advancedSearch_(p){
         if (fid) seenFids[fid] = true;
         if (jid) seenJobIds[jid] = true;
 
+        const fSizeVal = String(v[i][6] || '').trim();
         rows.push({
           timestamp: ts instanceof Date && !isNaN(ts.getTime()) ? ts.toISOString() : String(v[i][0]||''),
           orderId: oid,
@@ -811,6 +813,7 @@ function advancedSearch_(p){
           packerEmail: pe,
           fileId: fid,
           fileName: oid + '_' + pf + '_' + rt + '.mp4',
+          fileSize: (!fSizeVal || fSizeVal === '0' || fSizeVal === '0 B' || fSizeVal === '0 MB') ? '—' : fSizeVal,
           playbackUrl: pUrl || (fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : ''),
           downloadUrl: fid ? 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid) : '',
           driveLink: pUrl || (fid ? 'https://drive.google.com/file/d/' + fid + '/view' : ''),
@@ -1345,7 +1348,7 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
         s.packerEmail || (user ? user.email : ''),
         fid,
         playback,
-        '',
+        s.size || '',
         'Completed',
         s.type,
         s.queueJobId || '',
@@ -2298,5 +2301,53 @@ function uploadBrandingImage_(p) {
     url: directUrl,
     message: 'Branding image uploaded to Google Drive folder "' + brandingFolder.getName() + '" and cell updated in Google Sheet.'
   };
+}
+
+/**
+ * Resolves exact Google Drive file size on-demand and writes it back to Google Sheets.
+ */
+function getDriveFileSize_(p) {
+  session_(p.token);
+  const fid = String(p.driveFileId || p.fileId || '').trim();
+  if (!fid) throw new Error('Valid Google Drive file ID is required.');
+
+  try {
+    const file = DriveApp.getFileById(fid);
+    const bytes = file.getSize();
+    const name = file.getName();
+    const orderId = String(p.orderId || '').trim();
+
+    if (bytes > 0 && orderId) {
+      try {
+        const orderSheets = [sheet_(CONFIG.ORDER_LOG_SHEET), sheet_(CONFIG.RETURN_LOG_SHEET), sheet_(CONFIG.UPLOAD_LOG_SHEET)];
+        orderSheets.forEach(function(sh) {
+          if (!sh) return;
+          const data = sh.getDataRange().getValues();
+          for (let i = data.length - 1; i >= 1; i--) {
+            const rowOid = String(data[i][1] || '').trim();
+            const rowFid = String(data[i][4] || data[i][9] || '').trim();
+            if (rowOid === orderId || (rowFid && rowFid === fid)) {
+              if (sh.getName() === CONFIG.UPLOAD_LOG_SHEET) {
+                sh.getRange(i + 1, 6).setValue(bytes);
+              } else {
+                sh.getRange(i + 1, 7).setValue(bytes);
+              }
+            }
+          }
+        });
+      } catch(sheetUpdateErr) {
+        console.warn('Auto update sheet file size note:', sheetUpdateErr);
+      }
+    }
+
+    return {
+      success: true,
+      fileId: fid,
+      fileSize: bytes,
+      fileName: name
+    };
+  } catch (err) {
+    return { success: false, error: err.message || String(err) };
+  }
 }
 
