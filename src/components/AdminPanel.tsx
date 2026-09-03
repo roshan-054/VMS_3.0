@@ -803,24 +803,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
       {/* SETTINGS & DRIVE INTEGRATION TAB */}
       {adminTab === 'settings' && (
         <div className="space-y-6">
-          {/* Header Notice */}
-          <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-2xl p-5 flex items-start gap-3.5 shadow-xs">
-            <div className="w-9 h-9 rounded-xl bg-purple-600 text-white flex items-center justify-center shrink-0">
-              <HardDrive className="w-5 h-5" />
-            </div>
-            <div className="flex-1">
-              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                Google Apps Script & Google Drive Settings
-                <span className="bg-purple-600 text-white text-[9px] font-bold px-2 py-0.5 rounded-full">
-                  STORAGE & SYNC
-                </span>
-              </h3>
-              <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                Configure your Google Apps Script Web App webhook, target Google Drive folder destination, and high-speed chunked upload limits.
-              </p>
-            </div>
-          </div>
-
           <form onSubmit={handleSaveSettings} className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             {/* Left 7 Columns: Form Controls */}
             <div className="lg:col-span-7 space-y-5">
@@ -1405,24 +1387,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
       )}
       {adminTab === 'branding' && (
         <div className="space-y-6">
-          {/* Information Notice */}
-          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-4 flex items-start gap-3 shadow-xs">
-            <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0">
-              <Palette className="w-4 h-4" />
-            </div>
-            <div className="flex-1">
-              <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                Permanent Custom Branding
-                <span className="bg-blue-600 text-white text-[9px] font-bold px-1.5 py-0.2 rounded">
-                  PERSISTENT
-                </span>
-              </h3>
-              <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
-                Logos, browser favicons, and workstation titles saved here are stored in persistent local storage and will <strong>never change or reset</strong> unless you manually modify or reset them from this Admin panel.
-              </p>
-            </div>
-          </div>
-
           <form onSubmit={handleSaveBranding} className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             {/* Left Column: Configuration Controls */}
             <div className="lg:col-span-7 space-y-5">

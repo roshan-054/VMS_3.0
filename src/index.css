@@ -50,6 +50,11 @@ html.dark [class*="bg-gray-300"] {
 }
 
 /* Colored Container Tints */
+html.dark [class*="bg-gradient-"] {
+  background-image: none !important;
+  background-color: #151d30 !important;
+}
+
 html.dark [class*="bg-blue-50"] {
   background-color: rgba(30, 58, 138, 0.25) !important;
 }
