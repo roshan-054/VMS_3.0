@@ -953,16 +953,35 @@ function logUpload_(row){
   }
 }
 
-function updateUploadLog_(uploadId,stage,progress,fileId,status,error){
+function updateUploadLog_(uploadId, stage, progress, fileId, status, error, queueJobId, orderId, recType){
   try {
-    const sh=sheet_(CONFIG.UPLOAD_LOG_SHEET), v=sh.getDataRange().getValues();
-    for(let i=v.length-1;i>=1;i--){
-      if(String(v[i][6]||'')===String(uploadId)){
-        sh.getRange(i+1,8,1,5).setValues([[stage,progress,fileId||'',status||'',error||'']]);
+    const sh = sheet_(CONFIG.UPLOAD_LOG_SHEET);
+    const v = sh.getDataRange().getValues();
+    const normUploadId = normalize_(uploadId);
+    const normJobId = normalize_(queueJobId);
+    const normOrderId = normalizeOrderId_(orderId);
+    const normType = normalize_(recType);
+
+    for (let i = v.length - 1; i >= 1; i--) {
+      const rUploadId = normalize_(v[i][6]);
+      const rJobId = normalize_(v[i][14]);
+      const rOrderId = normalizeOrderId_(v[i][1]);
+      const rType = normalize_(v[i][12]);
+
+      let match = false;
+      if (normUploadId && rUploadId === normUploadId) match = true;
+      else if (normJobId && rJobId && rJobId === normJobId) match = true;
+      else if (normOrderId && rOrderId === normOrderId && (!normType || rType === normType)) match = true;
+
+      if (match) {
+        sh.getRange(i + 1, 8, 1, 5).setValues([[stage || 'Uploaded to Google Drive', progress !== undefined ? progress : 100, fileId || '', status || 'Completed', error || '']]);
+        SpreadsheetApp.flush();
         return;
       }
     }
-  } catch(e){}
+  } catch(e) {
+    console.warn('updateUploadLog_ note:', e);
+  }
 }
 
 /* ---------- Start Upload Session ---------- */
@@ -1321,7 +1340,7 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
         ]);
       } catch(_) {}
     }
-    updateUploadLog_(uploadId, 'Completed', 100, fid, 'Completed', '');
+    updateUploadLog_(uploadId, 'Uploaded to Google Drive', 100, fid, 'Completed', '', s.queueJobId, s.order, s.type);
     if(s.reservationKey) releaseReservation_(s.reservationKey);
     cleanupOldStartedUploads_(s.order, uploadId);
 
@@ -1380,9 +1399,41 @@ function uploadLogs_(p){
   const filterType = normalize_(p.recordingType);
   const searchQ = normalize_(p.searchQuery || p.search);
   
-  // When an orderId or search query is present, do not cap at 500 - scan all rows
+  // When an orderId or search query is present, scan all rows
   const isSearchActive = !!(filterOrder || searchQ || (p.fromDate && p.fromDate !== '') || (p.toDate && p.toDate !== ''));
   const limit = isSearchActive ? Math.min(10000, Math.max(1, Number(p.limit || 5000))) : Math.min(2000, Math.max(1, Number(p.limit || 500)));
+
+  // 1. Index completed orders from OrderLog & ReturnLog sheets for instant zero-latency cross-referencing
+  const completedOrders = {};
+  const orderSheets = [
+    { name: CONFIG.ORDER_LOG_SHEET, defType: 'Forward' },
+    { name: CONFIG.RETURN_LOG_SHEET, defType: 'Return' }
+  ];
+  for (let s = 0; s < orderSheets.length; s++) {
+    try {
+      const oSh = sheet_(orderSheets[s].name);
+      const oData = oSh.getDataRange().getValues();
+      for (let r = 1; r < oData.length; r++) {
+        const oId = String(oData[r][1] || '').trim();
+        const oType = String(oData[r][5] || orderSheets[s].defType).trim();
+        const oPlatform = String(oData[r][2] || '').trim();
+        const oUrl = String(oData[r][4] || '').trim();
+        const oFileId = extractDriveId_(oUrl);
+        if (oId && oFileId) {
+          const key = normalizeOrderId_(oId) + '_' + normalize_(oType);
+          completedOrders[key] = {
+            orderId: oId,
+            platform: oPlatform,
+            type: oType,
+            fileId: oFileId,
+            url: oUrl,
+            packerEmail: String(oData[r][3] || ''),
+            timestamp: oData[r][0]
+          };
+        }
+      }
+    } catch(e) {}
+  }
 
   const v=sheet_(CONFIG.UPLOAD_LOG_SHEET).getDataRange().getValues(), logs=[];
   const seenOrderTypes = {};
@@ -1400,15 +1451,33 @@ function uploadLogs_(p){
     const orderId = String(v[i][1]||'');
     const platform = String(v[i][2]||'');
     const recordingType = String(v[i][12]||'Forward');
-    const driveFileId = String(v[i][9]||'');
+    let driveFileId = String(v[i][9]||'');
     const fileName = String(v[i][4]||'');
     const uploadId = String(v[i][6]||'');
     let stage = String(v[i][7]||'');
+    let progress = String(v[i][8]||'');
+
+    const orderKey = normalizeOrderId_(orderId) + '_' + normalize_(recordingType);
+    const completedMatch = completedOrders[orderKey];
+
+    // If order is completed in OrderLog/ReturnLog, instantly resolve Completed status
+    if (completedMatch) {
+      if (!driveFileId) driveFileId = completedMatch.fileId;
+      rawStatus = 'Completed';
+      normSt = 'completed';
+      stage = 'Uploaded to Google Drive';
+      progress = '100';
+    } else if (driveFileId && driveFileId.length > 5 && normSt !== 'failed') {
+      rawStatus = 'Completed';
+      normSt = 'completed';
+      stage = 'Uploaded to Google Drive';
+      progress = '100';
+    }
 
     // Auto-detect abandoned in-progress sessions older than 10 minutes without Drive File ID
     const rowDate = v[i][0] instanceof Date ? v[i][0].getTime() : new Date(v[i][0]).getTime();
     const isStale = (normSt === 'in progress' || normSt === 'uploading' || normSt === 'processing' || normSt === 'started') && !driveFileId && (Date.now() - rowDate > 10 * 60 * 1000);
-    if (isStale) {
+    if (isStale && !completedMatch) {
       rawStatus = 'Interrupted / Stale';
       normSt = 'failed';
       if (!stage || stage === 'In Progress' || stage.startsWith('Uploading chunk')) {
@@ -1444,7 +1513,6 @@ function uploadLogs_(p){
     if(filterType && filterType !== 'all' && normalize_(recordingType) !== filterType) continue;
 
     if(logs.length < limit) {
-      const orderKey = normalizeOrderId_(orderId) + '_' + normalize_(recordingType);
       seenOrderTypes[orderKey] = true;
 
       logs.push({
@@ -1455,8 +1523,8 @@ function uploadLogs_(p){
         fileName: fileName,
         fileSize: String(v[i][5]||''),
         uploadId: uploadId,
-        stage: String(v[i][7]||''),
-        progress: String(v[i][8]||''),
+        stage: stage,
+        progress: progress,
         driveFileId: driveFileId,
         status: rawStatus || 'Completed',
         error: String(v[i][11]||''),

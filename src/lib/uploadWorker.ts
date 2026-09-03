@@ -575,6 +575,24 @@ export async function triggerUploadWorker(): Promise<void> {
               }
             } catch (_) {}
 
+            // Instantly mark queue item completed in IndexedDB and notify all UI listeners (0ms delay)
+            if (finalFileId) {
+              currentItem.status = 'completed';
+              currentItem.progress = 100;
+              currentItem.stage = 'Uploaded to Google Drive';
+              currentItem.fileId = finalFileId;
+              currentItem.webViewLink = finalWebViewLink;
+              currentItem.error = undefined;
+              await safePutQueue(currentItem);
+              updateState({
+                isProcessing: false,
+                activeItemId: null,
+                activeProgress: 100,
+                activeStage: 'Upload completed',
+              });
+              window.dispatchEvent(new CustomEvent('ops_queue_updated'));
+            }
+
             // Call finishUpload to log row into Google Sheet
             try {
               const finishRes = await requestApi('finishUpload', {
