@@ -51,13 +51,26 @@ type LogSourceView = 'cloud' | 'local' | 'unified';
 // Storage key for deleted log IDs to prevent re-appearing before Google Sheets propagates
 const DELETED_LOGS_STORAGE_KEY = 'vms_deleted_log_ids_v1';
 
+// Helper to check if a string is likely an Order ID rather than a Drive ID or UUID
+function isLikelyOrderId(k: string): boolean {
+  if (!k) return false;
+  const s = k.trim();
+  // Amazon order pattern: 171-5436130-4613132 or 406-2872940-4468327
+  if (/^\d{3}-\d{7}-\d{7}$/.test(s)) return true;
+  // If it only contains digits, spaces, hyphens, and is <= 25 chars
+  if (/^[0-9\s-]+$/.test(s) && s.length <= 25) return true;
+  return false;
+}
+
 function getStoredDeletedKeys(): Set<string> {
   try {
     const raw = localStorage.getItem(DELETED_LOGS_STORAGE_KEY);
     if (!raw) return new Set();
     const arr = JSON.parse(raw);
-    // Only accept genuine unique specific IDs (e.g. Drive IDs, UUIDs with length >= 15), never order IDs
-    const valid = (Array.isArray(arr) ? arr : []).filter((k: string) => typeof k === 'string' && k.trim().length >= 15);
+    // Only accept genuine unique specific IDs (e.g. Drive IDs length >= 20, UUIDs), never order IDs
+    const valid = (Array.isArray(arr) ? arr : []).filter(
+      (k: string) => typeof k === 'string' && k.trim().length >= 20 && !isLikelyOrderId(k)
+    );
     return new Set(valid);
   } catch (e) {
     return new Set();
@@ -68,8 +81,8 @@ function saveDeletedKey(keys: string[]) {
   try {
     const current = getStoredDeletedKeys();
     keys.forEach((k) => {
-      // Strictly prevent saving generic short order IDs into deleted key set
-      if (k && typeof k === 'string' && k.trim().length >= 15) {
+      // Strictly prevent saving generic order IDs into deleted key set
+      if (k && typeof k === 'string' && k.trim().length >= 20 && !isLikelyOrderId(k)) {
         current.add(k.trim().toLowerCase());
       }
     });
@@ -244,12 +257,13 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
         // Filter out any logs that have been deleted locally
         const currentDeleted = getStoredDeletedKeys();
         const cleanedLogs = res.logs.filter((log) => {
-          const up = String(log.uploadId || '').trim().toLowerCase();
           const drv = String(log.driveFileId || '').trim().toLowerCase();
           const qj = String(log.queueJobId || '').trim().toLowerCase();
-          if (up && currentDeleted.has(up)) return false;
+          const up = String(log.uploadId || '').trim().toLowerCase();
+          // Never suppress a record by orderId or generic uploadId; only by verified Drive ID or unique Queue UUID
           if (drv && currentDeleted.has(drv)) return false;
-          if (qj && currentDeleted.has(qj)) return false;
+          if (qj && !isLikelyOrderId(qj) && currentDeleted.has(qj)) return false;
+          if (up && !isLikelyOrderId(up) && currentDeleted.has(up) && !drv) return false;
           return true;
         });
 
@@ -384,6 +398,11 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
     }
   };
 
+  // Reset to page 1 whenever search query, filters, or source view change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, statusFilter, platformFilter, typeFilter, sourceView, fromDate, toDate]);
+
   const copyToClipboard = (text: string, label: string, id: string) => {
     navigator.clipboard.writeText(text);
     setCopiedId(id);
@@ -491,10 +510,15 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
         await dbDeleteQueueItem(m.id).catch(() => {});
       }
 
-      // 2. Persist deleted specific unique IDs (do NOT store generic orderId so other duplicates remain intact)
-      const specificKey = targetDriveId || targetUploadId || targetQueueId;
-      if (specificKey && specificKey.length >= 15) {
-        saveDeletedKey([specificKey]);
+      // 2. Persist deleted specific unique IDs (strictly exclude order IDs so remaining duplicates stay visible)
+      const specificKeys: string[] = [];
+      if (targetDriveId && targetDriveId.length >= 20) specificKeys.push(targetDriveId);
+      if (targetQueueId && targetQueueId.length >= 20 && !isLikelyOrderId(targetQueueId)) specificKeys.push(targetQueueId);
+      if (targetUploadId && targetUploadId.length >= 20 && !isLikelyOrderId(targetUploadId) && targetUploadId !== targetOrderId) {
+        specificKeys.push(targetUploadId);
+      }
+      if (specificKeys.length > 0) {
+        saveDeletedKey(specificKeys);
         setDeletedKeys(getStoredDeletedKeys());
       }
 
@@ -799,15 +823,23 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
         }
       }
 
-      // 4. Search Query
+      // 4. Search Query (Flexible matching for Order ID with/without hyphens, File Name, Packer, Platform, Type, Drive ID)
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
-        const matchesOrder = String(log.orderId || '').toLowerCase().includes(q);
-        const matchesFile = String(log.fileName || '').toLowerCase().includes(q);
+        const cleanQ = q.replace(/[^a-z0-9]/g, '');
+        const normOrderId = String(log.orderId || '').toLowerCase().trim();
+        const cleanOrderId = normOrderId.replace(/[^a-z0-9]/g, '');
+        const cleanFile = String(log.fileName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+        const matchesOrder = normOrderId.includes(q) || (cleanQ.length > 2 && cleanOrderId.includes(cleanQ));
+        const matchesFile = String(log.fileName || '').toLowerCase().includes(q) || (cleanQ.length > 2 && cleanFile.includes(cleanQ));
         const matchesPacker = String(log.packerEmail || '').toLowerCase().includes(q);
         const matchesUploadId = String(log.uploadId || '').toLowerCase().includes(q);
         const matchesStage = String(log.stage || '').toLowerCase().includes(q);
-        if (!matchesOrder && !matchesFile && !matchesPacker && !matchesUploadId && !matchesStage) {
+        const matchesPlatform = String(log.platform || '').toLowerCase().includes(q);
+        const matchesType = String(log.recordingType || '').toLowerCase().includes(q);
+        const matchesDriveId = String(log.driveFileId || '').toLowerCase().includes(q);
+        if (!matchesOrder && !matchesFile && !matchesPacker && !matchesUploadId && !matchesStage && !matchesPlatform && !matchesType && !matchesDriveId) {
           return false;
         }
       }

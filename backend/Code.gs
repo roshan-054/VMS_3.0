@@ -1417,59 +1417,27 @@ function finishUpload_(p) {
 
 /* ---------- Upload Logs Sheet Query ---------- */
 function uploadLogs_(p){
-  const user=session_(p.token);
+  const user = session_(p.token);
   const filterStatus = normalize_(p.status);
-  const filterOrder = normalize_(p.orderId);
+  const rawOrder = String(p.orderId || '').trim();
+  const filterOrder = normalizeOrderId_(rawOrder);
+  const cleanFilterOrder = cleanAlphanumeric_(rawOrder);
   const filterPlatform = normalize_(p.platform);
   const filterType = normalize_(p.recordingType);
-  const searchQ = normalize_(p.searchQuery || p.search);
-  
-  // When an orderId or search query is present, scan all rows
-  const isSearchActive = !!(filterOrder || searchQ || (p.fromDate && p.fromDate !== '') || (p.toDate && p.toDate !== ''));
+  const rawSearch = String(p.searchQuery || p.search || '').trim();
+  const searchQ = normalize_(rawSearch);
+  const cleanSearchQ = cleanAlphanumeric_(rawSearch);
+  const normSearchQ = normalizeOrderId_(rawSearch);
+
+  // When an orderId, search query, or date filter is present, search mode is active
+  const isSearchActive = !!(rawOrder || rawSearch || (p.fromDate && p.fromDate !== '') || (p.toDate && p.toDate !== ''));
+  // Default to recent 500 records for fast display, or up to 10000 records when searching
   const limit = isSearchActive ? Math.min(10000, Math.max(1, Number(p.limit || 5000))) : Math.min(2000, Math.max(1, Number(p.limit || 500)));
 
-  // 1. Index completed orders from OrderLog & ReturnLog sheets by unique Queue Job ID, Upload ID, and Drive File ID
-  const completedByJobId = {};
-  const completedByUploadId = {};
-  const completedByFileId = {};
+  const fromDate = p.fromDate ? parseDateStart_(p.fromDate) : null;
+  const toDate = p.toDate ? parseDateEnd_(p.toDate) : null;
 
-  const orderSheets = [
-    { name: CONFIG.ORDER_LOG_SHEET, defType: 'Forward' },
-    { name: CONFIG.RETURN_LOG_SHEET, defType: 'Return' }
-  ];
-  for (let s = 0; s < orderSheets.length; s++) {
-    try {
-      const oSh = sheet_(orderSheets[s].name);
-      if (!oSh) continue;
-      const oData = oSh.getDataRange().getValues();
-      for (let r = 1; r < oData.length; r++) {
-        const oId = String(oData[r][1] || '').trim();
-        const oType = String(oData[r][8] || orderSheets[s].defType).trim();
-        const oPlatform = String(oData[r][2] || '').trim();
-        const oFileId = String(oData[r][4] || '').trim() || extractDriveId_(String(oData[r][5] || ''));
-        const oUrl = String(oData[r][5] || '').trim();
-        const oJobId = String(oData[r][9] || '').trim();
-        if (oFileId) {
-          const item = {
-            orderId: oId,
-            platform: oPlatform,
-            type: oType,
-            fileId: oFileId,
-            url: oUrl,
-            packerEmail: String(oData[r][3] || ''),
-            timestamp: oData[r][0]
-          };
-          completedByFileId[oFileId] = item;
-          if (oJobId) {
-            completedByJobId[oJobId] = item;
-            completedByUploadId[oJobId] = item;
-          }
-        }
-      }
-    } catch(e) {}
-  }
-
-  const v=sheet_(CONFIG.UPLOAD_LOG_SHEET).getDataRange().getValues(), logs=[];
+  const logs = [];
   const seenFids = {};
   const seenUploadIds = {};
   const seenJobIds = {};
@@ -1480,173 +1448,276 @@ function uploadLogs_(p){
   let pendingCount = 0;
   let failedCount = 0;
 
-  for(let i=v.length-1; i>=1; i--){
-    const pe=String(v[i][3]||'');
-
-    let rawStatus = String(v[i][10]||'');
-    let normSt = normalize_(rawStatus);
-    const orderId = String(v[i][1]||'');
-    const platform = String(v[i][2]||'');
-    const recordingType = String(v[i][12]||'Forward');
-    let driveFileId = String(v[i][9]||'');
-    const fileName = String(v[i][4]||'');
-    const uploadId = String(v[i][6]||'');
-    let stage = String(v[i][7]||'');
-    let progress = String(v[i][8]||'');
-    const queueJobId = String(v[i][14]||'');
-
-    // Cross-reference strictly by unique identifiers (Job ID, Upload ID, or existing Drive File ID)
-    const matchedCompleted = (queueJobId && completedByJobId[queueJobId]) || 
-                             (uploadId && completedByUploadId[uploadId]) || 
-                             (driveFileId && completedByFileId[driveFileId]);
-
-    if (matchedCompleted) {
-      if (!driveFileId) driveFileId = matchedCompleted.fileId;
-      rawStatus = 'Completed';
-      normSt = 'completed';
-      stage = 'Uploaded to Google Drive';
-      progress = '100';
-    } else if (driveFileId && driveFileId.length > 5 && normSt !== 'failed') {
-      rawStatus = 'Completed';
-      normSt = 'completed';
-      stage = 'Uploaded to Google Drive';
-      progress = '100';
-    }
-
-    // Auto-detect abandoned in-progress sessions older than 10 minutes without Drive File ID
-    const rowDate = v[i][0] instanceof Date ? v[i][0].getTime() : new Date(v[i][0]).getTime();
-    const isStale = (normSt === 'in progress' || normSt === 'uploading' || normSt === 'processing' || normSt === 'started') && !driveFileId && (Date.now() - rowDate > 10 * 60 * 1000);
-    if (isStale && !matchedCompleted) {
-      rawStatus = 'Interrupted / Stale';
-      normSt = 'failed';
-      if (!stage || stage === 'In Progress' || stage.startsWith('Uploading chunk') || stage === 'Session started') {
-        stage = 'Upload interrupted - Session timed out';
+  // Flexible search matcher supporting full/partial Order IDs, dashes, packer, platform, stage, and Drive File IDs
+  function matchesFilter(oid, fn, pe, upId, pf, st, rt, fid, jid, ts) {
+    // 1. Date Range
+    if (fromDate || toDate) {
+      const d = ts instanceof Date ? ts : new Date(ts);
+      if (!isNaN(d.getTime())) {
+        if (fromDate && d < fromDate) return false;
+        if (toDate && d > toDate) return false;
       }
     }
 
-    // Aggregate stats
-    totalCount++;
-    if(normSt === 'completed' || (driveFileId && driveFileId.length > 5 && !isStale && normSt !== 'failed')) completedCount++;
-    else if(normSt === 'failed' || normSt === 'paused' || normSt === 'error' || isStale || normSt.includes('interrupt') || normSt.includes('stale') || normSt.includes('expired') || normSt.includes('timeout')) failedCount++;
-    else if(normSt === 'in progress' || normSt === 'uploading' || normSt === 'processing') inProgressCount++;
-    else if(normSt === 'pending' || normSt === 'queued' || normSt === 'initiated' || normSt === 'started' || normSt === 'session created' || normSt === 'waiting') pendingCount++;
-    else pendingCount++;
+    // 2. Platform Filter
+    if (filterPlatform && filterPlatform !== 'all' && normalize_(pf) !== filterPlatform) return false;
 
-    // Apply filters
-    if(filterStatus && filterStatus !== 'all') {
-      if(filterStatus === 'completed' && normSt !== 'completed') continue;
-      if((filterStatus === 'in progress' || filterStatus === 'processing' || filterStatus === 'pending') && normSt !== 'in progress' && normSt !== 'uploading' && normSt !== 'processing' && normSt !== 'pending' && normSt !== 'queued' && normSt !== 'started') continue;
-      if((filterStatus === 'failed' || filterStatus === 'paused') && normSt !== 'failed' && normSt !== 'paused' && normSt !== 'error' && !normSt.includes('interrupt') && !normSt.includes('stale') && !isStale) continue;
+    // 3. Type Filter
+    if (filterType && filterType !== 'all' && normalize_(rt) !== filterType) return false;
+
+    // 4. Status Filter
+    const normSt = normalize_(st);
+    if (filterStatus && filterStatus !== 'all') {
+      if (filterStatus === 'completed' && normSt !== 'completed') return false;
+      if ((filterStatus === 'in progress' || filterStatus === 'processing' || filterStatus === 'pending') &&
+          normSt !== 'in progress' && normSt !== 'uploading' && normSt !== 'processing' && normSt !== 'pending' && normSt !== 'queued' && normSt !== 'started') return false;
+      if ((filterStatus === 'failed' || filterStatus === 'paused') &&
+          normSt !== 'failed' && normSt !== 'paused' && normSt !== 'error' && !normSt.includes('interrupt') && !normSt.includes('stale')) return false;
     }
 
-    if(filterOrder && !normalize_(orderId).includes(filterOrder)) continue;
-    if(searchQ && !(
-      normalize_(orderId).includes(searchQ) ||
-      normalize_(fileName).includes(searchQ) ||
-      normalize_(pe).includes(searchQ) ||
-      normalize_(uploadId).includes(searchQ) ||
-      normalize_(platform).includes(searchQ)
-    )) continue;
-
-    if(filterPlatform && filterPlatform !== 'all' && normalize_(platform) !== filterPlatform) continue;
-    if(filterType && filterType !== 'all' && normalize_(recordingType) !== filterType) continue;
-
-    if(logs.length < limit) {
-      if (driveFileId) seenFids[driveFileId] = true;
-      if (uploadId) seenUploadIds[uploadId] = true;
-      if (queueJobId) seenJobIds[queueJobId] = true;
-
-      logs.push({
-        timestamp: v[i][0] instanceof Date ? v[i][0].toISOString() : String(v[i][0]||''),
-        orderId: orderId,
-        platform: platform,
-        packerEmail: pe,
-        fileName: fileName,
-        fileSize: String(v[i][5]||''),
-        uploadId: uploadId,
-        stage: stage,
-        progress: progress,
-        driveFileId: driveFileId,
-        status: rawStatus || (driveFileId ? 'Completed' : 'In Progress'),
-        error: String(v[i][11]||''),
-        recordingType: recordingType,
-        source: String(v[i][13]||CONFIG.UPLOAD_LOG_SHEET),
-        queueJobId: queueJobId,
-        playbackUrl: driveFileId ? 'https://drive.google.com/file/d/' + driveFileId + '/preview' : '',
-        downloadUrl: driveFileId ? 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(driveFileId) : ''
-      });
+    // 5. Specific Order Filter
+    const normOid = normalizeOrderId_(oid);
+    const cleanOid = cleanAlphanumeric_(oid);
+    const cleanFn = cleanAlphanumeric_(fn);
+    if (filterOrder) {
+      const matchOrd = normOid.includes(filterOrder) ||
+                       normalize_(oid).includes(normalize_(rawOrder)) ||
+                       (cleanFilterOrder.length > 2 && cleanOid.includes(cleanFilterOrder)) ||
+                       (cleanFilterOrder.length > 2 && cleanFn.includes(cleanFilterOrder));
+      if (!matchOrd) return false;
     }
+
+    // 6. Global Search Query
+    if (searchQ) {
+      const matchQ = normalize_(oid).includes(searchQ) ||
+                     normOid.includes(normSearchQ) ||
+                     (cleanSearchQ.length > 2 && (cleanOid.includes(cleanSearchQ) || cleanFn.includes(cleanSearchQ))) ||
+                     normalize_(fn).includes(searchQ) ||
+                     normalize_(pe).includes(searchQ) ||
+                     normalize_(upId).includes(searchQ) ||
+                     normalize_(pf).includes(searchQ) ||
+                     normalize_(st).includes(searchQ) ||
+                     normalize_(rt).includes(searchQ) ||
+                     (fid && normalize_(fid).includes(searchQ)) ||
+                     (jid && normalize_(jid).includes(searchQ));
+      if (!matchQ) return false;
+    }
+
+    return true;
   }
 
-  // Also include completed records from OrderLog & ReturnLog sheets if not already in UploadLog
-  if (logs.length < limit && (!filterStatus || filterStatus === 'all' || filterStatus === 'completed')) {
-    for (let s = 0; s < orderSheets.length; s++) {
-      if (logs.length >= limit) break;
-      try {
-        const sh = sheet_(orderSheets[s].name);
-        if (!sh) continue;
-        const odata = sh.getDataRange().getValues();
-        // Headers: [Timestamp, Order ID, Platform, Packer Email, Video Drive ID, Video Playback URL, Package Weight, Status, Recording Type, Queue Job ID, Video MIME Type, Playback Status]
-        for (let i = odata.length - 1; i >= 1; i--) {
-          if (logs.length >= limit) break;
-          const oid = String(odata[i][1] || '').trim();
-          const pf = String(odata[i][2] || '').trim();
-          const pe = String(odata[i][3] || '').trim();
-          const fid = String(odata[i][4] || '').trim();
-          const pUrl = String(odata[i][5] || '').trim();
-          const rawSt = String(odata[i][7] || 'Completed').trim();
-          const rt = String(odata[i][8] || orderSheets[s].defType).trim();
-          const jid = String(odata[i][9] || '').trim();
+  // 1. Scan OrderLog and ReturnLog (Completed permanent video logs)
+  const orderSheets = [
+    { name: CONFIG.ORDER_LOG_SHEET, defType: 'Forward' },
+    { name: CONFIG.RETURN_LOG_SHEET, defType: 'Return' }
+  ];
 
-          // If this exact video file or job ID is already listed in logs, avoid duplicate row
-          if (fid && seenFids[fid]) continue;
-          if (jid && seenJobIds[jid]) continue;
-          if (jid && seenUploadIds[jid]) continue;
+  for (let s = 0; s < orderSheets.length; s++) {
+    try {
+      const sh = sheet_(orderSheets[s].name);
+      if (!sh) continue;
+      const odata = sh.getDataRange().getValues();
+      // Headers: [Timestamp, Order ID, Platform, Packer Email, Video Drive ID, Video Playback URL, Package Weight, Status, Recording Type, Queue Job ID, Video MIME Type, Playback Status]
+      for (let i = odata.length - 1; i >= 1; i--) {
+        const ts = odata[i][0] instanceof Date ? odata[i][0] : new Date(odata[i][0]);
+        const oid = String(odata[i][1] || '').trim();
+        const pf = String(odata[i][2] || '').trim();
+        const pe = String(odata[i][3] || '').trim();
+        const fid = String(odata[i][4] || '').trim() || extractDriveId_(String(odata[i][5] || ''));
+        const pUrl = String(odata[i][5] || '').trim();
+        const rawSt = String(odata[i][7] || 'Completed').trim();
+        const rt = String(odata[i][8] || orderSheets[s].defType).trim();
+        const jid = String(odata[i][9] || '').trim();
+        const fn = oid + '_' + pf + '_' + rt + '.mp4';
 
-          if (fid) seenFids[fid] = true;
-          if (jid) seenJobIds[jid] = true;
+        if (!oid && !fid) continue;
 
-          totalCount++;
-          completedCount++;
+        if (fid) seenFids[fid] = true;
+        if (jid) seenJobIds[jid] = true;
 
-          if(filterOrder && !normalize_(oid).includes(filterOrder)) continue;
-          if(searchQ && !(
-            normalize_(oid).includes(searchQ) ||
-            normalize_(pe).includes(searchQ) ||
-            normalize_(pf).includes(searchQ)
-          )) continue;
-          if(filterPlatform && filterPlatform !== 'all' && normalize_(pf) !== filterPlatform) continue;
-          if(filterType && filterType !== 'all' && normalize_(rt) !== filterType) continue;
+        totalCount++;
+        completedCount++;
 
-          logs.push({
-            timestamp: odata[i][0] instanceof Date ? odata[i][0].toISOString() : String(odata[i][0]||''),
-            orderId: oid,
-            platform: pf,
-            packerEmail: pe,
-            fileName: oid + '_' + pf + '_' + rt + '.mp4',
-            fileSize: '—',
-            uploadId: jid || oid,
-            stage: 'Completed',
-            progress: '100',
-            driveFileId: fid,
-            status: rawSt || 'Completed',
-            error: '',
-            recordingType: rt,
-            source: orderSheets[s].name,
-            queueJobId: jid,
-            playbackUrl: pUrl || (fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : ''),
-            downloadUrl: fid ? 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid) : ''
-          });
+        if (!matchesFilter(oid, fn, pe, jid || oid, pf, rawSt, rt, fid, jid, ts)) {
+          continue;
         }
-      } catch(e) {
-        console.warn('OrderSheet scan note:', e);
+
+        logs.push({
+          timestamp: ts instanceof Date && !isNaN(ts.getTime()) ? ts.toISOString() : String(odata[i][0] || ''),
+          orderId: oid,
+          platform: pf,
+          packerEmail: pe,
+          fileName: fn,
+          fileSize: '—',
+          uploadId: jid || oid,
+          stage: 'Completed',
+          progress: '100',
+          driveFileId: fid,
+          status: rawSt || 'Completed',
+          error: '',
+          recordingType: rt,
+          source: orderSheets[s].name,
+          queueJobId: jid,
+          playbackUrl: pUrl || (fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : ''),
+          downloadUrl: fid ? 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid) : ''
+        });
       }
+    } catch(e) {
+      console.warn('OrderSheet scan in uploadLogs_ note:', e);
     }
   }
+
+  // 2. Scan UploadLog Sheet (Active in-progress, queued, chunked uploads, and fallback sessions)
+  try {
+    const uSh = sheet_(CONFIG.UPLOAD_LOG_SHEET);
+    if (uSh) {
+      const v = uSh.getDataRange().getValues();
+      for (let i = v.length - 1; i >= 1; i--) {
+        const ts = v[i][0] instanceof Date ? v[i][0] : new Date(v[i][0]);
+        const orderId = String(v[i][1] || '').trim();
+        const platform = String(v[i][2] || '').trim();
+        const pe = String(v[i][3] || '').trim();
+        const fileName = String(v[i][4] || '').trim();
+        const fileSize = String(v[i][5] || '').trim();
+        const uploadId = String(v[i][6] || '').trim();
+        let stage = String(v[i][7] || '').trim();
+        let progress = String(v[i][8] || '').trim();
+        let driveFileId = String(v[i][9] || '').trim();
+        let rawStatus = String(v[i][10] || '').trim();
+        let normSt = normalize_(rawStatus);
+        const error = String(v[i][11] || '').trim();
+        const recordingType = String(v[i][12] || 'Forward').trim();
+        const source = String(v[i][13] || CONFIG.UPLOAD_LOG_SHEET).trim();
+        const queueJobId = String(v[i][14] || '').trim();
+
+        if (!orderId && !driveFileId && !uploadId) continue;
+
+        // If this exact video file or job ID was already added from OrderLog, skip duplicate
+        if (driveFileId && seenFids[driveFileId]) continue;
+        if (queueJobId && seenJobIds[queueJobId]) continue;
+        if (uploadId && seenUploadIds[uploadId]) continue;
+
+        // Mark as completed if valid Drive file ID is attached
+        if (driveFileId && driveFileId.length > 5 && normSt !== 'failed') {
+          rawStatus = 'Completed';
+          normSt = 'completed';
+          stage = 'Uploaded to Google Drive';
+          progress = '100';
+        }
+
+        // Auto-detect abandoned in-progress sessions older than 10 minutes without Drive File ID
+        const rowDate = ts instanceof Date && !isNaN(ts.getTime()) ? ts.getTime() : Date.now();
+        const isStale = (normSt === 'in progress' || normSt === 'uploading' || normSt === 'processing' || normSt === 'started') && !driveFileId && (Date.now() - rowDate > 10 * 60 * 1000);
+        if (isStale) {
+          rawStatus = 'Interrupted / Stale';
+          normSt = 'failed';
+          if (!stage || stage === 'In Progress' || stage.startsWith('Uploading chunk') || stage === 'Session started') {
+            stage = 'Upload interrupted - Session timed out';
+          }
+        }
+
+        // Aggregate stats
+        totalCount++;
+        if (normSt === 'completed' || (driveFileId && driveFileId.length > 5 && !isStale && normSt !== 'failed')) completedCount++;
+        else if (normSt === 'failed' || normSt === 'paused' || normSt === 'error' || isStale || normSt.includes('interrupt') || normSt.includes('stale') || normSt.includes('expired') || normSt.includes('timeout')) failedCount++;
+        else if (normSt === 'in progress' || normSt === 'uploading' || normSt === 'processing') inProgressCount++;
+        else pendingCount++;
+
+        if (driveFileId) seenFids[driveFileId] = true;
+        if (uploadId) seenUploadIds[uploadId] = true;
+        if (queueJobId) seenJobIds[queueJobId] = true;
+
+        if (!matchesFilter(orderId, fileName, pe, uploadId, platform, rawStatus, recordingType, driveFileId, queueJobId, ts)) {
+          continue;
+        }
+
+        logs.push({
+          timestamp: ts instanceof Date && !isNaN(ts.getTime()) ? ts.toISOString() : String(v[i][0] || ''),
+          orderId: orderId,
+          platform: platform,
+          packerEmail: pe,
+          fileName: fileName,
+          fileSize: fileSize,
+          uploadId: uploadId,
+          stage: stage,
+          progress: progress,
+          driveFileId: driveFileId,
+          status: rawStatus || (driveFileId ? 'Completed' : 'In Progress'),
+          error: error,
+          recordingType: recordingType,
+          source: source,
+          queueJobId: queueJobId,
+          playbackUrl: driveFileId ? 'https://drive.google.com/file/d/' + driveFileId + '/preview' : '',
+          downloadUrl: driveFileId ? 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(driveFileId) : ''
+        });
+      }
+    }
+  } catch(e) {
+    console.warn('UploadLog scan in uploadLogs_ note:', e);
+  }
+
+  // 3. Fallback: If user is searching a specific Order ID and 0 results found in sheets, check Google Drive directly
+  const targetSearchOrder = rawOrder || rawSearch;
+  if (targetSearchOrder && logs.length === 0) {
+    try {
+      const sanitized = targetSearchOrder.replace(/['\\]/g, '');
+      const query = "title contains '" + sanitized + "' and trashed = false";
+      const files = DriveApp.searchFiles(query);
+      let driveFound = 0;
+      while (files.hasNext() && driveFound < 10) {
+        const file = files.next();
+        const fName = file.getName();
+        const fid = file.getId();
+        if (seenFids[fid]) continue;
+
+        const parts = fName.replace(/\.[^/.]+$/, '').split('_');
+        const parsedOrder = parts[0] || targetSearchOrder;
+        const parsedPf = parts[1] || 'Amazon';
+        const parsedType = parts[2] || (fName.toLowerCase().includes('return') ? 'Return' : 'Forward');
+
+        seenFids[fid] = true;
+        totalCount++;
+        completedCount++;
+
+        logs.push({
+          timestamp: file.getDateCreated() ? file.getDateCreated().toISOString() : new Date().toISOString(),
+          orderId: parsedOrder,
+          platform: parsedPf,
+          packerEmail: user.email || 'packer@vms.local',
+          fileName: fName,
+          fileSize: String(file.getSize() || ''),
+          uploadId: fid,
+          stage: 'Completed',
+          progress: '100',
+          driveFileId: fid,
+          status: 'Completed',
+          error: '',
+          recordingType: parsedType,
+          source: 'Google Drive (Direct)',
+          queueJobId: '',
+          playbackUrl: 'https://drive.google.com/file/d/' + fid + '/preview',
+          downloadUrl: 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid)
+        });
+        driveFound++;
+      }
+    } catch(dErr) {
+      console.warn('Direct Drive search in uploadLogs_ note:', dErr);
+    }
+  }
+
+  // 4. Sort all records newest first by default
+  logs.sort(function(a, b) {
+    const da = new Date(a.timestamp).getTime() || 0;
+    const db = new Date(b.timestamp).getTime() || 0;
+    return db - da;
+  });
+
+  // 5. Slice logs to requested limit (500 for normal view, or up to 10000 for search)
+  const slicedLogs = logs.slice(0, limit);
 
   return {
     success: true,
-    logs: logs,
+    logs: slicedLogs,
     stats: {
       total: totalCount,
       completed: completedCount,
