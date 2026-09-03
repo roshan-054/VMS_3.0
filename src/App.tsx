@@ -424,7 +424,9 @@ export function App() {
             />
           )}
 
-          {activeTab === 'search' && <SearchOrders onShowToast={showToast} />}
+          {activeTab === 'search' && (
+            <SearchOrders onShowToast={showToast} currentUser={currentUser} />
+          )}
 
           {activeTab === 'reports' && <Reports onShowToast={showToast} />}
 

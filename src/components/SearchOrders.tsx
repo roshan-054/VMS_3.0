@@ -22,20 +22,27 @@ import {
   RotateCcw,
   Sparkles,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Trash2,
+  Cloud,
+  Database,
+  AlertTriangle
 } from 'lucide-react';
-import { VideoRecord } from '../types';
-import { requestApi, formatFileSize } from '../lib/api';
+import { VideoRecord, User } from '../types';
+import { requestApi, formatFileSize, deleteLogEntry } from '../lib/api';
+import { canUserDeleteData } from '../lib/permissions';
 
 interface SearchOrdersProps {
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
+  currentUser?: User | null;
 }
 
-export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast }) => {
+export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast, currentUser }) => {
   const [orderQuery, setOrderQuery] = useState('');
   const [platformFilter, setPlatformFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [sourceFilter, setSourceFilter] = useState<'all' | 'sheets' | 'drive'>('all');
   const [packerFilter, setPackerFilter] = useState('');
   const [datePreset, setDatePreset] = useState<'all' | 'today' | 'yesterday' | '7days' | '30days' | 'custom'>('today');
   const [fromDate, setFromDate] = useState('');
@@ -46,6 +53,14 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast }) => {
   const [loading, setLoading] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<VideoRecord | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  // Deletion modal state
+  const [recordToDelete, setRecordToDelete] = useState<VideoRecord | null>(null);
+  const [deleteFromDriveOption, setDeleteFromDriveOption] = useState(true);
+  const [deleteFromSheetsOption, setDeleteFromSheetsOption] = useState(true);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const canDelete = currentUser ? canUserDeleteData(currentUser) : false;
 
   const fetchRecords = async () => {
     setLoading(true);
@@ -80,6 +95,7 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast }) => {
         platform: platformFilter === 'all' ? '' : platformFilter,
         recordingType: typeFilter === 'all' ? '' : typeFilter,
         status: statusFilter === 'all' ? '' : statusFilter,
+        sourceFilter: sourceFilter,
         packer: packerFilter.trim(),
         fromDate: isSpecificQuery ? '' : effFrom,
         toDate: isSpecificQuery ? '' : effTo,
@@ -100,7 +116,7 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast }) => {
       fetchRecords();
     }, 400);
     return () => clearTimeout(timer);
-  }, [orderQuery, platformFilter, typeFilter, statusFilter, datePreset, sortBy]);
+  }, [orderQuery, platformFilter, typeFilter, statusFilter, sourceFilter, datePreset, sortBy]);
 
   // Client-side refined sorting & filtering
   const filteredAndSortedResults = useMemo(() => {
@@ -109,6 +125,12 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast }) => {
     if (packerFilter.trim()) {
       const q = packerFilter.toLowerCase().trim();
       list = list.filter((r) => r.packerEmail?.toLowerCase().includes(q));
+    }
+
+    if (sourceFilter === 'sheets') {
+      list = list.filter((r) => r.sheet !== 'Google Drive (Direct)');
+    } else if (sourceFilter === 'drive') {
+      list = list.filter((r) => r.sheet === 'Google Drive (Direct)');
     }
 
     list.sort((a, b) => {
@@ -128,7 +150,11 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast }) => {
     });
 
     return list;
-  }, [results, packerFilter, sortBy]);
+  }, [results, packerFilter, sourceFilter, sortBy]);
+
+  const hasDriveOnlyResults = useMemo(() => {
+    return filteredAndSortedResults.some((r) => r.sheet === 'Google Drive (Direct)');
+  }, [filteredAndSortedResults]);
 
   const handleCopy = (text: string, fieldName: string) => {
     navigator.clipboard.writeText(text);
@@ -156,11 +182,56 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast }) => {
     }
   };
 
+  const handleDeleteConfirm = async () => {
+    if (!recordToDelete) return;
+    setIsDeleting(true);
+    try {
+      const targetFileId = recordToDelete.fileId;
+      const targetOrderId = recordToDelete.orderId;
+
+      await deleteLogEntry({
+        driveFileId: targetFileId,
+        orderId: targetOrderId,
+        fileName: recordToDelete.fileName,
+        platform: recordToDelete.platform,
+        recordingType: recordToDelete.recordingType,
+        timestamp: recordToDelete.timestamp,
+        deleteFromDrive: deleteFromDriveOption,
+        deleteFromSheets: deleteFromSheetsOption,
+      });
+
+      // Optimistically remove from active search list
+      setResults((prev) =>
+        prev.filter((r) => {
+          if (targetFileId && r.fileId === targetFileId) return false;
+          if (targetOrderId && r.orderId === targetOrderId && r.timestamp === recordToDelete.timestamp) return false;
+          return true;
+        })
+      );
+
+      if (selectedRecord && (
+        (targetFileId && selectedRecord.fileId === targetFileId) ||
+        (targetOrderId && selectedRecord.orderId === targetOrderId && selectedRecord.timestamp === recordToDelete.timestamp)
+      )) {
+        setSelectedRecord(null);
+      }
+
+      onShowToast(`Recording "${recordToDelete.fileName || recordToDelete.orderId}" deleted successfully.`, 'success');
+      setRecordToDelete(null);
+    } catch (err: any) {
+      console.error('Delete error in search:', err);
+      onShowToast(err.message || 'Failed to delete recording', 'error');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const handleResetFilters = () => {
     setOrderQuery('');
     setPlatformFilter('all');
     setTypeFilter('all');
     setStatusFilter('all');
+    setSourceFilter('all');
     setPackerFilter('');
     setDatePreset('all');
     setFromDate('');
@@ -174,6 +245,7 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast }) => {
     platformFilter !== 'all',
     typeFilter !== 'all',
     statusFilter !== 'all',
+    sourceFilter !== 'all',
     packerFilter.trim() !== '',
     datePreset !== 'all',
     fromDate !== '',
@@ -276,7 +348,7 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast }) => {
         </div>
 
         {/* Row 2: Secondary Filters */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 pt-1 border-t border-slate-100">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 pt-1 border-t border-slate-100">
           {/* Platform */}
           <div>
             <label htmlFor="searchPlatformSelect" className="block text-[11px] font-bold text-slate-600 mb-1">
@@ -310,6 +382,23 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast }) => {
               <option value="all">All Types</option>
               <option value="Forward">Forward (Packing)</option>
               <option value="Return">Return (Inbound)</option>
+            </select>
+          </div>
+
+          {/* Storage / Location Source Filter */}
+          <div>
+            <label htmlFor="searchSourceSelect" className="block text-[11px] font-bold text-slate-600 mb-1">
+              Storage Source
+            </label>
+            <select
+              id="searchSourceSelect"
+              value={sourceFilter}
+              onChange={(e) => setSourceFilter(e.target.value as any)}
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs font-medium text-slate-800 focus:bg-white focus:outline-none"
+            >
+              <option value="all">All Sources</option>
+              <option value="sheets">Sheets Only (OrderLog)</option>
+              <option value="drive">Drive Only (Direct)</option>
             </select>
           </div>
 
@@ -406,6 +495,16 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast }) => {
         </div>
       </div>
 
+      {/* Informative notice if results are coming directly from Drive rather than Sheet logs */}
+      {hasDriveOnlyResults && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 flex items-start gap-3 text-amber-900 text-xs">
+          <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          <div className="leading-relaxed">
+            <span className="font-bold">Google Drive Direct Records Detected:</span> Some video recordings were found directly in your Google Drive storage folders because they are not currently listed in your Google Sheet tabs (<code className="bg-amber-100 px-1 py-0.5 rounded text-[11px] font-mono">OrderLog</code> / <code className="bg-amber-100 px-1 py-0.5 rounded text-[11px] font-mono">UploadLog</code>). You can play and download them, or permanently delete them from Drive if they are no longer needed.
+          </div>
+        </div>
+      )}
+
       {/* Results List */}
       <div className="space-y-3">
         {loading ? (
@@ -429,82 +528,117 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast }) => {
             </button>
           </div>
         ) : (
-          filteredAndSortedResults.map((r, idx) => (
-            <div
-              key={idx}
-              className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-xs hover:shadow-md transition flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
-            >
-              <div className="flex items-start gap-4 min-w-0">
-                <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 border border-blue-100 shadow-2xs">
-                  <Video className="w-6 h-6" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-bold text-slate-900 text-base tracking-tight">{r.orderId}</span>
-                    <span className="px-2.5 py-0.5 rounded-md text-xs font-semibold bg-slate-100 text-slate-800 border border-slate-200">
-                      {r.platform}
-                    </span>
-                    <span
-                      className={`px-2.5 py-0.5 rounded-md text-xs font-semibold border ${
-                        r.recordingType === 'Return'
-                          ? 'bg-purple-50 text-purple-700 border-purple-200'
-                          : 'bg-blue-50 text-blue-700 border-blue-200'
-                      }`}
-                    >
-                      {r.recordingType}
-                    </span>
-                    <span className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1">
-                      <CheckCircle2 className="w-3 h-3" />
-                      {r.status || 'Ready'}
-                    </span>
+          filteredAndSortedResults.map((r, idx) => {
+            const isDriveDirect = r.sheet === 'Google Drive (Direct)';
+            const isOrderSheet = r.sheet === 'OrderLog';
+            const isReturnSheet = r.sheet === 'ReturnLog';
+            const isUploadSheet = r.sheet === 'UploadLog';
+
+            return (
+              <div
+                key={idx}
+                className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-xs hover:shadow-md transition flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
+              >
+                <div className="flex items-start gap-4 min-w-0">
+                  <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 border border-blue-100 shadow-2xs">
+                    <Video className="w-6 h-6" />
                   </div>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-bold text-slate-900 text-base tracking-tight">{r.orderId}</span>
+                      <span className="px-2.5 py-0.5 rounded-md text-xs font-semibold bg-slate-100 text-slate-800 border border-slate-200">
+                        {r.platform}
+                      </span>
+                      <span
+                        className={`px-2.5 py-0.5 rounded-md text-xs font-semibold border ${
+                          r.recordingType === 'Return'
+                            ? 'bg-purple-50 text-purple-700 border-purple-200'
+                            : 'bg-blue-50 text-blue-700 border-blue-200'
+                        }`}
+                      >
+                        {r.recordingType}
+                      </span>
 
-                  <p className="text-xs font-mono text-slate-500 mt-1.5 truncate flex items-center gap-1.5">
-                    <FileText className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    {r.fileName}
-                  </p>
+                      {/* Storage Source Badge */}
+                      {isDriveDirect ? (
+                        <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-300 flex items-center gap-1" title="Found directly in Google Drive storage folders (Not listed in Google Sheet)">
+                          <Cloud className="w-3 h-3 text-amber-600" />
+                          Drive Direct (Not in Sheet)
+                        </span>
+                      ) : (
+                        <span className={`px-2 py-0.5 rounded-md text-[11px] font-semibold border flex items-center gap-1 ${
+                          isOrderSheet ? 'bg-emerald-50 text-emerald-800 border-emerald-300' :
+                          isReturnSheet ? 'bg-purple-50 text-purple-800 border-purple-300' :
+                          'bg-sky-50 text-sky-800 border-sky-300'
+                        }`} title={`Indexed in ${r.sheet || 'Google Sheet'}`}>
+                          <Database className="w-3 h-3 text-emerald-600" />
+                          {r.sheet || 'Google Sheet'}
+                        </span>
+                      )}
 
-                  <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400 mt-2">
-                    <span className="font-mono text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
-                      {formatFileSize(r.fileSize) || 'Standard HD'}
-                    </span>
-                    <span>•</span>
-                    <span className="flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
-                      {new Date(r.timestamp).toLocaleDateString()} {new Date(r.timestamp).toLocaleTimeString()}
-                    </span>
-                    <span>•</span>
-                    <span className="flex items-center gap-1">
-                      <UserIcon className="w-3 h-3" />
-                      {r.packerEmail || 'Operator'}
-                    </span>
+                      <span className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3" />
+                        {r.status || 'Ready'}
+                      </span>
+                    </div>
+
+                    <p className="text-xs font-mono text-slate-500 mt-1.5 truncate flex items-center gap-1.5">
+                      <FileText className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                      {r.fileName}
+                    </p>
+
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400 mt-2">
+                      <span className="font-mono text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
+                        {formatFileSize(r.fileSize) || 'Standard HD'}
+                      </span>
+                      <span>•</span>
+                      <span className="flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        {new Date(r.timestamp).toLocaleDateString()} {new Date(r.timestamp).toLocaleTimeString()}
+                      </span>
+                      <span>•</span>
+                      <span className="flex items-center gap-1">
+                        <UserIcon className="w-3 h-3" />
+                        {r.packerEmail || 'Operator'}
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Actions */}
-              <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-end pt-2 md:pt-0 border-t md:border-t-0 border-slate-100">
-                <button
-                  onClick={() => setSelectedRecord(r)}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-xs transition flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Play className="w-3.5 h-3.5 fill-white" />
-                  Play & View Details
-                </button>
-
-                {r.driveLink && (
+                {/* Actions */}
+                <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-end pt-2 md:pt-0 border-t md:border-t-0 border-slate-100">
                   <button
-                    onClick={() => handleDownloadLog(r)}
-                    className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer"
-                    title="Open directly in Google Drive"
+                    onClick={() => setSelectedRecord(r)}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-xs transition flex items-center gap-1.5 cursor-pointer"
                   >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                    Drive
+                    <Play className="w-3.5 h-3.5 fill-white" />
+                    Play & View Details
                   </button>
-                )}
+
+                  {r.driveLink && (
+                    <button
+                      onClick={() => handleDownloadLog(r)}
+                      className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer"
+                      title="Open directly in Google Drive"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      Drive
+                    </button>
+                  )}
+
+                  {canDelete && (
+                    <button
+                      onClick={() => setRecordToDelete(r)}
+                      className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition cursor-pointer border border-transparent hover:border-red-200"
+                      title="Delete recording & logs"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
 
@@ -635,6 +769,22 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast }) => {
                     </p>
                   </div>
 
+                  {/* Storage Source */}
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Storage Source</span>
+                    <p className="text-xs font-bold text-slate-900 flex items-center gap-1">
+                      {selectedRecord.sheet === 'Google Drive (Direct)' ? (
+                        <span className="text-amber-700 flex items-center gap-1">
+                          <Cloud className="w-3.5 h-3.5" /> Drive Direct (Not in Sheet)
+                        </span>
+                      ) : (
+                        <span className="text-emerald-700 flex items-center gap-1">
+                          <Database className="w-3.5 h-3.5" /> {selectedRecord.sheet || 'Google Sheet'}
+                        </span>
+                      )}
+                    </p>
+                  </div>
+
                   {/* Timestamp */}
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
                     <span className="text-[10px] font-bold text-slate-400 uppercase">Recording Timestamp</span>
@@ -712,6 +862,17 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast }) => {
                     Download Video File
                   </a>
                 )}
+                {canDelete && (
+                  <button
+                    onClick={() => {
+                      setRecordToDelete(selectedRecord);
+                    }}
+                    className="px-3 py-2 bg-red-50 hover:bg-red-100 border border-red-200 text-red-700 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-red-600" />
+                    Delete Recording
+                  </button>
+                )}
               </div>
 
               <button
@@ -724,6 +885,88 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast }) => {
           </div>
         </div>
       )}
+
+      {/* CONFIRM DELETE MODAL */}
+      {recordToDelete && (
+        <div className="fixed inset-0 z-60 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-slate-200 animate-in fade-in zoom-in duration-150">
+            <div className="w-12 h-12 rounded-2xl bg-red-50 text-red-600 flex items-center justify-center mx-auto border border-red-100 shadow-inner">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+
+            <div className="text-center space-y-1">
+              <h3 className="text-base font-bold text-slate-900">
+                Delete Recording & Logs?
+              </h3>
+              <p className="text-xs text-slate-500">
+                Are you sure you want to delete recording for Order{' '}
+                <span className="font-bold text-slate-800 font-mono">
+                  {recordToDelete.orderId}
+                </span>{' '}
+                ({recordToDelete.platform} - {recordToDelete.recordingType})?
+              </p>
+              {recordToDelete.sheet === 'Google Drive (Direct)' && (
+                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2 mt-2">
+                  This file is stored in Google Drive directly and not listed in Google Sheet logs. Trashing it will remove the video file permanently from Drive.
+                </p>
+              )}
+            </div>
+
+            <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2.5 text-xs text-slate-700">
+              <label className="flex items-center gap-2 cursor-pointer font-medium">
+                <input
+                  type="checkbox"
+                  checked={deleteFromDriveOption}
+                  onChange={(e) => setDeleteFromDriveOption(e.target.checked)}
+                  className="rounded text-red-600 focus:ring-red-500 w-4 h-4"
+                />
+                <span>Delete & trash video file from Google Drive</span>
+              </label>
+
+              <label className="flex items-center gap-2 cursor-pointer font-medium">
+                <input
+                  type="checkbox"
+                  checked={deleteFromSheetsOption}
+                  onChange={(e) => setDeleteFromSheetsOption(e.target.checked)}
+                  className="rounded text-red-600 focus:ring-red-500 w-4 h-4"
+                />
+                <span>Remove log row from Google Sheet tabs (if present)</span>
+              </label>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setRecordToDelete(null)}
+                disabled={isDeleting}
+                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDeleteConfirm}
+                disabled={isDeleting || (!deleteFromDriveOption && !deleteFromSheetsOption)}
+                className="w-full py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl text-xs transition shadow-sm flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {isDeleting ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Deleting…</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Confirm Delete</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+

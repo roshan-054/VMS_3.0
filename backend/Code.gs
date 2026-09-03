@@ -813,6 +813,7 @@ function advancedSearch_(p){
           fileName: oid + '_' + pf + '_' + rt + '.mp4',
           playbackUrl: pUrl || (fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : ''),
           downloadUrl: fid ? 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid) : '',
+          driveLink: pUrl || (fid ? 'https://drive.google.com/file/d/' + fid + '/view' : ''),
           status: st || 'Completed',
           recordingType: rt,
           sheet: target.name,
@@ -882,6 +883,7 @@ function advancedSearch_(p){
           uploadId: upId,
           playbackUrl: 'https://drive.google.com/file/d/' + fid + '/preview',
           downloadUrl: 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid),
+          driveLink: 'https://drive.google.com/file/d/' + fid + '/view',
           status: st || 'Completed',
           recordingType: rt,
           sheet: CONFIG.UPLOAD_LOG_SHEET,
@@ -896,7 +898,8 @@ function advancedSearch_(p){
   }
 
   // 3. Fallback: If searching for a specific order and 0 rows found in sheets, search Google Drive files directly
-  if (rawOrder && rows.length === 0) {
+  const sourceFilter = normalize_(p.sourceFilter || 'all');
+  if (rawOrder && rows.length === 0 && sourceFilter !== 'sheets') {
     try {
       const sanitized = rawOrder.replace(/['\\]/g, '');
       const query = "title contains '" + sanitized + "' and trashed = false";
@@ -924,6 +927,7 @@ function advancedSearch_(p){
           fileSize: String(file.getSize() || ''),
           playbackUrl: 'https://drive.google.com/file/d/' + fid + '/preview',
           downloadUrl: 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid),
+          driveLink: 'https://drive.google.com/file/d/' + fid + '/view',
           status: 'Completed',
           recordingType: parsedType,
           sheet: 'Google Drive (Direct)'

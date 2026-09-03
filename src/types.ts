@@ -38,6 +38,9 @@ export interface VideoRecord {
   packerEmail: string;
   status: string;
   source: string;
+  sheet?: string;
+  queueJobId?: string;
+  uploadId?: string;
 }
 
 export interface QueueItem {
