@@ -33,7 +33,9 @@ import {
   UserCog,
   Moon,
   Sun,
-  Layers
+  Layers,
+  Copy,
+  FileCode
 } from 'lucide-react';
 import { User, UserRole, UserStatus, AdminPermissions } from '../types';
 import { requestApi, checkBackendHealth, uploadBrandingImage, repairSheetPlaybackUrls, runSystemSetup } from '../lib/api';
@@ -156,6 +158,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
   const [testingHealth, setTestingHealth] = useState(false);
   const [repairingUrls, setRepairingUrls] = useState(false);
   const [runningSetup, setRunningSetup] = useState(false);
+  const [showCodeModal, setShowCodeModal] = useState(false);
+  const [codeModalLoading, setCodeModalLoading] = useState(false);
+  const [codeModalContent, setCodeModalContent] = useState('');
+  const [codeCopied, setCodeCopied] = useState(false);
   const [healthStatus, setHealthStatus] = useState<{
     tested: boolean;
     online: boolean;
@@ -695,6 +701,36 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
       setAppNameInput(def.appName);
       setAppSubtitleInput(def.appSubtitle);
       onShowToast('Branding reset to system default.', 'info');
+    }
+  };
+
+  const handleOpenCodeModal = async () => {
+    setShowCodeModal(true);
+    setCodeModalLoading(true);
+    try {
+      const res = await fetch('/api/backend-code');
+      if (res.ok) {
+        const text = await res.text();
+        setCodeModalContent(text);
+      } else {
+        setCodeModalContent('// Error loading code: ' + res.statusText);
+      }
+    } catch (err: any) {
+      setCodeModalContent('// Error loading code: ' + (err?.message || err));
+    } finally {
+      setCodeModalLoading(false);
+    }
+  };
+
+  const handleCopyCode = async () => {
+    if (!codeModalContent) return;
+    try {
+      await navigator.clipboard.writeText(codeModalContent);
+      setCodeCopied(true);
+      onShowToast('Complete Code.gs copied to clipboard! Paste into Apps Script Editor.', 'success');
+      setTimeout(() => setCodeCopied(false), 3000);
+    } catch (err: any) {
+      onShowToast('Failed to copy to clipboard automatically. Please select all and copy.', 'error');
     }
   };
 
@@ -1341,14 +1377,27 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
               </div>
 
               {/* Quick Code Reference */}
-              <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-2">
-                <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                  <Link2 className="w-4 h-4 text-blue-600" />
-                  Code.gs Synchronization
+              <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                    <FileCode className="w-4 h-4 text-blue-600" />
+                    Google Apps Script (Code.gs)
+                  </div>
+                  <span className="text-[10px] font-mono text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 font-semibold">
+                    v3.0 Verified
+                  </span>
                 </div>
                 <p className="text-xs text-slate-500 leading-relaxed">
-                  The latest <code>backend/Code.gs</code> includes support for 16MB chunking, folder hierarchy auto-creation, and Google Sheets logging.
+                  Contains all 2,112 lines of backend logic for Drive hierarchy, chunked upload, Google Sheets logging, and duplicate prevention.
                 </p>
+                <button
+                  type="button"
+                  onClick={handleOpenCodeModal}
+                  className="w-full py-2 px-3 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold transition flex items-center justify-center gap-2 cursor-pointer shadow-xs"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  View & Copy Complete Code.gs
+                </button>
               </div>
             </div>
           </form>
@@ -2347,6 +2396,106 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                 <Trash2 className="w-3.5 h-3.5" />
                 {deletingUser ? 'Deleting…' : 'Yes, Delete User'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Full Code.gs Viewer & Copy Modal */}
+      {showCodeModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-4xl w-full h-[85vh] flex flex-col shadow-2xl overflow-hidden border border-slate-200">
+            {/* Modal Header */}
+            <div className="p-4 sm:p-5 bg-slate-900 text-white flex items-center justify-between shrink-0 border-b border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-600/30 text-blue-400 border border-blue-500/30 flex items-center justify-center shrink-0">
+                  <FileCode className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold text-white tracking-wide">Google Apps Script Backend (Code.gs)</h3>
+                    <span className="text-[10px] font-mono bg-blue-500/20 text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded font-semibold">
+                      v3.0.0
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Copy and paste this entire code into your Google Apps Script editor.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCopyCode}
+                  disabled={codeModalLoading || !codeModalContent}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-sm ${
+                    codeCopied
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-blue-600 hover:bg-blue-500 text-white'
+                  }`}
+                >
+                  {codeCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  {codeCopied ? 'Copied to Clipboard!' : 'Copy Entire Code'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowCodeModal(false)}
+                  className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition cursor-pointer"
+                >
+                  <XCircle className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Steps Notice */}
+            <div className="px-5 py-3 bg-blue-50 border-b border-blue-100 flex items-center justify-between text-xs text-blue-900 gap-4">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-blue-600 shrink-0" />
+                <span>
+                  <strong>Deployment Steps:</strong> 1. Click <strong>Copy Entire Code</strong> &nbsp;→&nbsp; 2. In Google Apps Script, select all & paste &nbsp;→&nbsp; 3. Run <code>setupSystem</code> &nbsp;→&nbsp; 4. Deploy as Web App.
+                </span>
+              </div>
+              <span className="text-[11px] font-mono text-blue-700 shrink-0">
+                {codeModalContent ? `${codeModalContent.split('\n').length} lines` : ''}
+              </span>
+            </div>
+
+            {/* Code Body Area */}
+            <div className="flex-1 bg-slate-950 p-4 overflow-auto">
+              {codeModalLoading ? (
+                <div className="h-full flex items-center justify-center text-slate-400 gap-2">
+                  <RefreshCw className="w-5 h-5 animate-spin text-blue-400" />
+                  <span className="text-xs">Loading complete backend script...</span>
+                </div>
+              ) : (
+                <pre className="font-mono text-xs text-slate-200 leading-relaxed whitespace-pre select-all">
+                  {codeModalContent}
+                </pre>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
+              <span className="text-xs text-slate-500">
+                Ready to paste into Google Apps Script <code>Code.gs</code>
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCopyCode}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+                >
+                  {codeCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  {codeCopied ? 'Copied!' : 'Copy Code'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowCodeModal(false)}
+                  className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-xl text-xs font-semibold transition cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         </div>
