@@ -8,7 +8,6 @@ import {
   BarChart3,
   Activity,
   Shield,
-  Settings,
   LogOut,
   Wifi,
   WifiOff,
@@ -32,7 +31,6 @@ import { Reports } from './components/Reports';
 import { Analytics } from './components/Analytics';
 import { SystemHealth } from './components/SystemHealth';
 import { AdminPanel } from './components/AdminPanel';
-import { SetupModal } from './components/SetupModal';
 import { AuthView } from './components/AuthView';
 
 import {
@@ -79,7 +77,6 @@ export function App() {
     'record' | 'queue' | 'logs' | 'search' | 'reports' | 'analytics' | 'health' | 'admin'
   >('record');
 
-  const [isSetupOpen, setIsSetupOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [pendingQueueCount, setPendingQueueCount] = useState(0);
@@ -174,20 +171,12 @@ export function App() {
 
   if (!currentUser) {
     return (
-      <>
-        <AuthView
-          onLoginSuccess={(user) => {
-            updateCurrentUser(user);
-          }}
-          onOpenSetup={() => setIsSetupOpen(true)}
-          onShowToast={showToast}
-        />
-        <SetupModal
-          isOpen={isSetupOpen}
-          onClose={() => setIsSetupOpen(false)}
-          onShowToast={showToast}
-        />
-      </>
+      <AuthView
+        onLoginSuccess={(user) => {
+          updateCurrentUser(user);
+        }}
+        onShowToast={showToast}
+      />
     );
   }
 
@@ -250,14 +239,6 @@ export function App() {
           >
             {isOnline ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
           </span>
-
-          <button
-            onClick={() => setIsSetupOpen(true)}
-            className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition"
-            title="Setup"
-          >
-            <Settings className="w-4 h-4" />
-          </button>
         </div>
       </div>
 
@@ -372,23 +353,15 @@ export function App() {
         </nav>
 
         {/* User Footer Profile & Actions */}
-        <div className="p-3 border-t border-slate-100 bg-slate-50/50 space-y-2">
-          <button
-            onClick={() => setIsSetupOpen(true)}
-            className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition"
-          >
-            <Settings className="w-4 h-4 text-slate-400" />
-            <span>Drive & Script Config</span>
-          </button>
-
-          <div className="pt-2 border-t border-slate-200/80 flex items-center justify-between px-2">
+        <div className="p-3 border-t border-slate-100 bg-slate-50/50">
+          <div className="flex items-center justify-between px-2">
             <div className="truncate mr-2">
               <div className="text-xs font-bold text-slate-800 truncate">{currentUser.name}</div>
               <div className="text-[10px] text-slate-400 font-mono truncate">{currentUser.role}</div>
             </div>
             <button
               onClick={handleLogout}
-              className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition shrink-0"
+              className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition shrink-0 cursor-pointer"
               title="Log Out"
             >
               <LogOut className="w-4 h-4" />
@@ -463,13 +436,6 @@ export function App() {
           </div>
         </div>
       )}
-
-      {/* Apps Script Setup Modal */}
-      <SetupModal
-        isOpen={isSetupOpen}
-        onClose={() => setIsSetupOpen(false)}
-        onShowToast={showToast}
-      />
     </div>
   );
 }
