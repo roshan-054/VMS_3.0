@@ -472,6 +472,7 @@ export async function triggerUploadWorker(): Promise<void> {
     currentItem.uploadId = uploadId;
     currentItem.totalChunks = totalChunks;
     currentItem.chunkSize = chunkSize;
+    await safePutQueue(currentItem);
 
     // 2. Upload Chunks Sequentially (High-Speed Direct Drive Stream + Fast Apps Script Fallback)
     let finalFileId = '';
@@ -575,7 +576,7 @@ export async function triggerUploadWorker(): Promise<void> {
               }
             } catch (_) {}
 
-            // Instantly mark queue item completed in IndexedDB and notify all UI listeners (0ms delay)
+              // Instantly mark queue item completed in IndexedDB and notify all UI listeners (0ms delay)
             if (finalFileId) {
               currentItem.status = 'completed';
               currentItem.progress = 100;
@@ -591,6 +592,7 @@ export async function triggerUploadWorker(): Promise<void> {
                 activeStage: 'Upload completed',
               });
               window.dispatchEvent(new CustomEvent('ops_queue_updated'));
+              window.dispatchEvent(new CustomEvent('ops_upload_finished', { detail: { orderId: currentItem.orderId, uploadId: uploadId, fileId: finalFileId } }));
             }
 
             // Call finishUpload to log row into Google Sheet
@@ -610,7 +612,11 @@ export async function triggerUploadWorker(): Promise<void> {
               if (finishRes?.fileId) {
                 finalFileId = finishRes.fileId;
                 finalWebViewLink = finishRes.webViewLink || finishRes.playbackUrl || finalWebViewLink;
+                currentItem.fileId = finalFileId;
+                currentItem.webViewLink = finalWebViewLink;
+                await safePutQueue(currentItem);
               }
+              window.dispatchEvent(new CustomEvent('ops_upload_finished', { detail: { orderId: currentItem.orderId, uploadId: uploadId, fileId: finalFileId } }));
             } catch (finErr) {
               console.warn('finishUpload note:', finErr);
             }
@@ -711,6 +717,7 @@ export async function triggerUploadWorker(): Promise<void> {
           activeProgress: 100,
           activeStage: 'Upload completed',
         });
+        window.dispatchEvent(new CustomEvent('ops_upload_finished', { detail: { orderId: currentItem.orderId, uploadId: uploadId, fileId: resolvedFileId } }));
 
         notify(`✅ Successfully uploaded ${currentItem.fileName} to Google Drive!`, 'success');
         break;

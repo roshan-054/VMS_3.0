@@ -37,7 +37,7 @@ import { User, UploadLogItem, QueueItem, PlatformType, RecordingType } from '../
 import { fetchUploadLogs, deleteLogEntry, formatFileSize } from '../lib/api';
 import { dbGetAllQueue, dbPutQueue, dbDeleteQueueItem, getStoredDriveFolderId, getStoredAutoRefreshInterval } from '../lib/storage';
 import { canUserDeleteData } from '../lib/permissions';
-import { retryUploadItem, fixAndCleanAllStuckUploads } from '../lib/uploadWorker';
+import { retryUploadItem, fixAndCleanAllStuckUploads, subscribeWorkerStatus } from '../lib/uploadWorker';
 
 interface UploadLogsProps {
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
@@ -299,6 +299,15 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
   useEffect(() => {
     loadData(true);
 
+    // Live subscription to background upload worker for 0ms reactive UI updates
+    const unsubscribeWorker = subscribeWorkerStatus(() => {
+      dbGetAllQueue()
+        .then((localItems) => {
+          setLocalQueue(localItems);
+        })
+        .catch(() => {});
+    });
+
     const handleQueueUpdated = async () => {
       try {
         const localItems = await dbGetAllQueue();
@@ -306,9 +315,22 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
       } catch (err) {}
     };
 
+    const handleUploadFinished = () => {
+      dbGetAllQueue()
+        .then((localItems) => {
+          setLocalQueue(localItems);
+        })
+        .catch(() => {});
+      // Silently refresh cloud logs immediately from Google Sheets with 0 delay
+      loadData(false);
+    };
+
     window.addEventListener('ops_queue_updated', handleQueueUpdated);
+    window.addEventListener('ops_upload_finished', handleUploadFinished);
     return () => {
+      unsubscribeWorker();
       window.removeEventListener('ops_queue_updated', handleQueueUpdated);
+      window.removeEventListener('ops_upload_finished', handleUploadFinished);
     };
   }, []);
 
@@ -605,20 +627,24 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
     }
 
     // Unified: Build index of local queue items for zero-latency overlay on cloud logs
+    const norm = (s: any) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     const localByUploadId = new Map<string, UploadLogItem>();
     const localByJobId = new Map<string, UploadLogItem>();
     const localByOrderKey = new Map<string, UploadLogItem>();
+    const localByFileName = new Map<string, UploadLogItem>();
     const matchedLocalKeys = new Set<string>();
 
     localAsLogs.forEach((loc) => {
-      const up = String(loc.uploadId || '').trim().toLowerCase();
-      const jid = String(loc.queueJobId || '').trim().toLowerCase();
-      const oid = String(loc.orderId || '').trim().toLowerCase().replace(/\s+/g, '');
-      const rt = String(loc.recordingType || 'forward').trim().toLowerCase();
-      const pf = String(loc.platform || '').trim().toLowerCase();
+      const up = norm(loc.uploadId);
+      const jid = norm(loc.queueJobId);
+      const oid = norm(loc.orderId);
+      const rt = norm(loc.recordingType || 'forward');
+      const pf = norm(loc.platform);
+      const fn = norm(loc.fileName);
 
       if (up) localByUploadId.set(up, loc);
       if (jid) localByJobId.set(jid, loc);
+      if (fn) localByFileName.set(fn, loc);
       if (oid) {
         localByOrderKey.set(`${oid}_${pf}_${rt}`, loc);
         localByOrderKey.set(`${oid}_${rt}`, loc);
@@ -628,41 +654,45 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
 
     // 1. Overlay fresh local progress/completion on top of cloud logs
     const enhancedCloudLogs = cloudLogs.map((cloudLog) => {
-      const up = String(cloudLog.uploadId || '').trim().toLowerCase();
-      const jid = String(cloudLog.queueJobId || '').trim().toLowerCase();
-      const oid = String(cloudLog.orderId || '').trim().toLowerCase().replace(/\s+/g, '');
-      const rt = String(cloudLog.recordingType || 'forward').trim().toLowerCase();
-      const pf = String(cloudLog.platform || '').trim().toLowerCase();
+      const up = norm(cloudLog.uploadId);
+      const jid = norm(cloudLog.queueJobId);
+      const oid = norm(cloudLog.orderId);
+      const rt = norm(cloudLog.recordingType || 'forward');
+      const pf = norm(cloudLog.platform);
+      const fn = norm(cloudLog.fileName);
 
       const localMatch =
         (up && localByUploadId.get(up)) ||
         (jid && localByJobId.get(jid)) ||
+        (fn && localByFileName.get(fn)) ||
         (oid && (localByOrderKey.get(`${oid}_${pf}_${rt}`) || localByOrderKey.get(`${oid}_${rt}`) || localByOrderKey.get(oid)));
 
       if (localMatch) {
-        if (localMatch.uploadId) matchedLocalKeys.add(String(localMatch.uploadId).trim().toLowerCase());
-        if (localMatch.queueJobId) matchedLocalKeys.add(String(localMatch.queueJobId).trim().toLowerCase());
-        if (localMatch.orderId) matchedLocalKeys.add(String(localMatch.orderId).trim().toLowerCase());
+        if (localMatch.uploadId) matchedLocalKeys.add(norm(localMatch.uploadId));
+        if (localMatch.queueJobId) matchedLocalKeys.add(norm(localMatch.queueJobId));
+        if (localMatch.orderId) matchedLocalKeys.add(norm(localMatch.orderId));
+        if (localMatch.fileName) matchedLocalKeys.add(norm(localMatch.fileName));
 
         const isLocalDone = localMatch.status === 'Completed' || Number(localMatch.progress) >= 100 || !!(localMatch.driveFileId && localMatch.driveFileId.length > 5);
         const isCloudDone = cloudLog.status === 'Completed' || Number(cloudLog.progress) >= 100 || !!(cloudLog.driveFileId && cloudLog.driveFileId.length > 5);
 
         // If local is completed but cloud log still says 'Started' or 'In Progress', INSTANTLY upgrade cloud log to Completed!
-        if (isLocalDone && !isCloudDone) {
+        if (isLocalDone || isCloudDone) {
+          const fid = localMatch.driveFileId || cloudLog.driveFileId || '';
           return {
             ...cloudLog,
             status: 'Completed',
-            stage: localMatch.stage || 'Uploaded to Google Drive',
+            stage: localMatch.stage && localMatch.stage !== 'Session Created' ? localMatch.stage : (cloudLog.stage && cloudLog.stage !== 'Session Created' ? cloudLog.stage : 'Uploaded to Google Drive'),
             progress: 100,
-            driveFileId: localMatch.driveFileId || cloudLog.driveFileId,
-            playbackUrl: localMatch.playbackUrl || cloudLog.playbackUrl || (localMatch.driveFileId ? `https://drive.google.com/file/d/${localMatch.driveFileId}/preview` : ''),
-            downloadUrl: localMatch.downloadUrl || cloudLog.downloadUrl || (localMatch.driveFileId ? `https://drive.google.com/uc?export=download&id=${localMatch.driveFileId}` : ''),
+            driveFileId: fid,
+            playbackUrl: localMatch.playbackUrl || cloudLog.playbackUrl || (fid ? `https://drive.google.com/file/d/${fid}/preview` : ''),
+            downloadUrl: localMatch.downloadUrl || cloudLog.downloadUrl || (fid ? `https://drive.google.com/uc?export=download&id=${fid}` : ''),
             error: undefined
           };
         }
 
         // If local is in active uploading progress, overlay real-time percentage
-        if (localMatch.status === 'In Progress' && cloudLog.status !== 'Completed') {
+        if (localMatch.status === 'In Progress') {
           return {
             ...cloudLog,
             status: 'In Progress',
@@ -672,40 +702,45 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
             playbackUrl: localMatch.playbackUrl || cloudLog.playbackUrl
           };
         }
+      }
 
-        // Ensure playback URL exists if driveFileId is present
-        if (isCloudDone && !cloudLog.playbackUrl && (cloudLog.driveFileId || localMatch.driveFileId)) {
-          const fid = cloudLog.driveFileId || localMatch.driveFileId;
-          return {
-            ...cloudLog,
-            playbackUrl: `https://drive.google.com/file/d/${fid}/preview`,
-            downloadUrl: `https://drive.google.com/uc?export=download&id=${fid}`
-          };
-        }
+      // If cloudLog itself has driveFileId, ensure status is Completed and playback URL exists
+      if ((cloudLog.driveFileId && cloudLog.driveFileId.length > 5) || Number(cloudLog.progress) >= 100) {
+        return {
+          ...cloudLog,
+          status: 'Completed',
+          progress: 100,
+          stage: cloudLog.stage && cloudLog.stage !== 'Session Created' ? cloudLog.stage : 'Uploaded to Google Drive',
+          playbackUrl: cloudLog.playbackUrl || (cloudLog.driveFileId ? `https://drive.google.com/file/d/${cloudLog.driveFileId}/preview` : ''),
+          downloadUrl: cloudLog.downloadUrl || (cloudLog.driveFileId ? `https://drive.google.com/uc?export=download&id=${cloudLog.driveFileId}` : '')
+        };
       }
 
       return cloudLog;
     });
 
     // 2. Add active local queue items that haven't been registered in cloudLogs yet
-    const cloudUploadIds = new Set(cloudLogs.map((l) => String(l.uploadId || '').trim().toLowerCase()).filter(Boolean));
-    const cloudJobIds = new Set(cloudLogs.map((l) => String(l.queueJobId || '').trim().toLowerCase()).filter(Boolean));
+    const cloudUploadIds = new Set(cloudLogs.map((l) => norm(l.uploadId)).filter(Boolean));
+    const cloudJobIds = new Set(cloudLogs.map((l) => norm(l.queueJobId)).filter(Boolean));
+    const cloudFileNames = new Set(cloudLogs.map((l) => norm(l.fileName)).filter(Boolean));
     const cloudOrderKeys = new Set(
       cloudLogs.map((l) => {
-        const o = String(l.orderId || '').trim().toLowerCase().replace(/\s+/g, '');
-        const r = String(l.recordingType || 'forward').trim().toLowerCase();
+        const o = norm(l.orderId);
+        const r = norm(l.recordingType || 'forward');
         return `${o}_${r}`;
       }).filter(Boolean)
     );
 
     const uniqueLocal = localAsLogs.filter((loc) => {
-      const up = String(loc.uploadId || '').trim().toLowerCase();
-      const qj = String(loc.queueJobId || '').trim().toLowerCase();
-      const oKey = `${String(loc.orderId || '').trim().toLowerCase().replace(/\s+/g, '')}_${String(loc.recordingType || 'forward').trim().toLowerCase()}`;
+      const up = norm(loc.uploadId);
+      const qj = norm(loc.queueJobId);
+      const fn = norm(loc.fileName);
+      const oKey = `${norm(loc.orderId)}_${norm(loc.recordingType || 'forward')}`;
 
       if (up && (cloudUploadIds.has(up) || matchedLocalKeys.has(up))) return false;
       if (qj && (cloudJobIds.has(qj) || matchedLocalKeys.has(qj))) return false;
-      if (oKey && (cloudOrderKeys.has(oKey) || matchedLocalKeys.has(String(loc.orderId || '').trim().toLowerCase()))) return false;
+      if (fn && (cloudFileNames.has(fn) || matchedLocalKeys.has(fn))) return false;
+      if (oKey && (cloudOrderKeys.has(oKey) || matchedLocalKeys.has(norm(loc.orderId)))) return false;
 
       return true;
     });
