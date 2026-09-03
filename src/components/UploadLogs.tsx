@@ -732,9 +732,14 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
         // If local is completed but cloud log still says 'Started' or 'In Progress', INSTANTLY upgrade cloud log to Completed!
         if (isLocalDone || isCloudDone) {
           const fid = localMatch.driveFileId || cloudLog.driveFileId || '';
+          const resolvedSize = (localMatch.fileSize && localMatch.fileSize !== '—' && localMatch.fileSize !== '0')
+            ? localMatch.fileSize
+            : (cloudLog.fileSize && cloudLog.fileSize !== '—' && cloudLog.fileSize !== '0' ? cloudLog.fileSize : '—');
+
           return {
             ...cloudLog,
             status: 'Completed',
+            fileSize: resolvedSize,
             stage: localMatch.stage && localMatch.stage !== 'Session Created' ? localMatch.stage : (cloudLog.stage && cloudLog.stage !== 'Session Created' ? cloudLog.stage : 'Uploaded to Google Drive'),
             progress: 100,
             driveFileId: fid,
@@ -746,9 +751,14 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
 
         // If local is in active uploading progress, overlay real-time percentage
         if (localMatch.status === 'In Progress') {
+          const resolvedSize = (localMatch.fileSize && localMatch.fileSize !== '—' && localMatch.fileSize !== '0')
+            ? localMatch.fileSize
+            : (cloudLog.fileSize && cloudLog.fileSize !== '—' && cloudLog.fileSize !== '0' ? cloudLog.fileSize : '—');
+
           return {
             ...cloudLog,
             status: 'In Progress',
+            fileSize: resolvedSize,
             stage: localMatch.stage || cloudLog.stage,
             progress: localMatch.progress,
             driveFileId: localMatch.driveFileId || cloudLog.driveFileId,

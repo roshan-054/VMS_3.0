@@ -17,7 +17,9 @@ import {
   Info,
   Menu,
   X,
-  ChevronRight
+  ChevronRight,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { User, QueueItem } from './types';
 import { getStoredToken, setStoredToken, dbGetAllQueue, getStoredAutoRefreshInterval, getStoredNightMode, setStoredNightMode } from './lib/storage';
@@ -79,12 +81,20 @@ export function App() {
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isNightMode, setIsNightMode] = useState<boolean>(() => getStoredNightMode());
   const [pendingQueueCount, setPendingQueueCount] = useState(0);
   const [toastInfo, setToastInfo] = useState<{
     id: number;
     msg: string;
     type: 'info' | 'success' | 'error';
   } | null>(null);
+
+  const toggleNightMode = () => {
+    const next = !isNightMode;
+    setIsNightMode(next);
+    setStoredNightMode(next);
+    showToast(next ? 'Warehouse Night Mode activated' : 'Standard Light Mode activated', 'info');
+  };
 
   // Initialize and subscribe to branding updates (Logo, Favicon, App Title)
   useEffect(() => {
@@ -100,9 +110,26 @@ export function App() {
     });
 
     // Initialize Night Mode state
-    setStoredNightMode(getStoredNightMode());
+    const currentNight = getStoredNightMode();
+    setIsNightMode(currentNight);
+    setStoredNightMode(currentNight);
 
-    return () => unsubscribe();
+    const handleNightModeChange = (e: any) => {
+      if (e?.detail?.enabled !== undefined) {
+        setIsNightMode(e.detail.enabled);
+      } else {
+        setIsNightMode(getStoredNightMode());
+      }
+    };
+
+    window.addEventListener('vms_night_mode_updated', handleNightModeChange);
+    window.addEventListener('storage', handleNightModeChange);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener('vms_night_mode_updated', handleNightModeChange);
+      window.removeEventListener('storage', handleNightModeChange);
+    };
   }, []);
 
   // Monitor network status
@@ -230,6 +257,14 @@ export function App() {
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={toggleNightMode}
+            className="p-2 rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition cursor-pointer"
+            title={isNightMode ? 'Switch to Light Mode' : 'Switch to Night Mode'}
+            aria-label="Toggle Night Mode"
+          >
+            {isNightMode ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-slate-600" />}
+          </button>
           <span
             className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${
               isOnline
@@ -359,13 +394,23 @@ export function App() {
               <div className="text-xs font-bold text-slate-800 truncate">{currentUser.name}</div>
               <div className="text-[10px] text-slate-400 font-mono truncate">{currentUser.role}</div>
             </div>
-            <button
-              onClick={handleLogout}
-              className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition shrink-0 cursor-pointer"
-              title="Log Out"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={toggleNightMode}
+                className="p-1.5 text-slate-400 hover:text-amber-500 hover:bg-slate-100 rounded-lg transition shrink-0 cursor-pointer"
+                title={isNightMode ? 'Switch to Light Mode' : 'Switch to Warehouse Night Mode'}
+                aria-label="Toggle Night Mode"
+              >
+                {isNightMode ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4" />}
+              </button>
+              <button
+                onClick={handleLogout}
+                className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition shrink-0 cursor-pointer"
+                title="Log Out"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         </div>
       </aside>

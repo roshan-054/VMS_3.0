@@ -1542,13 +1542,18 @@ function uploadLogs_(p){
           continue;
         }
 
+        let fSize = String(odata[i][6] || '').trim();
+        if (!fSize || fSize === '0' || fSize === '0 B' || fSize === '0 MB' || fSize === '0.0 MB') {
+          fSize = '—';
+        }
+
         logs.push({
           timestamp: ts instanceof Date && !isNaN(ts.getTime()) ? ts.toISOString() : String(odata[i][0] || ''),
           orderId: oid,
           platform: pf,
           packerEmail: pe,
           fileName: fn,
-          fileSize: '—',
+          fileSize: fSize,
           uploadId: jid || oid,
           stage: 'Completed',
           progress: '100',
@@ -1637,7 +1642,7 @@ function uploadLogs_(p){
           platform: platform,
           packerEmail: pe,
           fileName: fileName,
-          fileSize: fileSize,
+          fileSize: (!fileSize || fileSize === '0' || fileSize === '0 B' || fileSize === '0 MB') ? '—' : fileSize,
           uploadId: uploadId,
           stage: stage,
           progress: progress,

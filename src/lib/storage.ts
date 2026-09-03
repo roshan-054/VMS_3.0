@@ -288,6 +288,9 @@ export function setStoredNightMode(enabled: boolean): void {
   } else {
     document.documentElement.classList.remove('dark');
   }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('vms_night_mode_updated', { detail: { enabled } }));
+  }
 }
 
 export function getStoredMaxConcurrentUploads(): number {

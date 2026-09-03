@@ -377,24 +377,39 @@ export async function deleteLogEntry(params: {
 }
 
 export function formatFileSize(bytes: number | string | undefined | null): string {
-  if (bytes === undefined || bytes === null || bytes === '') return '—';
+  if (bytes === undefined || bytes === null || bytes === '' || bytes === '—') return '—';
 
   if (typeof bytes === 'string') {
     const s = bytes.trim();
-    if (!s || s === '—' || s === 'Unknown' || s === 'Standard HD' || s === 'Standard 1080p') return s || '—';
+    if (
+      !s ||
+      s === '—' ||
+      s === '0' ||
+      s === '0 B' ||
+      s === '0 KB' ||
+      s === '0 MB' ||
+      s === '0.0 MB' ||
+      s === '0.00 MB' ||
+      s === 'Unknown' ||
+      s === 'Standard HD' ||
+      s === 'Standard 1080p'
+    ) {
+      return '—';
+    }
     if (s.endsWith('MB') || s.endsWith('KB') || s.endsWith('GB') || s.endsWith('B')) {
       return s;
     }
     const num = parseFloat(s);
-    if (isNaN(num)) return s;
+    if (isNaN(num) || num <= 0) return '—';
     bytes = num;
   }
 
   if (typeof bytes === 'number') {
-    if (bytes <= 0) return '0 MB';
+    if (isNaN(bytes) || bytes <= 0) return '—';
     const mb = bytes / (1024 * 1024);
     if (mb < 0.1) {
-      return `${(bytes / 1024).toFixed(1)} KB`;
+      const kb = bytes / 1024;
+      return kb < 0.1 ? `${bytes} B` : `${kb.toFixed(1)} KB`;
     }
     return `${mb.toFixed(2)} MB`;
   }
