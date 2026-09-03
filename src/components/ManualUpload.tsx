@@ -84,25 +84,78 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
   // Helper to parse filename into OrderID, Platform, Type
   const parseFilename = (name: string): { orderId: string; platform: PlatformType; recordingType: RecordingType } => {
     // Remove extension
-    const base = name.replace(/\.[^/.]+$/, '');
-    const parts = base.split(/[_-]/);
+    const base = name.replace(/\.[^/.]+$/, '').trim();
 
-    let parsedOrderId = parts[0] || base;
     let parsedPlatform: PlatformType = 'Amazon';
     let parsedType: RecordingType = 'Forward';
+    let extractedOrderId = '';
 
-    // Scan parts for platform and recording type
-    for (const part of parts) {
-      const lower = part.toLowerCase();
-      if (lower.includes('amazon')) parsedPlatform = 'Amazon';
-      else if (lower.includes('d2c') || lower.includes('shopify')) parsedPlatform = 'D2C';
-      else if (lower.includes('jiomart') || lower.includes('jio')) parsedPlatform = 'JioMart';
-      else if (lower.includes('return') || lower.includes('inbound')) parsedType = 'Return';
-      else if (lower.includes('forward') || lower.includes('outbound')) parsedType = 'Forward';
+    // First check overall filename for platform & type hints
+    const lowerBase = base.toLowerCase();
+    if (lowerBase.includes('amazon')) parsedPlatform = 'Amazon';
+    else if (lowerBase.includes('d2c') || lowerBase.includes('shopify')) parsedPlatform = 'D2C';
+    else if (lowerBase.includes('jiomart') || lowerBase.includes('jio')) parsedPlatform = 'JioMart';
+
+    if (lowerBase.includes('return') || lowerBase.includes('inbound')) parsedType = 'Return';
+    else if (lowerBase.includes('forward') || lowerBase.includes('outbound')) parsedType = 'Forward';
+
+    // Check if the string is split by underscores (the standard VMS format: [OrderID]_[Platform]_[Type])
+    // or by spaced hyphens " - "
+    let delimiter = '';
+    if (base.includes('_')) {
+      delimiter = '_';
+    } else if (base.includes(' - ')) {
+      delimiter = ' - ';
+    }
+
+    if (delimiter) {
+      const parts = base.split(delimiter).map((p) => p.trim()).filter(Boolean);
+      const remainingOrderParts: string[] = [];
+
+      for (const part of parts) {
+        const lower = part.toLowerCase();
+
+        // Check if this part is a platform name
+        if (lower === 'amazon' || lower === 'd2c' || lower === 'shopify' || lower === 'jiomart' || lower === 'jio' || lower === 'custom') {
+          if (lower === 'amazon') parsedPlatform = 'Amazon';
+          else if (lower === 'd2c' || lower === 'shopify') parsedPlatform = 'D2C';
+          else if (lower === 'jiomart' || lower === 'jio') parsedPlatform = 'JioMart';
+          else if (lower === 'custom') parsedPlatform = 'Custom';
+        }
+        // Check if this part is a recording type
+        else if (lower === 'return' || lower === 'inbound') {
+          parsedType = 'Return';
+        } else if (lower === 'forward' || lower === 'outbound') {
+          parsedType = 'Forward';
+        }
+        // Check if this part is a date token (e.g. 2026-09-03, 03-09-2026, 20260903)
+        else if (/^\d{4}-\d{2}-\d{2}$/.test(part) || /^\d{2}-\d{2}-\d{4}$/.test(part) || /^\d{8}$/.test(part)) {
+          // Skip date from Order ID
+        } else {
+          remainingOrderParts.push(part);
+        }
+      }
+
+      if (remainingOrderParts.length > 0) {
+        extractedOrderId = remainingOrderParts.join('_');
+      }
+    }
+
+    // Fallback if not cleanly matched by tokens
+    if (!extractedOrderId) {
+      let cleaned = base
+        .replace(/_?(amazon|d2c|jiomart|shopify|custom)_?/gi, '')
+        .replace(/_?(forward|return|inbound|outbound)_?/gi, '')
+        .replace(/_?\d{4}-\d{2}-\d{2}_?/g, '')
+        .replace(/_?\d{2}-\d{2}-\d{4}_?/g, '')
+        .trim();
+
+      cleaned = cleaned.replace(/^[-_\s]+|[-_\s]+$/g, '');
+      extractedOrderId = cleaned || base;
     }
 
     return {
-      orderId: parsedOrderId.trim(),
+      orderId: extractedOrderId.trim(),
       platform: parsedPlatform,
       recordingType: parsedType,
     };
