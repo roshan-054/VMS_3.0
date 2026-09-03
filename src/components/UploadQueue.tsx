@@ -43,7 +43,9 @@ import {
   retryUploadItem,
   bypassAllDuplicates,
   subscribeWorkerStatus,
-  fixAndCleanAllStuckUploads
+  fixAndCleanAllStuckUploads,
+  deleteUploadItem,
+  bulkDeleteUploadItems
 } from '../lib/uploadWorker';
 import { ManualUpload } from './ManualUpload';
 
@@ -85,9 +87,8 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
   const loadQueue = async () => {
     try {
       const localItems = await dbGetAllQueue();
-      // Auto-heal any items that completed or have a valid Drive fileId / all bytes uploaded so they never linger
-      let healed = false;
-      for (const item of localItems) {
+      // Only normalize presentation for completed items without triggering unneeded write locks
+      const normalized = localItems.map((item) => {
         const isDoneOrFinished = Boolean(
           item.fileId ||
           item.webViewLink ||
@@ -97,18 +98,20 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
         );
 
         if (isDoneOrFinished && item.status !== 'completed') {
-          item.status = 'completed';
-          item.progress = 100;
-          item.stage = 'Uploaded to Google Drive';
-          item.isDuplicate = false;
-          item.error = undefined;
-          await dbPutQueue(item);
-          healed = true;
+          return {
+            ...item,
+            status: 'completed' as const,
+            progress: 100,
+            stage: 'Uploaded to Google Drive',
+            isDuplicate: false,
+            error: undefined,
+          };
         }
-      }
-      const all = healed ? await dbGetAllQueue() : localItems;
-      all.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-      setQueue(all);
+        return item;
+      });
+
+      normalized.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      setQueue(normalized);
     } catch (e) {
       console.warn('Load queue error:', e);
     }
@@ -264,9 +267,9 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
           (i.error?.toLowerCase().includes('duplicate') ||
             i.stage?.toLowerCase().includes('duplicate')))
     );
-    for (const item of dups) {
-      await dbDeleteQueueItem(item.id);
-    }
+    const dupIds = dups.map((i) => i.id);
+    setQueue((prev) => prev.filter((i) => !dupIds.includes(i.id)));
+    await bulkDeleteUploadItems(dupIds);
     loadQueue();
     onQueueChanged();
     onShowToast(`Removed ${dups.length} blocked duplicate item(s) from local queue.`, 'info');
@@ -301,9 +304,14 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
     try {
       if (isBulkDeleting) {
         const itemsToDelete = queue.filter((i) => selectedQueueIds.includes(i.id));
-        for (const item of itemsToDelete) {
-          await dbDeleteQueueItem(item.id);
-          if (deleteFromSheetsOption || deleteDriveOption) {
+        const ids = itemsToDelete.map((i) => i.id);
+        setQueue((prev) => prev.filter((i) => !ids.includes(i.id)));
+        setSelectedQueueIds([]);
+
+        await bulkDeleteUploadItems(ids);
+
+        if (deleteFromSheetsOption || deleteDriveOption) {
+          for (const item of itemsToDelete) {
             try {
               await deleteLogEntry({
                 orderId: item.orderId,
@@ -318,19 +326,25 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
           }
         }
         const count = itemsToDelete.length;
-        setSelectedQueueIds([]);
         loadQueue();
         onQueueChanged();
         const sheetMsg = deleteFromSheetsOption ? ' and Google Sheet logs' : '';
         onShowToast(`Deleted ${count} item(s) from local queue${sheetMsg}.`, 'success');
       } else if (itemToDelete) {
-        await dbDeleteQueueItem(itemToDelete.id);
+        const targetId = itemToDelete.id;
+        const targetOrder = itemToDelete.orderId;
+        const targetUploadId = itemToDelete.uploadId || itemToDelete.uploadSessionId;
+        const targetDriveId = itemToDelete.fileId || itemToDelete.driveFileId;
+
+        setQueue((prev) => prev.filter((i) => i.id !== targetId));
+        await deleteUploadItem(targetId);
+
         if (deleteFromSheetsOption || deleteDriveOption) {
           try {
             await deleteLogEntry({
-              orderId: itemToDelete.orderId,
-              uploadId: itemToDelete.uploadId || itemToDelete.uploadSessionId,
-              driveFileId: itemToDelete.fileId || itemToDelete.driveFileId,
+              orderId: targetOrder,
+              uploadId: targetUploadId,
+              driveFileId: targetDriveId,
               deleteFromSheets: deleteFromSheetsOption,
               deleteFromDrive: deleteDriveOption,
             });
@@ -341,7 +355,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
         loadQueue();
         onQueueChanged();
         const sheetMsg = deleteFromSheetsOption ? ' and Google Sheet logs' : '';
-        onShowToast(`Removed Order ${itemToDelete.orderId} from upload queue${sheetMsg}.`, 'success');
+        onShowToast(`Removed Order ${targetOrder} from upload queue${sheetMsg}.`, 'success');
       }
     } catch (err: any) {
       onShowToast(`Delete error: ${err.message || err}`, 'error');
@@ -355,9 +369,9 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
 
   const handleClearCompleted = async () => {
     const completed = queue.filter((i) => i.status === 'completed');
-    for (const item of completed) {
-      await dbDeleteQueueItem(item.id);
-    }
+    const completedIds = completed.map((i) => i.id);
+    setQueue((prev) => prev.filter((i) => !completedIds.includes(i.id)));
+    await bulkDeleteUploadItems(completedIds);
     loadQueue();
     onQueueChanged();
     onShowToast(`Cleared ${completed.length} completed items from queue.`, 'info');

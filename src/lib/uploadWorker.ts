@@ -2,6 +2,7 @@ import { QueueItem } from '../types';
 import {
   dbGetAllQueue,
   dbPutQueue,
+  dbDeleteQueueItem,
   getStoredDriveFolderId,
   getStoredChunkSize,
   getStoredAutoUpload,
@@ -25,6 +26,7 @@ let isWorkerBusy = false;
 let autoSyncTimer: any = null;
 let toastHandler: WorkerToastHandler | null = null;
 const stateListeners = new Set<(state: WorkerState) => void>();
+const deletedItemIds = new Set<string>();
 
 let currentState: WorkerState = {
   isProcessing: false,
@@ -34,6 +36,70 @@ let currentState: WorkerState = {
   activeChunk: 0,
   totalChunks: 0,
 };
+
+/**
+ * Safely saves an item to IndexedDB ONLY if it has not been deleted by the user.
+ * This prevents background worker tasks from resurrecting deleted items.
+ */
+async function safePutQueue(item: QueueItem): Promise<boolean> {
+  if (!item || !item.id || deletedItemIds.has(item.id)) {
+    return false;
+  }
+  const all = await dbGetAllQueue();
+  if (!all.some((i) => i.id === item.id)) {
+    return false;
+  }
+  await dbPutQueue(item);
+  window.dispatchEvent(new CustomEvent('ops_queue_updated'));
+  return true;
+}
+
+/**
+ * Permanently deletes an item from local queue, aborts any active upload for it,
+ * purges memory caches, and prevents resurrection.
+ */
+export async function deleteUploadItem(id: string): Promise<void> {
+  deletedItemIds.add(id);
+  manualFileCache.delete(id);
+
+  if (currentState.activeItemId === id) {
+    updateState({
+      isProcessing: false,
+      activeItemId: null,
+      activeProgress: 0,
+      activeStage: '',
+      activeChunk: 0,
+      totalChunks: 0,
+    });
+    isWorkerBusy = false;
+  }
+
+  await dbDeleteQueueItem(id);
+  window.dispatchEvent(new CustomEvent('ops_queue_updated'));
+}
+
+/**
+ * Permanently deletes multiple items in bulk and prevents background resurrection
+ */
+export async function bulkDeleteUploadItems(ids: string[]): Promise<void> {
+  for (const id of ids) {
+    deletedItemIds.add(id);
+    manualFileCache.delete(id);
+    if (currentState.activeItemId === id) {
+      updateState({
+        isProcessing: false,
+        activeItemId: null,
+        activeProgress: 0,
+        activeStage: '',
+        activeChunk: 0,
+        totalChunks: 0,
+      });
+      isWorkerBusy = false;
+    }
+    await dbDeleteQueueItem(id);
+  }
+  window.dispatchEvent(new CustomEvent('ops_queue_updated'));
+}
 
 function updateState(partial: Partial<WorkerState>) {
   currentState = { ...currentState, ...partial };
@@ -139,11 +205,16 @@ export async function triggerUploadWorker(): Promise<void> {
       manualFileCache.has(candidate.id) ||
       Boolean(candidate.blob);
 
+    if (deletedItemIds.has(candidate.id)) {
+      isWorkerBusy = false;
+      return;
+    }
+
     if (!hasData) {
       candidate.status = 'failed';
       candidate.error = 'Recording video data is missing or corrupted. Please re-queue the video.';
       candidate.stage = 'Error: Video data missing';
-      await dbPutQueue(candidate);
+      await safePutQueue(candidate);
       isWorkerBusy = false;
       // Auto-trigger next sequential item
       setTimeout(() => triggerUploadWorker(), 200);
@@ -182,6 +253,11 @@ export async function triggerUploadWorker(): Promise<void> {
         }
       }
 
+      if (deletedItemIds.has(currentItem.id)) {
+        isWorkerBusy = false;
+        return;
+      }
+
       // If remote already has a completed Drive file for this order:
       // Check if THIS queue item was the one uploaded (e.g. uploadId set, or progress >= 50%, or status was uploading/failed)
       if (remoteDuplicate && remoteDuplicate.fileId && remoteDuplicate.fileId.length > 5) {
@@ -204,7 +280,7 @@ export async function triggerUploadWorker(): Promise<void> {
             remoteDuplicate.webViewLink ||
             remoteDuplicate.playbackUrl ||
             `https://drive.google.com/file/d/${remoteDuplicate.fileId}/preview`;
-          await dbPutQueue(currentItem);
+          await safePutQueue(currentItem);
           updateState({
             isProcessing: false,
             activeItemId: null,
@@ -227,7 +303,7 @@ export async function triggerUploadWorker(): Promise<void> {
           remoteDuplicate?.timestamp || 'Previous Record'
         }).`;
 
-        await dbPutQueue(currentItem);
+        await safePutQueue(currentItem);
         updateState({
           isProcessing: false,
           activeItemId: null,
@@ -247,13 +323,18 @@ export async function triggerUploadWorker(): Promise<void> {
       }
     }
 
+    if (deletedItemIds.has(currentItem.id)) {
+      isWorkerBusy = false;
+      return;
+    }
+
     // -------------------------------------------------------------
     // START UPLOAD PROCESS (Strict Single Active Item)
     // -------------------------------------------------------------
     currentItem.status = 'uploading';
     currentItem.isDuplicate = false;
     currentItem.stage = 'Connecting to Google Drive...';
-    await dbPutQueue(currentItem);
+    await safePutQueue(currentItem);
 
     updateState({
       isProcessing: true,
@@ -280,7 +361,7 @@ export async function triggerUploadWorker(): Promise<void> {
       currentItem.status = 'failed';
       currentItem.error = 'Video file size is empty (0 bytes) or missing. Please re-queue the video.';
       currentItem.stage = 'Error: Video file empty';
-      await dbPutQueue(currentItem);
+      await safePutQueue(currentItem);
       isWorkerBusy = false;
       setTimeout(() => triggerUploadWorker(), 300);
       return;
@@ -310,6 +391,10 @@ export async function triggerUploadWorker(): Promise<void> {
         queueJobId: currentItem.id,
       });
     } catch (startErr: any) {
+      if (deletedItemIds.has(currentItem.id)) {
+        isWorkerBusy = false;
+        return;
+      }
       const errMsg = startErr?.message || String(startErr);
       if (
         errMsg.toLowerCase().includes('duplicate') ||
@@ -330,7 +415,7 @@ export async function triggerUploadWorker(): Promise<void> {
             currentItem.webViewLink = verified.webViewLink || `https://drive.google.com/file/d/${verified.fileId}/preview`;
             currentItem.error = undefined;
             currentItem.isDuplicate = false;
-            await dbPutQueue(currentItem);
+            await safePutQueue(currentItem);
             notify(`✅ Order ${currentItem.orderId} verified in Google Drive!`, 'success');
             isWorkerBusy = false;
             setTimeout(() => triggerUploadWorker(), 200);
@@ -346,7 +431,7 @@ export async function triggerUploadWorker(): Promise<void> {
         currentItem.stage = `Blocked: Duplicate Order ID (${currentItem.orderId})`;
         currentItem.error = `Duplicate Order ID: Order "${currentItem.orderId}" has already been uploaded to Google Drive.`;
         currentItem.duplicateReason = errMsg;
-        await dbPutQueue(currentItem);
+        await safePutQueue(currentItem);
         updateState({ isProcessing: false, activeItemId: null });
         notify(`⚠️ Duplicate Order ID: Order ${currentItem.orderId} is already in Google Drive.`, 'error');
         isWorkerBusy = false;
@@ -354,6 +439,11 @@ export async function triggerUploadWorker(): Promise<void> {
         return;
       }
       throw startErr;
+    }
+
+    if (deletedItemIds.has(currentItem.id)) {
+      isWorkerBusy = false;
+      return;
     }
 
     if (!startRes?.success) {
@@ -367,7 +457,7 @@ export async function triggerUploadWorker(): Promise<void> {
         currentItem.error =
           startRes.error ||
           `Duplicate Order ID: Order "${currentItem.orderId}" already uploaded.`;
-        await dbPutQueue(currentItem);
+        await safePutQueue(currentItem);
         updateState({ isProcessing: false, activeItemId: null });
         notify(`⚠️ Duplicate Order ID: Order ${currentItem.orderId} already uploaded.`, 'error');
         isWorkerBusy = false;
@@ -389,9 +479,20 @@ export async function triggerUploadWorker(): Promise<void> {
     let useDirectStreaming = Boolean(directUploadUrl);
 
     for (let c = 0; c < totalChunks; c++) {
-      // Re-check if item was paused by user mid-stream
+      if (deletedItemIds.has(currentItem.id)) {
+        isWorkerBusy = false;
+        updateState({ isProcessing: false, activeItemId: null, activeProgress: 0, activeStage: '' });
+        return;
+      }
+
+      // Re-check if item was deleted or paused by user mid-stream
       const freshQueue = await dbGetAllQueue();
       const freshItem = freshQueue.find((i) => i.id === currentItem.id);
+      if (!freshItem || deletedItemIds.has(currentItem.id)) {
+        isWorkerBusy = false;
+        updateState({ isProcessing: false, activeItemId: null, activeProgress: 0, activeStage: '' });
+        return;
+      }
       if (freshItem && freshItem.status === 'paused') {
         isWorkerBusy = false;
         updateState({ isProcessing: false, activeItemId: null });
@@ -416,8 +517,7 @@ export async function triggerUploadWorker(): Promise<void> {
           ? 'File data in memory was cleared by page reload. Please re-upload the video.'
           : 'Video data missing or unreadable. Please re-queue the video.';
         currentItem.stage = 'Error: Video data unreadable';
-        await dbPutQueue(currentItem);
-        window.dispatchEvent(new CustomEvent('ops_queue_updated'));
+        await safePutQueue(currentItem);
         isWorkerBusy = false;
         triggerUploadWorker();
         return;
@@ -435,8 +535,7 @@ export async function triggerUploadWorker(): Promise<void> {
       currentItem.uploadedBytes = endByte;
       currentItem.progress = totalChunks === 1 ? 75 : Math.min(95, Math.round((endByte / totalBytes) * 100));
 
-      await dbPutQueue(currentItem);
-      window.dispatchEvent(new CustomEvent('ops_queue_updated'));
+      await safePutQueue(currentItem);
 
       updateState({
         isProcessing: true,
@@ -511,6 +610,10 @@ export async function triggerUploadWorker(): Promise<void> {
       if (!chunkSuccess) {
         const base64 = await blobToBase64(chunkBlob);
         while (attempt < 3 && !chunkSuccess) {
+          if (deletedItemIds.has(currentItem.id)) {
+            isWorkerBusy = false;
+            return;
+          }
           attempt++;
           try {
             const chunkRes: any = await requestApi('uploadChunk', {
@@ -562,6 +665,11 @@ export async function triggerUploadWorker(): Promise<void> {
         }
       }
 
+      if (deletedItemIds.has(currentItem.id)) {
+        isWorkerBusy = false;
+        return;
+      }
+
       // If final chunk reached or file ID obtained, immediately mark completed (100%)
       if (isFinalChunk || finalFileId) {
         const resolvedFileId = finalFileId || '';
@@ -577,8 +685,7 @@ export async function triggerUploadWorker(): Promise<void> {
         currentItem.webViewLink = resolvedWebLink;
         currentItem.fileId = resolvedFileId;
 
-        await dbPutQueue(currentItem);
-        window.dispatchEvent(new CustomEvent('ops_queue_updated'));
+        await safePutQueue(currentItem);
 
         updateState({
           isProcessing: false,
@@ -599,9 +706,9 @@ export async function triggerUploadWorker(): Promise<void> {
     try {
       const allItems = await dbGetAllQueue();
       const currentItem = allItems.find(
-        (i) => i.id === currentState.activeItemId || i.status === 'uploading'
+        (i) => (i.id === currentState.activeItemId || i.status === 'uploading') && !deletedItemIds.has(i.id)
       );
-      if (currentItem) {
+      if (currentItem && !deletedItemIds.has(currentItem.id)) {
         const verified = await checkDuplicate({
           orderId: currentItem.orderId,
           platform: currentItem.platform,
@@ -618,16 +725,14 @@ export async function triggerUploadWorker(): Promise<void> {
             `https://drive.google.com/file/d/${verified.fileId}/preview`;
           currentItem.error = undefined;
           currentItem.isDuplicate = false;
-          await dbPutQueue(currentItem);
-          window.dispatchEvent(new CustomEvent('ops_queue_updated'));
+          await safePutQueue(currentItem);
           verifiedAfterError = true;
           notify(`✅ Order ${currentItem.orderId} verified as uploaded to Google Drive!`, 'success');
         } else {
           currentItem.status = 'failed';
           currentItem.error = err.message || 'Upload transmission error';
           currentItem.stage = 'Upload interrupted - Ready to resume';
-          await dbPutQueue(currentItem);
-          window.dispatchEvent(new CustomEvent('ops_queue_updated'));
+          await safePutQueue(currentItem);
         }
       }
     } catch (_) {}
@@ -649,7 +754,7 @@ export async function triggerUploadWorker(): Promise<void> {
     setTimeout(async () => {
       try {
         const items = await dbGetAllQueue();
-        const hasMorePending = items.some((i) => i.status === 'pending');
+        const hasMorePending = items.some((i) => i.status === 'pending' && !deletedItemIds.has(i.id));
         if (hasMorePending) {
           triggerUploadWorker();
         }
@@ -711,11 +816,10 @@ export function initUploadWorker(handler?: WorkerToastHandler): () => void {
 export async function pauseUploadItem(id: string): Promise<void> {
   const items = await dbGetAllQueue();
   const item = items.find((i) => i.id === id);
-  if (item) {
+  if (item && !deletedItemIds.has(id)) {
     item.status = 'paused';
     item.stage = 'Paused by operator';
-    await dbPutQueue(item);
-    window.dispatchEvent(new CustomEvent('ops_queue_updated'));
+    await safePutQueue(item);
   }
 }
 
@@ -725,12 +829,11 @@ export async function pauseUploadItem(id: string): Promise<void> {
 export async function resumeUploadItem(id: string): Promise<void> {
   const items = await dbGetAllQueue();
   const item = items.find((i) => i.id === id);
-  if (item) {
+  if (item && !deletedItemIds.has(id)) {
     item.status = 'pending';
     item.error = undefined;
     item.stage = 'Queued for upload';
-    await dbPutQueue(item);
-    window.dispatchEvent(new CustomEvent('ops_queue_updated'));
+    await safePutQueue(item);
     triggerUploadWorker();
   }
 }
@@ -741,7 +844,7 @@ export async function resumeUploadItem(id: string): Promise<void> {
 export async function retryUploadItem(id: string, bypassDuplicate = false): Promise<void> {
   const items = await dbGetAllQueue();
   const item = items.find((i) => i.id === id);
-  if (item) {
+  if (item && !deletedItemIds.has(id)) {
     item.status = 'pending';
     item.error = undefined;
     item.isDuplicate = false;
@@ -752,9 +855,8 @@ export async function retryUploadItem(id: string, bypassDuplicate = false): Prom
     if (bypassDuplicate) {
       item.bypassDuplicate = true;
     }
-    await dbPutQueue(item);
+    await safePutQueue(item);
     isWorkerBusy = false;
-    window.dispatchEvent(new CustomEvent('ops_queue_updated'));
     triggerUploadWorker();
   }
 }
@@ -766,6 +868,7 @@ export async function bypassAllDuplicates(): Promise<number> {
   const items = await dbGetAllQueue();
   let count = 0;
   for (const item of items) {
+    if (deletedItemIds.has(item.id)) continue;
     const isDup =
       item.isDuplicate ||
       (item.status === 'failed' &&
@@ -780,13 +883,12 @@ export async function bypassAllDuplicates(): Promise<number> {
       item.uploadedBytes = 0;
       item.progress = 0;
       item.stage = 'Queued for upload (Duplicate Bypassed)';
-      await dbPutQueue(item);
+      await safePutQueue(item);
       count++;
     }
   }
   isWorkerBusy = false;
   updateState({ isProcessing: false, activeItemId: null, activeProgress: 0, activeStage: '' });
-  window.dispatchEvent(new CustomEvent('ops_queue_updated'));
   setTimeout(() => triggerUploadWorker(), 200);
   return count;
 }
@@ -798,6 +900,7 @@ export async function resetStuckLocalQueue(): Promise<number> {
   const items = await dbGetAllQueue();
   let count = 0;
   for (const item of items) {
+    if (deletedItemIds.has(item.id)) continue;
     if (item.status === 'uploading' || (item.status === 'failed' && item.blob)) {
       item.status = 'pending';
       item.stage = 'Queued for upload';
@@ -807,13 +910,12 @@ export async function resetStuckLocalQueue(): Promise<number> {
       item.currentChunk = 0;
       item.uploadedBytes = 0;
       item.progress = 0;
-      await dbPutQueue(item);
+      await safePutQueue(item);
       count++;
     }
   }
   isWorkerBusy = false;
   updateState({ isProcessing: false, activeItemId: null, activeProgress: 0, activeStage: '' });
-  window.dispatchEvent(new CustomEvent('ops_queue_updated'));
   return count;
 }
 
