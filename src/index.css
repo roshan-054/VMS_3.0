@@ -13,82 +13,161 @@ html.dark body {
   color-scheme: dark;
 }
 
-/* Backgrounds - Comprehensive wildcard matching */
+/* Backgrounds */
 html.dark .bg-white,
-html.dark [class*="bg-white"] {
+html.dark [class~="bg-white"] {
   background-color: #151d30 !important;
 }
 
 html.dark .bg-slate-50,
-html.dark [class*="bg-slate-50"],
-html.dark [class*="bg-gray-50"],
-html.dark [class*="bg-zinc-50"],
-html.dark [class*="bg-neutral-50"] {
+html.dark [class~="bg-slate-50"],
+html.dark [class*="bg-slate-50/"],
+html.dark [class~="bg-gray-50"],
+html.dark [class*="bg-gray-50/"],
+html.dark [class~="bg-zinc-50"],
+html.dark [class~="bg-neutral-50"] {
   background-color: #0f172a !important;
 }
 
 html.dark .bg-slate-100,
-html.dark [class*="bg-slate-100"],
-html.dark [class*="bg-gray-100"],
-html.dark [class*="bg-zinc-100"],
-html.dark [class*="bg-neutral-100"] {
+html.dark [class~="bg-slate-100"],
+html.dark [class*="bg-slate-100/"],
+html.dark [class~="bg-gray-100"],
+html.dark [class*="bg-gray-100/"],
+html.dark [class~="bg-zinc-100"],
+html.dark [class~="bg-neutral-100"] {
   background-color: #0f172a !important;
 }
 
 html.dark .bg-slate-200,
-html.dark [class*="bg-slate-200"],
-html.dark [class*="bg-gray-200"],
-html.dark [class*="bg-zinc-200"],
-html.dark [class*="bg-neutral-200"] {
+html.dark [class~="bg-slate-200"],
+html.dark [class*="bg-slate-200/"],
+html.dark [class~="bg-gray-200"],
+html.dark [class~="bg-zinc-200"],
+html.dark [class~="bg-neutral-200"] {
   background-color: #1e293b !important;
 }
 
 html.dark .bg-slate-300,
-html.dark [class*="bg-slate-300"],
-html.dark [class*="bg-gray-300"] {
+html.dark [class~="bg-slate-300"],
+html.dark [class~="bg-gray-300"] {
   background-color: #334155 !important;
 }
 
-/* Colored Container Tints */
+/* Colored Container Tints (Using isolated word selectors to prevent colliding with bg-*-500) */
 html.dark [class*="bg-gradient-"] {
   background-image: none !important;
   background-color: #151d30 !important;
 }
 
-html.dark [class*="bg-blue-50"] {
+html.dark .bg-blue-50,
+html.dark [class~="bg-blue-50"],
+html.dark [class*="bg-blue-50/"] {
   background-color: rgba(30, 58, 138, 0.25) !important;
 }
 
-html.dark [class*="bg-purple-50"],
-html.dark [class*="bg-purple-100"] {
+html.dark .bg-purple-50,
+html.dark .bg-purple-100,
+html.dark [class~="bg-purple-50"],
+html.dark [class*="bg-purple-50/"],
+html.dark [class~="bg-purple-100"],
+html.dark [class*="bg-purple-100/"] {
   background-color: rgba(88, 28, 135, 0.25) !important;
 }
 
-html.dark [class*="bg-emerald-50"],
-html.dark [class*="bg-emerald-100"] {
+html.dark .bg-emerald-50,
+html.dark .bg-emerald-100,
+html.dark [class~="bg-emerald-50"],
+html.dark [class*="bg-emerald-50/"],
+html.dark [class~="bg-emerald-100"],
+html.dark [class*="bg-emerald-100/"] {
   background-color: rgba(6, 78, 59, 0.25) !important;
 }
 
-html.dark [class*="bg-amber-50"],
-html.dark [class*="bg-amber-100"] {
+html.dark .bg-amber-50,
+html.dark .bg-amber-100,
+html.dark [class~="bg-amber-50"],
+html.dark [class*="bg-amber-50/"],
+html.dark [class~="bg-amber-100"],
+html.dark [class*="bg-amber-100/"] {
   background-color: rgba(120, 53, 15, 0.25) !important;
 }
 
-html.dark [class*="bg-red-50"],
-html.dark [class*="bg-red-100"],
-html.dark [class*="bg-rose-50"],
-html.dark [class*="bg-rose-100"] {
+html.dark .bg-red-50,
+html.dark .bg-red-100,
+html.dark .bg-rose-50,
+html.dark .bg-rose-100,
+html.dark [class~="bg-red-50"],
+html.dark [class*="bg-red-50/"],
+html.dark [class~="bg-red-100"],
+html.dark [class~="bg-rose-50"],
+html.dark [class*="bg-rose-50/"],
+html.dark [class~="bg-rose-100"] {
   background-color: rgba(127, 29, 29, 0.25) !important;
 }
 
-html.dark [class*="bg-indigo-50"],
-html.dark [class*="bg-indigo-100"] {
+html.dark .bg-indigo-50,
+html.dark .bg-indigo-100,
+html.dark [class~="bg-indigo-50"],
+html.dark [class*="bg-indigo-50/"],
+html.dark [class~="bg-indigo-100"] {
   background-color: rgba(49, 46, 129, 0.25) !important;
 }
 
-html.dark [class*="bg-sky-50"],
-html.dark [class*="bg-sky-100"] {
+html.dark .bg-sky-50,
+html.dark .bg-sky-100,
+html.dark [class~="bg-sky-50"],
+html.dark [class*="bg-sky-50/"],
+html.dark [class~="bg-sky-100"] {
   background-color: rgba(12, 74, 110, 0.25) !important;
+}
+
+/* Solid Vivid Backgrounds - Explicit vibrant preservation in Dark Mode */
+html.dark .bg-emerald-500,
+html.dark .bg-emerald-600,
+html.dark [class~="bg-emerald-500"],
+html.dark [class~="bg-emerald-600"] {
+  background-color: #10b981 !important;
+}
+
+html.dark .bg-blue-500,
+html.dark .bg-blue-600,
+html.dark [class~="bg-blue-500"],
+html.dark [class~="bg-blue-600"] {
+  background-color: #3b82f6 !important;
+}
+
+html.dark .bg-rose-500,
+html.dark .bg-rose-600,
+html.dark .bg-red-500,
+html.dark .bg-red-600,
+html.dark [class~="bg-rose-500"],
+html.dark [class~="bg-rose-600"],
+html.dark [class~="bg-red-500"],
+html.dark [class~="bg-red-600"] {
+  background-color: #f43f5e !important;
+}
+
+html.dark .bg-amber-500,
+html.dark .bg-amber-600,
+html.dark [class~="bg-amber-500"],
+html.dark [class~="bg-amber-600"] {
+  background-color: #f59e0b !important;
+}
+
+html.dark .bg-purple-500,
+html.dark .bg-purple-600,
+html.dark [class~="bg-purple-500"],
+html.dark [class~="bg-purple-600"] {
+  background-color: #a855f7 !important;
+}
+
+/* High-Contrast Progress Bar Tracks in Dark Mode */
+html.dark div[class*="rounded-full"][class*="h-1"],
+html.dark div[class*="rounded-full"][class*="h-2"],
+html.dark .progress-track {
+  background-color: #1e293b !important;
+  border-color: #334155 !important;
 }
 
 /* Text Colors */

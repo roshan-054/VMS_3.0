@@ -1755,14 +1755,33 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
                       <td className="py-3.5 px-4 min-w-[180px]">
                         <div className="space-y-1.5">
                           <div className="flex items-center justify-between text-[11px]">
-                            <span className="text-slate-700 font-medium truncate max-w-[140px]" title={log.stage}>
-                              {log.stage || (isCompleted ? 'Uploaded to Google Drive' : 'In Progress')}
+                            <span
+                              className={`font-medium truncate max-w-[140px] ${
+                                isCompleted
+                                  ? 'text-emerald-600 font-semibold'
+                                  : isFailed
+                                  ? 'text-rose-600 font-semibold'
+                                  : 'text-slate-700'
+                              }`}
+                              title={log.stage}
+                            >
+                              {log.stage || (isCompleted ? 'Completed' : 'In Progress')}
                             </span>
-                            <span className="font-mono font-bold text-slate-600 ml-2">{pct}%</span>
+                            <span
+                              className={`font-mono font-bold ml-2 ${
+                                isCompleted
+                                  ? 'text-emerald-600'
+                                  : isFailed
+                                  ? 'text-rose-600'
+                                  : 'text-blue-600'
+                              }`}
+                            >
+                              {pct}%
+                            </span>
                           </div>
-                          <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                          <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden border border-slate-300/60 progress-track">
                             <div
-                              className={`h-full transition-all duration-300 ${
+                              className={`h-full transition-all duration-300 rounded-full ${
                                 isCompleted
                                   ? 'bg-emerald-500'
                                   : isFailed
