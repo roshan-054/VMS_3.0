@@ -21,7 +21,7 @@
 - Audio recording is **disabled by default** (muted) to preserve packing station privacy and bandwidth; operators can toggle it on when needed via the toolbar microphone button.
 
 ### 4. Storage & Integrations
-- **Google Drive Hierarchy**: `VMS_Packing_Videos / <Platform> / <Type> / <YYYY-MM> / <YYYY-MM-DD> / [OrderID]_[Platform]_[Type].mp4`
+- **Google Drive Hierarchy**: `VMS_Packing_Videos / <Platform> / <Type> / <MMM-YYYY> / <YYYY-MM-DD> / [OrderID]_[Platform]_[Type].mp4`
 - **Google Sheets Logging**: Automatic row insertion with timestamp, order ID, platform, recording type, duration, operator name, and Google Drive URL.
 - **Local Fallback**: IndexedDB local storage queue with automatic retry when offline or when tokens are refreshed.
 

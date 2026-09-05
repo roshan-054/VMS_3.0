@@ -970,17 +970,22 @@ function getOrCreateFolder_(parent, name) {
 
 /**
  * Resolves the destination folder using the Monthly Hierarchy:
- * Root / <Platform> / <Type> / <YYYY-MM> / <YYYY-MM-DD>
+ * Root / <Platform> / <Type> / <MMM-YYYY> / <YYYY-MM-DD>
+ * Example: VMS_Packing_Videos / Amazon / Forward / Aug-2026 / 2026-08-21 /
  */
 function dateFolder_(platform, type, customDriveFolderId, targetDateStr) {
   const root = parentFolder_(customDriveFolderId);
   const pf = getOrCreateFolder_(root, platform || 'Custom');
   const tf = getOrCreateFolder_(pf, type || 'Forward');
   let dateName = targetDateStr ? String(targetDateStr).trim() : '';
-  if (!dateName || !/^\d{4}-\d{2}-\d{2}$/.test(dateName)) {
-    dateName = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  let dateObj = new Date();
+  if (dateName && /^\d{4}-\d{2}-\d{2}$/.test(dateName)) {
+    const parts = dateName.split('-');
+    dateObj = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10), 12, 0, 0);
+  } else {
+    dateName = Utilities.formatDate(dateObj, Session.getScriptTimeZone(), 'yyyy-MM-dd');
   }
-  const monthName = dateName.substring(0, 7); // 'YYYY-MM', e.g. '2026-08'
+  const monthName = Utilities.formatDate(dateObj, Session.getScriptTimeZone(), 'MMM-yyyy'); // e.g. "Aug-2026"
   const mf = getOrCreateFolder_(tf, monthName);
   return getOrCreateFolder_(mf, dateName);
 }
@@ -988,9 +993,10 @@ function dateFolder_(platform, type, customDriveFolderId, targetDateStr) {
 /**
  * Migrates existing flat Drive structure:
  * From: Root / <Platform> / <Type> / <YYYY-MM-DD>
- * To:   Root / <Platform> / <Type> / <YYYY-MM> / <YYYY-MM-DD>
+ * To:   Root / <Platform> / <Type> / <MMM-YYYY> / <YYYY-MM-DD>  (e.g. Aug-2026/2026-08-21)
  *
- * Also files any loose videos inside <Platform> / <Type> into their respective month/date folder,
+ * Also checks prior 'YYYY-MM' folders (e.g. '2026-08') and merges them into 'MMM-YYYY' (e.g. 'Aug-2026'),
+ * files any loose videos inside <Platform> / <Type> into their respective month/date folder,
  * and verifies/repairs all Google Sheet links in OrderLog and ReturnLog.
  */
 function migrateDriveFoldersToMonthly_(customFolderId) {
@@ -1023,9 +1029,54 @@ function migrateDriveFoldersToMonthly_(customFolderId) {
       foldersToProcess.forEach(function(childFolder) {
         const folderName = childFolder.getName().trim();
 
-        // Check if this folder is an unmigrated daily date folder 'YYYY-MM-DD' (e.g. 2026-08-21)
+        // Case A: Prior YYYY-MM numeric month folder (e.g. '2026-08') -> merge into 'Aug-2026'
+        if (/^\d{4}-\d{2}$/.test(folderName)) {
+          const parts = folderName.split('-');
+          const dObj = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, 1, 12, 0, 0);
+          const targetMmm = Utilities.formatDate(dObj, Session.getScriptTimeZone(), 'MMM-yyyy');
+          if (folderName !== targetMmm) {
+            const destMmmFolder = getOrCreateFolder_(tf, targetMmm);
+            // Move/merge sub-date folders from YYYY-MM into MMM-yyyy
+            const innerFolders = childFolder.getFolders();
+            while (innerFolders.hasNext()) {
+              const subF = innerFolders.next();
+              const subName = subF.getName();
+              const existingSub = destMmmFolder.getFoldersByName(subName);
+              if (existingSub.hasNext()) {
+                const existingDest = existingSub.next();
+                const subFiles = subF.getFiles();
+                while (subFiles.hasNext()) {
+                  const f = subFiles.next();
+                  existingDest.addFile(f);
+                  subF.removeFile(f);
+                  movedFiles++;
+                }
+                try { subF.setTrashed(true); } catch(_) {}
+              } else {
+                destMmmFolder.addFolder(subF);
+                childFolder.removeFolder(subF);
+                movedDateFolders++;
+              }
+            }
+            // Move any direct files
+            const innerFiles = childFolder.getFiles();
+            while (innerFiles.hasNext()) {
+              const file = innerFiles.next();
+              destMmmFolder.addFile(file);
+              childFolder.removeFile(file);
+              movedFiles++;
+            }
+            try { childFolder.setTrashed(true); } catch(_) {}
+            logs.push(`Re-indexed month folder ${pfName}/${tfName}/${folderName} -> ${targetMmm}`);
+          }
+          return;
+        }
+
+        // Case B: Unmigrated daily date folder 'YYYY-MM-DD' (e.g. 2026-08-21)
         if (/^\d{4}-\d{2}-\d{2}$/.test(folderName)) {
-          const monthName = folderName.substring(0, 7); // 'YYYY-MM', e.g. '2026-08'
+          const parts = folderName.split('-');
+          const dObj = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10), 12, 0, 0);
+          const monthName = Utilities.formatDate(dObj, Session.getScriptTimeZone(), 'MMM-yyyy'); // e.g. 'Aug-2026'
           const monthFolder = getOrCreateFolder_(tf, monthName);
 
           // Check if monthFolder already has a date folder with this name
@@ -1081,7 +1132,7 @@ function migrateDriveFoldersToMonthly_(customFolderId) {
         if (fileName.endsWith('.mp4') || fileName.endsWith('.webm')) {
           const fileDate = file.getDateCreated ? file.getDateCreated() : file.getLastUpdated();
           const dateStr = Utilities.formatDate(fileDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-          const monthStr = dateStr.substring(0, 7);
+          const monthStr = Utilities.formatDate(fileDate, Session.getScriptTimeZone(), 'MMM-yyyy');
           const monthFolder = getOrCreateFolder_(tf, monthStr);
           const dateFolder = getOrCreateFolder_(monthFolder, dateStr);
 
@@ -1097,6 +1148,7 @@ function migrateDriveFoldersToMonthly_(customFolderId) {
   // 3. Repair / verify all Sheet links in OrderLog and ReturnLog
   const repairRes = repairPlaybackUrls();
 
+  const currentMonthSample = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'MMM-yyyy');
   return {
     success: true,
     movedDateFolders: movedDateFolders,
@@ -1104,7 +1156,7 @@ function migrateDriveFoldersToMonthly_(customFolderId) {
     movedFiles: movedFiles,
     sheetLinksVerified: repairRes.fixedRows || 0,
     logs: logs,
-    message: `Migration Complete! Reorganized ${movedDateFolders + mergedDateFolders} daily folders and ${movedFiles} video files into Monthly (${Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM')}) folders. All Google Sheet links verified & active.`
+    message: `Migration Complete! Reorganized ${movedDateFolders + mergedDateFolders} daily folders and ${movedFiles} video files into Monthly (${currentMonthSample}) folders. All Google Sheet links verified & active.`
   };
 }
 

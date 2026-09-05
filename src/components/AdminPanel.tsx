@@ -200,8 +200,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
     setNightModeInput(getStoredNightMode());
     setMaxConcurrentInput(getStoredMaxConcurrentUploads());
 
+    const handleNightModeEvent = (e: any) => {
+      if (e?.detail?.enabled !== undefined) {
+        setNightModeInput(e.detail.enabled);
+      } else {
+        setNightModeInput(getStoredNightMode());
+      }
+    };
+
+    window.addEventListener('vms_night_mode_updated', handleNightModeEvent);
+    window.addEventListener('storage', handleNightModeEvent);
+
     return () => {
       unsubBranding();
+      window.removeEventListener('vms_night_mode_updated', handleNightModeEvent);
+      window.removeEventListener('storage', handleNightModeEvent);
     };
   }, []);
 
@@ -1166,6 +1179,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                       const next = !nightModeInput;
                       setNightModeInput(next);
                       setStoredNightMode(next);
+                      onShowToast(next ? 'Warehouse Night Mode activated' : 'Standard Light Mode activated', 'info');
                     }}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer ${
                       nightModeInput
@@ -1250,7 +1264,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                   </div>
                   <div>
                     <h4 className="text-xs font-bold text-slate-900">Google Sheet & Drive Structure Maintenance</h4>
-                    <p className="text-[11px] text-slate-500">Reorganize monthly Drive folders, repair playback URLs & sync sheet tabs</p>
+                    <p className="text-[11px] text-slate-500">Reorganize monthly Drive folders (MMM-YYYY), repair playback URLs & sync sheet tabs</p>
                   </div>
                 </div>
 
@@ -1259,10 +1273,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                     <div>
                       <span className="text-xs font-semibold text-purple-950 block flex items-center gap-1.5">
                         <FolderSync className="w-3.5 h-3.5 text-purple-600" />
-                        Reorganize Drive Folders into Monthly Structure (YYYY-MM)
+                        Reorganize Drive Folders into Monthly Structure (MMM-YYYY)
                       </span>
                       <span className="text-[11px] text-purple-700/80">
-                        Scans Drive, groups existing daily folders under their Month (YYYY-MM), files loose videos, and verifies all Sheet links
+                        Scans Drive, groups existing daily folders under their Month (e.g. Aug-2026), files loose videos, and verifies all Sheet links
                       </span>
                     </div>
                     <button
@@ -1387,7 +1401,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                     ├── 📁 <b>Forward</b> / <b>Return</b>
                   </div>
                   <div className="pl-12 text-indigo-300 border-l border-slate-700">
-                    ├── 📁 <b>2026-08</b> (Month)
+                    ├── 📁 <b>Aug-2026</b> (Month MMM-YYYY)
                   </div>
                   <div className="pl-16 text-emerald-300 border-l border-slate-700">
                     ├── 📁 <b>2026-08-21</b> (Date)
