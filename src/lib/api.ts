@@ -288,6 +288,16 @@ export async function repairSheetPlaybackUrls(): Promise<ApiResponse & { fixedRo
   return requestApi('repairPlaybackUrls', {});
 }
 
+export async function migrateDriveMonthlyFolders(): Promise<ApiResponse & {
+  movedDateFolders?: number;
+  mergedDateFolders?: number;
+  movedFiles?: number;
+  sheetLinksVerified?: number;
+  logs?: string[];
+}> {
+  return requestApi('migrateDriveFolders', {});
+}
+
 export async function runSystemSetup(): Promise<ApiResponse> {
   return requestApi('setup', {});
 }

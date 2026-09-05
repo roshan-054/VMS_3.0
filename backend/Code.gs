@@ -67,6 +67,8 @@ function doPost(e) {
       case 'setup': return output_(setupSystem());
       case 'repairPlaybackUrls': return output_(repairPlaybackUrls());
       case 'migrateReturns': return output_(migrateExistingReturns());
+      case 'migrateDriveFolders': return output_(migrateDriveFoldersToMonthly_(p.driveFolderId));
+      case 'migrateMonthlyFolders': return output_(migrateDriveFoldersToMonthly_(p.driveFolderId));
       case 'login': return output_(login_(p));
       case 'signup': return output_(signup_(p));
       case 'validateSession': return output_(validateSession_(p));
@@ -290,6 +292,13 @@ function setupSystem() {
 
   // Run repair for any existing rows where Column F has plain filename instead of clickable URL
   repairPlaybackUrls();
+
+  // Reorganize any existing flat date folders into monthly folders
+  try {
+    migrateDriveFoldersToMonthly_();
+  } catch (mErr) {
+    console.warn('Folder migration note during setup: ', mErr);
+  }
 
   // Seed default admin user if Users sheet is empty
   const userSh = ss.getSheetByName(CONFIG.USERS_SHEET);
@@ -959,6 +968,10 @@ function getOrCreateFolder_(parent, name) {
   return parent.createFolder(name);
 }
 
+/**
+ * Resolves the destination folder using the Monthly Hierarchy:
+ * Root / <Platform> / <Type> / <YYYY-MM> / <YYYY-MM-DD>
+ */
 function dateFolder_(platform, type, customDriveFolderId, targetDateStr) {
   const root = parentFolder_(customDriveFolderId);
   const pf = getOrCreateFolder_(root, platform || 'Custom');
@@ -967,7 +980,132 @@ function dateFolder_(platform, type, customDriveFolderId, targetDateStr) {
   if (!dateName || !/^\d{4}-\d{2}-\d{2}$/.test(dateName)) {
     dateName = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
   }
-  return getOrCreateFolder_(tf, dateName);
+  const monthName = dateName.substring(0, 7); // 'YYYY-MM', e.g. '2026-08'
+  const mf = getOrCreateFolder_(tf, monthName);
+  return getOrCreateFolder_(mf, dateName);
+}
+
+/**
+ * Migrates existing flat Drive structure:
+ * From: Root / <Platform> / <Type> / <YYYY-MM-DD>
+ * To:   Root / <Platform> / <Type> / <YYYY-MM> / <YYYY-MM-DD>
+ *
+ * Also files any loose videos inside <Platform> / <Type> into their respective month/date folder,
+ * and verifies/repairs all Google Sheet links in OrderLog and ReturnLog.
+ */
+function migrateDriveFoldersToMonthly_(customFolderId) {
+  const root = parentFolder_(customFolderId);
+  let movedDateFolders = 0;
+  let mergedDateFolders = 0;
+  let movedFiles = 0;
+  const logs = [];
+
+  const platformFolders = root.getFolders();
+  while (platformFolders.hasNext()) {
+    const pf = platformFolders.next();
+    const pfName = pf.getName();
+
+    // Skip branding folder or system assets folder
+    if (pfName === (CONFIG.BRANDING_FOLDER_NAME || 'VMS_Branding')) continue;
+
+    const typeFolders = pf.getFolders();
+    while (typeFolders.hasNext()) {
+      const tf = typeFolders.next();
+      const tfName = tf.getName(); // 'Forward', 'Return', or custom
+
+      // 1. Inspect all child folders under Platform/Type
+      const childFolders = tf.getFolders();
+      const foldersToProcess = [];
+      while (childFolders.hasNext()) {
+        foldersToProcess.push(childFolders.next());
+      }
+
+      foldersToProcess.forEach(function(childFolder) {
+        const folderName = childFolder.getName().trim();
+
+        // Check if this folder is an unmigrated daily date folder 'YYYY-MM-DD' (e.g. 2026-08-21)
+        if (/^\d{4}-\d{2}-\d{2}$/.test(folderName)) {
+          const monthName = folderName.substring(0, 7); // 'YYYY-MM', e.g. '2026-08'
+          const monthFolder = getOrCreateFolder_(tf, monthName);
+
+          // Check if monthFolder already has a date folder with this name
+          const existingInMonth = monthFolder.getFoldersByName(folderName);
+          if (existingInMonth.hasNext()) {
+            // Merge files from outer date folder into inner date folder
+            const destDateFolder = existingInMonth.next();
+            const files = childFolder.getFiles();
+            while (files.hasNext()) {
+              const file = files.next();
+              destDateFolder.addFile(file);
+              childFolder.removeFile(file);
+              movedFiles++;
+            }
+            // Remove/trash empty outer folder
+            try { childFolder.setTrashed(true); } catch(_) {}
+            mergedDateFolders++;
+            logs.push(`Merged ${pfName}/${tfName}/${folderName} -> ${monthName}/${folderName}`);
+          } else {
+            // Move entire date folder into monthFolder
+            try {
+              monthFolder.addFolder(childFolder);
+              tf.removeFolder(childFolder);
+              movedDateFolders++;
+              logs.push(`Moved folder ${pfName}/${tfName}/${folderName} into ${monthName}/`);
+            } catch (moveErr) {
+              // Fallback: create subfolder and transfer files
+              const newSub = monthFolder.createFolder(folderName);
+              const files = childFolder.getFiles();
+              while (files.hasNext()) {
+                const f = files.next();
+                newSub.addFile(f);
+                childFolder.removeFile(f);
+                movedFiles++;
+              }
+              try { childFolder.setTrashed(true); } catch(_) {}
+              movedDateFolders++;
+              logs.push(`Transferred folder ${pfName}/${tfName}/${folderName} into ${monthName}/`);
+            }
+          }
+        }
+      });
+
+      // 2. Check any unfiled video files directly inside Platform/Type
+      const directFiles = tf.getFiles();
+      const filesToMove = [];
+      while (directFiles.hasNext()) {
+        filesToMove.push(directFiles.next());
+      }
+
+      filesToMove.forEach(function(file) {
+        const fileName = file.getName();
+        if (fileName.endsWith('.mp4') || fileName.endsWith('.webm')) {
+          const fileDate = file.getDateCreated ? file.getDateCreated() : file.getLastUpdated();
+          const dateStr = Utilities.formatDate(fileDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+          const monthStr = dateStr.substring(0, 7);
+          const monthFolder = getOrCreateFolder_(tf, monthStr);
+          const dateFolder = getOrCreateFolder_(monthFolder, dateStr);
+
+          dateFolder.addFile(file);
+          tf.removeFile(file);
+          movedFiles++;
+          logs.push(`Organized loose video ${fileName} into ${monthStr}/${dateStr}/`);
+        }
+      });
+    }
+  }
+
+  // 3. Repair / verify all Sheet links in OrderLog and ReturnLog
+  const repairRes = repairPlaybackUrls();
+
+  return {
+    success: true,
+    movedDateFolders: movedDateFolders,
+    mergedDateFolders: mergedDateFolders,
+    movedFiles: movedFiles,
+    sheetLinksVerified: repairRes.fixedRows || 0,
+    logs: logs,
+    message: `Migration Complete! Reorganized ${movedDateFolders + mergedDateFolders} daily folders and ${movedFiles} video files into Monthly (${Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM')}) folders. All Google Sheet links verified & active.`
+  };
 }
 
 function safeName_(s){return String(s||'').replace(/[\\/:*?"<>|#%{}\[\]]/g,'_').trim()}

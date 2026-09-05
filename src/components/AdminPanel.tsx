@@ -38,7 +38,7 @@ import {
   FileCode
 } from 'lucide-react';
 import { User, UserRole, UserStatus, AdminPermissions } from '../types';
-import { requestApi, checkBackendHealth, uploadBrandingImage, repairSheetPlaybackUrls, runSystemSetup } from '../lib/api';
+import { requestApi, checkBackendHealth, uploadBrandingImage, repairSheetPlaybackUrls, runSystemSetup, migrateDriveMonthlyFolders } from '../lib/api';
 import { getLocalUsers, deleteLocalUserByEmail, getDeletedUserEmails } from '../lib/localAuth';
 import {
   isMasterAdmin,
@@ -158,6 +158,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
   const [testingHealth, setTestingHealth] = useState(false);
   const [repairingUrls, setRepairingUrls] = useState(false);
   const [runningSetup, setRunningSetup] = useState(false);
+  const [migratingFolders, setMigratingFolders] = useState(false);
   const [showCodeModal, setShowCodeModal] = useState(false);
   const [codeModalLoading, setCodeModalLoading] = useState(false);
   const [codeModalContent, setCodeModalContent] = useState('');
@@ -301,6 +302,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
       onShowToast(err?.message || 'Setup request failed', 'error');
     } finally {
       setRunningSetup(false);
+    }
+  };
+
+  const handleMigrateMonthlyFolders = async () => {
+    if (!window.confirm('Reorganize Google Drive folders into Monthly (YYYY-MM) subfolders?\n\nThis will scan all Platform/Type directories, move daily date folders into their respective month folders, file loose videos, and verify all Google Sheet playback links.')) {
+      return;
+    }
+    setMigratingFolders(true);
+    try {
+      const res = await migrateDriveMonthlyFolders();
+      if (res.success) {
+        onShowToast(res.message || 'Drive folders reorganized into Monthly structure and Sheet links verified!', 'success');
+      } else {
+        onShowToast(res.error || 'Migration failed', 'error');
+      }
+    } catch (err: any) {
+      onShowToast(err?.message || 'Drive folder migration request failed', 'error');
+    } finally {
+      setMigratingFolders(false);
     }
   };
 
@@ -1229,12 +1249,33 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                     5
                   </div>
                   <div>
-                    <h4 className="text-xs font-bold text-slate-900">Google Sheet Maintenance & Repair</h4>
-                    <p className="text-[11px] text-slate-500">Auto-fix playback URLs in ReturnLog/OrderLog & sync sheet tabs</p>
+                    <h4 className="text-xs font-bold text-slate-900">Google Sheet & Drive Structure Maintenance</h4>
+                    <p className="text-[11px] text-slate-500">Reorganize monthly Drive folders, repair playback URLs & sync sheet tabs</p>
                   </div>
                 </div>
 
                 <div className="space-y-3">
+                  <div className="flex items-center justify-between p-3 bg-purple-50/60 rounded-xl border border-purple-100">
+                    <div>
+                      <span className="text-xs font-semibold text-purple-950 block flex items-center gap-1.5">
+                        <FolderSync className="w-3.5 h-3.5 text-purple-600" />
+                        Reorganize Drive Folders into Monthly Structure (YYYY-MM)
+                      </span>
+                      <span className="text-[11px] text-purple-700/80">
+                        Scans Drive, groups existing daily folders under their Month (YYYY-MM), files loose videos, and verifies all Sheet links
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={migratingFolders}
+                      onClick={handleMigrateMonthlyFolders}
+                      className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0 ml-3"
+                    >
+                      <FolderSync className={`w-3.5 h-3.5 ${migratingFolders ? 'animate-spin' : ''}`} />
+                      {migratingFolders ? 'Migrating…' : 'Migrate to Month Folders'}
+                    </button>
+                  </div>
+
                   <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
                     <div>
                       <span className="text-xs font-semibold text-slate-800 block">
@@ -1261,7 +1302,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                         Run Sheet Setup & Create ReturnLog Tab
                       </span>
                       <span className="text-[11px] text-slate-500">
-                        Initializes or updates Google Sheet headers, adds ReturnLog tab, and applies duplicate highlights
+                        Initializes or updates Google Sheet headers, adds ReturnLog tab, reorganizes Drive folders, and applies duplicate highlights
                       </span>
                     </div>
                     <button
@@ -1345,10 +1386,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                   <div className="pl-8 text-amber-300 border-l border-slate-700">
                     ├── 📁 <b>Forward</b> / <b>Return</b>
                   </div>
-                  <div className="pl-12 text-emerald-300 border-l border-slate-700">
+                  <div className="pl-12 text-indigo-300 border-l border-slate-700">
+                    ├── 📁 <b>2026-08</b> (Month)
+                  </div>
+                  <div className="pl-16 text-emerald-300 border-l border-slate-700">
                     ├── 📁 <b>2026-08-21</b> (Date)
                   </div>
-                  <div className="pl-16 text-slate-200 border-l border-slate-700">
+                  <div className="pl-20 text-slate-200 border-l border-slate-700">
                     └── 🎬 <b>ORD12345_Amazon_Forward.mp4</b>
                   </div>
                 </div>
