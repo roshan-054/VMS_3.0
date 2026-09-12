@@ -37,8 +37,8 @@ import {
   XCircle
 } from 'lucide-react';
 import { PlatformType, RecordingType, QueueItem } from '../types';
-import { dbPutQueue, dbGetAllQueue, getStoredDuplicatePolicy, DuplicatePolicy, getStoredMaxVideoSizeMb } from '../lib/storage';
-import { checkDuplicate, requestApi, normalizeOrderId } from '../lib/api';
+import { dbPutQueue, getStoredMaxVideoSizeMb } from '../lib/storage';
+import { requestApi, normalizeOrderId } from '../lib/api';
 import { triggerUploadWorker } from '../lib/uploadWorker';
 
 interface ScanRecordProps {
@@ -71,16 +71,8 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'info' | 'success' | 'error' } | null>(null);
   const [cameraPermissionError, setCameraPermissionError] = useState<string | null>(null);
   const [isBarcodeMode, setIsBarcodeMode] = useState(false);
-  const [isDuplicateChecking, setIsDuplicateChecking] = useState(false);
-  const [detectedDuplicate, setDetectedDuplicate] = useState<any | null>(null);
   const [isFocusing, setIsFocusing] = useState(false);
   const [cameraResolution, setCameraResolution] = useState<{ width: number; height: number }>({ width: 1920, height: 1080 });
-  const [duplicateWarning, setDuplicateWarning] = useState<{
-    orderId: string;
-    platform: string;
-    recordingType: string;
-    existing: any;
-  } | null>(null);
 
   // AI Virtual Packing Framing & Focus Zone
   const [showAiPackingZone, setShowAiPackingZone] = useState<boolean>(() => {
@@ -394,69 +386,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [onShowToast]);
 
-  // Debounced real-time duplicate check whenever Order ID, platform, or recording type changes
-  useEffect(() => {
-    const trimmed = orderId.trim();
-    if (trimmed.length < 3) {
-      setDetectedDuplicate(null);
-      return;
-    }
-
-    let isCancelled = false;
-    const timer = setTimeout(async () => {
-      try {
-        setIsDuplicateChecking(true);
-        const normTarget = normalizeOrderId(trimmed);
-
-        // 1. Check local IndexedDB queue (only completed records)
-        const allQueue = await dbGetAllQueue();
-        const localMatch = allQueue.find(
-          (item) =>
-            normalizeOrderId(item.orderId) === normTarget &&
-            item.status === 'completed' &&
-            (item.fileId || item.webViewLink)
-        );
-
-        if (localMatch && !isCancelled) {
-          setDetectedDuplicate({
-            orderId: localMatch.orderId,
-            platform: localMatch.platform,
-            recordingType: localMatch.recordingType,
-            timestamp: new Date(localMatch.createdAt).toISOString(),
-            packerEmail: currentUser?.email || 'operator@vms.local',
-            playbackUrl: localMatch.webViewLink || '#',
-          });
-          setIsDuplicateChecking(false);
-          return;
-        }
-
-        // 2. Check remote Google Sheets / Drive
-        const remote = await checkDuplicate({
-          orderId: trimmed,
-          platform: effectivePlatform,
-          recordingType,
-        });
-
-        if (!isCancelled) {
-          if (remote && remote.fileId) {
-            setDetectedDuplicate(remote);
-          } else {
-            setDetectedDuplicate(null);
-          }
-        }
-      } catch (e) {
-        if (!isCancelled) setDetectedDuplicate(null);
-      } finally {
-        if (!isCancelled) setIsDuplicateChecking(false);
-      }
-    }, 300);
-
-    return () => {
-      isCancelled = true;
-      clearTimeout(timer);
-    };
-  }, [orderId, effectivePlatform, recordingType, currentUser]);
-
   const startCamera = async (deviceId?: string) => {
     if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
       setStatusMessage({ text: 'MediaDevices API not supported in this browser context.', type: 'error' });
@@ -746,26 +675,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     if (isCameraActive) {
       stopCamera();
     } else {
-      // Non-blocking duplicate check if order ID is present
-      if (orderId.trim()) {
-        setIsDuplicateChecking(true);
-        checkDuplicate({
-          orderId: orderId.trim(),
-          platform: effectivePlatform,
-          recordingType,
-        })
-          .then((existing) => {
-            if (existing) {
-              onShowToast(
-                `Notice: Order ${orderId} already has a ${recordingType} video recorded in Drive.`,
-                'info'
-              );
-            }
-          })
-          .catch(() => {})
-          .finally(() => setIsDuplicateChecking(false));
-      }
-
       await startCamera(selectedDeviceId);
     }
   };
@@ -796,7 +705,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     return 'video/webm';
   };
 
-  const startRecording = async (bypassDuplicateCheck = false) => {
+  const startRecording = async () => {
     if (!orderId.trim()) {
       setStatusMessage({ text: 'Please enter or scan an Order ID before recording.', type: 'error' });
       onShowToast('Scan or enter Order ID to record', 'error');
@@ -808,77 +717,11 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       return;
     }
 
-    const policy = getStoredDuplicatePolicy();
-
-    // Check duplicate order ID if not explicitly bypassed
-    if (!bypassDuplicateCheck) {
-      setIsDuplicateChecking(true);
-      try {
-        const normTarget = normalizeOrderId(orderId);
-
-        // 1. Check local IndexedDB queue for completed orders with video files
-        const allQueue = await dbGetAllQueue();
-        const localMatch = allQueue.find(
-          (item) =>
-            normalizeOrderId(item.orderId) === normTarget &&
-            item.status === 'completed' &&
-            (item.fileId || item.webViewLink)
-        );
-
-        if (localMatch) {
-          setIsDuplicateChecking(false);
-          setDuplicateWarning({
-            orderId: orderId.trim(),
-            platform: effectivePlatform,
-            recordingType,
-            existing: {
-              timestamp: new Date(localMatch.createdAt).toISOString(),
-              packerEmail: currentUser?.email || 'operator@vms.local',
-              playbackUrl: localMatch.webViewLink || '#',
-            },
-          });
-          return;
-        }
-
-        // 2. Check remote Google Drive / Sheets
-        const existing = await checkDuplicate({
-          orderId: orderId.trim(),
-          platform: effectivePlatform,
-          recordingType,
-        });
-        if (existing && existing.fileId) {
-          setIsDuplicateChecking(false);
-          setDuplicateWarning({
-            orderId: orderId.trim(),
-            platform: effectivePlatform,
-            recordingType,
-            existing,
-          });
-          return;
-        }
-      } catch (e) {
-        console.warn('Duplicate pre-check warning:', e);
-      } finally {
-        setIsDuplicateChecking(false);
-      }
-    } else {
-      // If bypass is attempted, verify permission under system policy
-      if (policy === 'strict_block') {
-        onShowToast('Duplicate recording is strictly prohibited by System Policy.', 'error');
-        return;
-      }
-      if (policy === 'admin_override' && currentUser?.role !== 'admin') {
-        onShowToast('Only an Administrator can authorize a duplicate recording.', 'error');
-        return;
-      }
-    }
-
     if (!streamRef.current || !isCameraActive) {
       await startCamera(selectedDeviceId);
       if (!streamRef.current) return;
     }
 
-    bypassDuplicateRef.current = bypassDuplicateCheck;
     recordedChunksRef.current = [];
     const mimeType = chooseMimeType();
 
@@ -1334,51 +1177,14 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
               ) : (
                 <>
                   {!isRecording ? (
-                    detectedDuplicate && getStoredDuplicatePolicy() === 'strict_block' ? (
-                      <button
-                        id="start-recording-btn"
-                        onClick={() => {
-                          setDuplicateWarning({
-                            orderId: orderId.trim(),
-                            platform: effectivePlatform,
-                            recordingType,
-                            existing: detectedDuplicate,
-                          });
-                        }}
-                        className="px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white font-semibold text-sm rounded-lg shadow-sm transition inline-flex items-center gap-2 cursor-pointer"
-                        title="Duplicate Order ID: Click to view details"
-                      >
-                        <Lock className="w-4 h-4 text-white" />
-                        <span>Recording Blocked (Duplicate)</span>
-                      </button>
-                    ) : detectedDuplicate && getStoredDuplicatePolicy() === 'admin_override' && currentUser?.role !== 'admin' ? (
-                      <button
-                        id="start-recording-btn"
-                        onClick={() => {
-                          setDuplicateWarning({
-                            orderId: orderId.trim(),
-                            platform: effectivePlatform,
-                            recordingType,
-                            existing: detectedDuplicate,
-                          });
-                        }}
-                        className="px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm rounded-lg shadow-sm transition inline-flex items-center gap-2 cursor-pointer"
-                        title="Admin authorization required"
-                      >
-                        <Shield className="w-4 h-4 text-white" />
-                        <span>Admin Override Required</span>
-                      </button>
-                    ) : (
-                      <button
-                        id="start-recording-btn"
-                        onClick={() => startRecording(false)}
-                        disabled={isDuplicateChecking}
-                        className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold text-sm rounded-lg shadow-sm transition inline-flex items-center gap-2"
-                      >
-                        <Play className="w-4 h-4 fill-white" />
-                        {isDuplicateChecking ? 'Checking Duplicate…' : 'Start Recording'}
-                      </button>
-                    )
+                    <button
+                      id="start-recording-btn"
+                      onClick={() => startRecording()}
+                      className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm rounded-lg shadow-sm transition inline-flex items-center gap-2 cursor-pointer"
+                    >
+                      <Play className="w-4 h-4 fill-white" />
+                      Start Recording
+                    </button>
                   ) : (
                     <button
                       id="stop-recording-btn"
@@ -1614,11 +1420,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                       }
                     }
                   }}
-                  className={`w-full pl-3.5 pr-10 py-2.5 rounded-lg text-sm font-mono placeholder:text-slate-400 focus:outline-none transition ${
-                    detectedDuplicate
-                      ? 'bg-red-50 border-2 border-red-500 text-red-900 focus:ring-2 focus:ring-red-400'
-                      : 'bg-slate-50 border border-slate-300 text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500'
-                  }`}
+                  className="w-full pl-3.5 pr-10 py-2.5 rounded-lg text-sm font-mono placeholder:text-slate-400 focus:outline-none transition bg-slate-50 border border-slate-300 text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500"
                 />
                 {orderId && (
                   <button
@@ -1629,31 +1431,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                   </button>
                 )}
               </div>
-
-              {detectedDuplicate && (
-                <div className="mt-2.5 p-3 bg-red-50 border border-red-300 rounded-lg text-xs space-y-1.5 animate-in fade-in duration-200">
-                  <div className="flex items-center gap-1.5 font-bold text-red-800">
-                    <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
-                    <span>DUPLICATE ORDER ID DETECTED</span>
-                  </div>
-                  <p className="text-red-700 text-[11px] leading-snug">
-                    Order <b>{orderId}</b> has already been uploaded to Google Drive on{' '}
-                    <b>{detectedDuplicate.timestamp ? new Date(detectedDuplicate.timestamp).toLocaleString() : 'a previous session'}</b> by{' '}
-                    <b>{detectedDuplicate.packerEmail || 'operator'}</b>. Duplicate upload will be automatically blocked.
-                  </p>
-                  {detectedDuplicate.playbackUrl && (
-                    <a
-                      href={detectedDuplicate.playbackUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 hover:text-blue-900 underline pt-0.5"
-                    >
-                      <FolderSync className="w-3 h-3" />
-                      Open Existing Recording in Google Drive
-                    </a>
-                  )}
-                </div>
-              )}
             </div>
 
             {/* Recording Type */}
@@ -1723,151 +1500,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
           </div>
         </div>
       </div>
-
-      {/* Duplicate Order Warning Modal */}
-      {duplicateWarning && (() => {
-        const policy = getStoredDuplicatePolicy();
-        const isAdmin = currentUser?.role === 'admin';
-        const isStrict = policy === 'strict_block';
-        const isAdminOverride = policy === 'admin_override';
-
-        return (
-          <div
-            id="duplicate-warning-modal"
-            className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4"
-          >
-            <div className="bg-white rounded-xl max-w-md w-full shadow-2xl border border-red-200 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-              <div className={`p-4 ${isStrict ? 'bg-red-600' : isAdminOverride && !isAdmin ? 'bg-amber-600' : 'bg-red-600'} text-white flex items-center gap-2.5`}>
-                {isStrict ? <Lock className="w-5 h-5 shrink-0" /> : <AlertCircle className="w-5 h-5 shrink-0" />}
-                <h3 className="font-bold text-sm tracking-tight">
-                  {isStrict
-                    ? 'Recording Blocked: Duplicate Order ID'
-                    : isAdminOverride && !isAdmin
-                    ? 'Duplicate Order: Admin Authorization Required'
-                    : 'Duplicate Order ID Detected'}
-                </h3>
-              </div>
-
-              <div className="p-5 space-y-3.5 text-xs text-slate-600">
-                <p className="text-slate-800 font-medium">
-                  Order <span className="font-mono font-bold text-blue-700">{duplicateWarning.orderId}</span> has already been recorded and logged in Google Drive & Google Sheet.
-                </p>
-
-                <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-1.5 font-mono text-[11px]">
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Platform:</span>
-                    <span className="text-slate-800 font-semibold">{duplicateWarning.platform}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Recording Type:</span>
-                    <span className="text-slate-800 font-semibold">{duplicateWarning.recordingType}</span>
-                  </div>
-                  {duplicateWarning.existing?.timestamp && (
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">Previous Date:</span>
-                      <span className="text-slate-800">
-                        {new Date(duplicateWarning.existing.timestamp).toLocaleString()}
-                      </span>
-                    </div>
-                  )}
-                  {duplicateWarning.existing?.packerEmail && (
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">Recorded By:</span>
-                      <span className="text-slate-800">{duplicateWarning.existing.packerEmail}</span>
-                    </div>
-                  )}
-                </div>
-
-                {duplicateWarning.existing?.playbackUrl && (
-                  <div className="pt-1">
-                    <a
-                      href={duplicateWarning.existing.playbackUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="w-full inline-flex items-center justify-center gap-1.5 py-2 px-3 bg-blue-50 hover:bg-blue-100 text-blue-700 font-medium rounded-lg border border-blue-200 transition"
-                    >
-                      <FolderSync className="w-3.5 h-3.5" />
-                      Open Existing Video in Google Drive
-                    </a>
-                  </div>
-                )}
-
-                {isStrict ? (
-                  <div className="p-2.5 bg-red-50 border border-red-200 rounded-lg text-[11px] text-red-800 space-y-1">
-                    <p className="font-semibold flex items-center gap-1">
-                      <ShieldAlert className="w-3.5 h-3.5 text-red-600 shrink-0" />
-                      Strict Duplicate Prevention Active
-                    </p>
-                    <p className="text-red-700 leading-snug">
-                      Duplicate recording for this Order ID is blocked to prevent accidental duplicate video files. Please clear this order and scan the next order.
-                    </p>
-                  </div>
-                ) : isAdminOverride && !isAdmin ? (
-                  <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-[11px] text-amber-800 space-y-1">
-                    <p className="font-semibold flex items-center gap-1">
-                      <Shield className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                      Admin Approval Required
-                    </p>
-                    <p className="text-amber-700 leading-snug">
-                      Operators cannot record duplicate videos. Please contact a supervisor or administrator to authorize duplicate recording.
-                    </p>
-                  </div>
-                ) : (
-                  <p className="text-slate-500 text-[11px] leading-relaxed">
-                    {isAdminOverride && isAdmin
-                      ? 'As an Administrator, you may authorize a duplicate recording if this package is being re-packed.'
-                      : 'Do you want to proceed and record a new video anyway, or cancel to scan a different order?'}
-                  </p>
-                )}
-              </div>
-
-              <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2">
-                <button
-                  id="cancel-duplicate-btn"
-                  onClick={() => {
-                    setDuplicateWarning(null);
-                    setOrderId('');
-                  }}
-                  className="px-3.5 py-2 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100 font-medium text-xs transition"
-                >
-                  Cancel / Scan New Order
-                </button>
-
-                {isStrict ? null : isAdminOverride ? (
-                  isAdmin ? (
-                    <button
-                      id="proceed-duplicate-btn"
-                      onClick={() => {
-                        setDuplicateWarning(null);
-                        startRecording(true);
-                      }}
-                      className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold text-xs shadow-sm transition flex items-center gap-1.5"
-                    >
-                      <Shield className="w-3.5 h-3.5" />
-                      Admin Override: Proceed & Record
-                    </button>
-                  ) : null
-                ) : (
-                  <button
-                    id="proceed-duplicate-btn"
-                    onClick={() => {
-                      setDuplicateWarning(null);
-                      startRecording(true);
-                    }}
-                    className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs shadow-sm transition"
-                  >
-                    Proceed & Record Anyway
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
-
-
-
     </div>
   );
 };

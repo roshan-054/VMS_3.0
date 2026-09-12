@@ -230,23 +230,24 @@ export async function triggerUploadWorker(): Promise<void> {
     if (!currentItem.bypassDuplicate) {
       const normTarget = normalizeOrderId(currentItem.orderId);
 
-      // 1. Check local completed queue (ONLY completed items with valid web link or fileId)
+      // 1. Check local completed queue (ONLY completed items with matching recordingType and valid web link or fileId)
       const localCompleted = allItems.find(
         (it) =>
           it.id !== currentItem.id &&
           normalizeOrderId(it.orderId) === normTarget &&
+          (it.recordingType || 'Forward') === (currentItem.recordingType || 'Forward') &&
           it.status === 'completed' &&
           (it.fileId || it.webViewLink)
       );
 
-      // 2. Check remote Google Sheet / Drive records
+      // 2. Check remote Google Sheet / Drive records (strictly filtered by recordingType)
       let remoteDuplicate: any = null;
       if (!localCompleted && normTarget) {
         try {
           remoteDuplicate = await checkDuplicate({
             orderId: currentItem.orderId,
             platform: currentItem.platform,
-            recordingType: currentItem.recordingType,
+            recordingType: currentItem.recordingType || 'Forward',
           });
         } catch (e) {
           console.warn('Remote duplicate check note:', e);
@@ -287,7 +288,7 @@ export async function triggerUploadWorker(): Promise<void> {
             activeProgress: 100,
             activeStage: 'Upload verified completed',
           });
-          notify(`✅ Order ${currentItem.orderId} verified as successfully uploaded to Google Drive!`, 'success');
+          notify(`✅ Order ${currentItem.orderId} (${currentItem.recordingType}) verified as successfully uploaded to Google Drive!`, 'success');
           isWorkerBusy = false;
           setTimeout(() => triggerUploadWorker(), 200);
           return;
@@ -295,12 +296,15 @@ export async function triggerUploadWorker(): Promise<void> {
       }
 
       if (localCompleted || (remoteDuplicate && (remoteDuplicate.fileId || remoteDuplicate.isDuplicate))) {
+        const typeLabel = currentItem.recordingType || 'Forward';
+        const targetSheetName = typeLabel === 'Return' ? 'ReturnLog' : 'OrderLog';
+
         currentItem.status = 'failed';
         currentItem.isDuplicate = true;
-        currentItem.stage = `Blocked: Duplicate Order ID (${currentItem.orderId})`;
-        currentItem.error = `Duplicate Order ID: Order "${currentItem.orderId}" has already been uploaded to Google Drive. Duplicate upload was prevented.`;
-        currentItem.duplicateReason = `Order ${currentItem.orderId} already exists in Google Drive / OrderLog (Timestamp: ${
-          remoteDuplicate?.timestamp || 'Previous Record'
+        currentItem.stage = `Blocked: Duplicate ${typeLabel} (${currentItem.orderId})`;
+        currentItem.error = `Duplicate Order ID: Order "${currentItem.orderId}" has already been uploaded for ${typeLabel} recording. Duplicate upload was prevented.`;
+        currentItem.duplicateReason = `Order ${currentItem.orderId} already exists in Google Drive / ${targetSheetName} for ${typeLabel} (Recorded: ${
+          remoteDuplicate?.timestamp || (localCompleted?.createdAt ? new Date(localCompleted.createdAt).toLocaleString() : 'Previous Record')
         }).`;
 
         await safePutQueue(currentItem);
@@ -312,7 +316,7 @@ export async function triggerUploadWorker(): Promise<void> {
         });
 
         notify(
-          `⚠️ Duplicate Order ID blocked: Order ${currentItem.orderId} is already in Google Drive. Click "Bypass & Upload" if you wish to upload anyway.`,
+          `⚠️ Duplicate ${typeLabel} Order blocked: Order ${currentItem.orderId} already exists in Google Drive. Click "Bypass & Upload" if you wish to upload anyway.`,
           'error'
         );
 

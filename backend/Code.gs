@@ -523,73 +523,85 @@ function completedDuplicate_(order,platform,type){
   const normTargetOrder = normalizeOrderId_(order);
   if (!normTargetOrder) return null;
 
-  // 1. Check ORDER_LOG_SHEET first
-  try {
-    const orderSheet = sheet_(CONFIG.ORDER_LOG_SHEET);
-    if (orderSheet) {
-      const v = orderSheet.getDataRange().getValues();
-      for (let i = v.length - 1; i >= 1; i--) {
-        const rawOrder = v[i][1];
-        const normRowOrder = normalizeOrderId_(rawOrder);
-        if (!normRowOrder || normRowOrder !== normTargetOrder) continue;
+  const targetType = normalize_(type || 'Forward'); // 'forward' or 'return'
 
-        const rawType = v[i][8] || 'Forward';
-        const fileId = String(v[i][4] || '').trim();
+  // 1. If targetType is 'forward' or 'all': check ORDER_LOG_SHEET
+  if (targetType === 'forward' || targetType === 'all') {
+    try {
+      const orderSheet = sheet_(CONFIG.ORDER_LOG_SHEET);
+      if (orderSheet) {
+        const v = orderSheet.getDataRange().getValues();
+        for (let i = v.length - 1; i >= 1; i--) {
+          const rawOrder = v[i][1];
+          const normRowOrder = normalizeOrderId_(rawOrder);
+          if (!normRowOrder || normRowOrder !== normTargetOrder) continue;
 
-        // Only count as duplicate if it has a valid Google Drive file ID
-        if (fileId.length > 5 && fileId !== 'undefined' && fileId !== 'null') {
-          return {
-            sourceSheet: CONFIG.ORDER_LOG_SHEET,
-            row: i + 1,
-            orderId: String(rawOrder || ''),
-            platform: String(v[i][2] || ''),
-            recordingType: String(rawType || 'Forward'),
-            timestamp: v[i][0] instanceof Date ? v[i][0].toISOString() : String(v[i][0] || ''),
-            packerEmail: String(v[i][3] || ''),
-            fileId: fileId,
-            playbackUrl: String(v[i][5] || (fileId ? 'https://drive.google.com/file/d/' + fileId + '/preview' : ''))
-          };
+          const rawType = v[i][8] || 'Forward';
+          const normRowType = normalize_(rawType);
+          if (targetType !== 'all' && normRowType !== targetType) continue;
+
+          const fileId = String(v[i][4] || '').trim();
+
+          // Only count as duplicate if it has a valid Google Drive file ID
+          if (fileId.length > 5 && fileId !== 'undefined' && fileId !== 'null') {
+            return {
+              sourceSheet: CONFIG.ORDER_LOG_SHEET,
+              row: i + 1,
+              orderId: String(rawOrder || ''),
+              platform: String(v[i][2] || ''),
+              recordingType: 'Forward',
+              timestamp: v[i][0] instanceof Date ? v[i][0].toISOString() : String(v[i][0] || ''),
+              packerEmail: String(v[i][3] || ''),
+              fileId: fileId,
+              playbackUrl: String(v[i][5] || (fileId ? 'https://drive.google.com/file/d/' + fileId + '/preview' : ''))
+            };
+          }
         }
       }
+    } catch (e) {
+      console.warn('OrderLog duplicate check note:', e);
     }
-  } catch (e) {
-    console.warn('OrderLog duplicate check note:', e);
   }
 
-  // 2. Check RETURN_LOG_SHEET next
-  try {
-    const returnSheet = sheet_(CONFIG.RETURN_LOG_SHEET);
-    if (returnSheet) {
-      const r = returnSheet.getDataRange().getValues();
-      for (let i = r.length - 1; i >= 1; i--) {
-        const rawOrder = r[i][1];
-        const normRowOrder = normalizeOrderId_(rawOrder);
-        if (!normRowOrder || normRowOrder !== normTargetOrder) continue;
+  // 2. If targetType is 'return' or 'inbound' or 'all': check RETURN_LOG_SHEET
+  if (targetType === 'return' || targetType === 'inbound' || targetType === 'all') {
+    try {
+      const returnSheet = sheet_(CONFIG.RETURN_LOG_SHEET);
+      if (returnSheet) {
+        const r = returnSheet.getDataRange().getValues();
+        for (let i = r.length - 1; i >= 1; i--) {
+          const rawOrder = r[i][1];
+          const normRowOrder = normalizeOrderId_(rawOrder);
+          if (!normRowOrder || normRowOrder !== normTargetOrder) continue;
 
-        const rawType = r[i][8] || 'Return';
-        const fileId = String(r[i][4] || '').trim();
+          const rawType = r[i][8] || 'Return';
+          const normRowType = normalize_(rawType);
+          if (targetType !== 'all' && normRowType !== targetType) continue;
 
-        // Only count as duplicate if it has a valid Google Drive file ID
-        if (fileId.length > 5 && fileId !== 'undefined' && fileId !== 'null') {
-          return {
-            sourceSheet: CONFIG.RETURN_LOG_SHEET,
-            row: i + 1,
-            orderId: String(rawOrder || ''),
-            platform: String(r[i][2] || ''),
-            recordingType: String(rawType || 'Return'),
-            timestamp: r[i][0] instanceof Date ? r[i][0].toISOString() : String(r[i][0] || ''),
-            packerEmail: String(r[i][3] || ''),
-            fileId: fileId,
-            playbackUrl: String(r[i][5] || (fileId ? 'https://drive.google.com/file/d/' + fileId + '/preview' : ''))
-          };
+          const fileId = String(r[i][4] || '').trim();
+
+          // Only count as duplicate if it has a valid Google Drive file ID
+          if (fileId.length > 5 && fileId !== 'undefined' && fileId !== 'null') {
+            return {
+              sourceSheet: CONFIG.RETURN_LOG_SHEET,
+              row: i + 1,
+              orderId: String(rawOrder || ''),
+              platform: String(r[i][2] || ''),
+              recordingType: 'Return',
+              timestamp: r[i][0] instanceof Date ? r[i][0].toISOString() : String(r[i][0] || ''),
+              packerEmail: String(r[i][3] || ''),
+              fileId: fileId,
+              playbackUrl: String(r[i][5] || (fileId ? 'https://drive.google.com/file/d/' + fileId + '/preview' : ''))
+            };
+          }
         }
       }
+    } catch (e) {
+      console.warn('ReturnLog duplicate check note:', e);
     }
-  } catch (e) {
-    console.warn('ReturnLog duplicate check note:', e);
   }
 
-  // 3. Check UPLOAD_LOG_SHEET next (ONLY completed uploads with fileId or status Completed)
+  // 3. Check UPLOAD_LOG_SHEET next (ONLY completed uploads with matching recording type and valid fileId)
   try {
     const uploadSheet = sheet_(CONFIG.UPLOAD_LOG_SHEET);
     if (uploadSheet) {
@@ -600,18 +612,21 @@ function completedDuplicate_(order,platform,type){
         if (!normRowOrder || normRowOrder !== normTargetOrder) continue;
 
         const rawType = u[i][12] || 'Forward';
+        const normRowType = normalize_(rawType);
+        if (targetType !== 'all' && normRowType !== targetType) continue;
+
         const rawStatus = normalize_(u[i][10] || '');
         const rawStage = normalize_(u[i][7] || '');
         const fileId = String(u[i][9] || '').trim();
 
-        // IMPORTANT: NEVER treat 'in progress' or 'started' as a duplicate - only truly completed uploads
-        if ((rawStatus === 'completed' || rawStage === 'completed' || fileId.length > 5) && fileId.length > 5) {
+        // IMPORTANT: NEVER treat 'in progress' or 'started' as a duplicate - only truly completed uploads with valid fileId
+        if ((rawStatus === 'completed' || rawStage === 'completed' || fileId.length > 5) && fileId.length > 5 && fileId !== 'undefined' && fileId !== 'null') {
           return {
             sourceSheet: CONFIG.UPLOAD_LOG_SHEET,
             row: i + 1,
             orderId: String(rawOrder || ''),
             platform: String(u[i][2] || ''),
-            recordingType: String(rawType || 'Forward'),
+            recordingType: rawType || (targetType === 'return' ? 'Return' : 'Forward'),
             timestamp: u[i][0] instanceof Date ? u[i][0].toISOString() : String(u[i][0] || ''),
             packerEmail: String(u[i][3] || ''),
             fileId: fileId,
