@@ -164,27 +164,42 @@ function sheet_(name) {
 }
 
 /**
- * Applies Conditional Formatting to the OrderLog Sheet:
- * Automatically highlights duplicate Order IDs in Column B with a light red background and bold dark red text.
+ * Applies Refined Conditional Formatting to Sheets (UploadLog, OrderLog, ReturnLog):
+ * Automatically highlights duplicate records in Column B ONLY when BOTH the Order ID AND the Recording Type match.
+ * Forward and Return recordings for the same Order ID are NOT considered duplicates and will not be highlighted.
  */
 function applyDuplicateConditionalFormatting_(sh) {
   if (!sh) return;
   try {
-    const lastRow = Math.max(sh.getMaxRows(), 500);
+    const sheetName = sh.getName();
+    const lastRow = Math.max(sh.getMaxRows(), 1000);
     const orderIdRange = sh.getRange('B2:B' + lastRow);
 
-    // Filter out existing custom duplicate rules on Column B to avoid stacking duplicates
+    // Filter out existing custom duplicate rules on Column B to remove old single-criteria formulas
     const rules = sh.getConditionalFormatRules() || [];
     const filteredRules = rules.filter(function(r) {
       const ranges = r.getRanges();
       return !ranges.some(function(rng) {
-        return rng.getA1Notation().indexOf('B2:B') !== -1 || rng.getA1Notation().indexOf('B:B') !== -1;
+        const notation = rng.getA1Notation();
+        return notation.indexOf('B2:B') !== -1 || notation.indexOf('B:B') !== -1;
       });
     });
 
-    // Create Rule: Highlight cells in Column B where count > 1
+    // Formulate strict COUNTIFS formula:
+    // In UploadLog: Column B is Order ID, Column M (13) is Recording Type
+    // In OrderLog & ReturnLog: Column B is Order ID, Column I (9) is Recording Type
+    let formula = '';
+    if (sheetName === CONFIG.UPLOAD_LOG_SHEET) {
+      formula = '=AND(LEN($B2)>0, COUNTIFS($B$2:$B, $B2, $M$2:$M, $M2)>1)';
+    } else if (sheetName === CONFIG.ORDER_LOG_SHEET || sheetName === CONFIG.RETURN_LOG_SHEET) {
+      formula = '=AND(LEN($B2)>0, COUNTIFS($B$2:$B, $B2, $I$2:$I, $I2)>1)';
+    } else {
+      formula = '=AND(LEN($B2)>0, COUNTIF($B$2:$B, $B2)>1)';
+    }
+
+    // Create Rule: Highlight cells in Column B where count of (Order ID + Recording Type) > 1
     const duplicateRule = SpreadsheetApp.newConditionalFormatRule()
-      .whenFormulaSatisfied('=AND(LEN($B2)>0, COUNTIF($B$2:$B, $B2)>1)')
+      .whenFormulaSatisfied(formula)
       .setBackground('#FEE2E2') // Soft light red
       .setFontColor('#991B1B')  // Crisp dark red
       .setBold(true)
@@ -199,12 +214,16 @@ function applyDuplicateConditionalFormatting_(sh) {
 }
 
 function applyFormattingEndpoint_() {
-  const orderSh = sheet_(CONFIG.ORDER_LOG_SHEET);
-  const returnSh = sheet_(CONFIG.RETURN_LOG_SHEET);
-  applyDuplicateConditionalFormatting_(orderSh);
-  applyDuplicateConditionalFormatting_(returnSh);
+  const ss = ss_();
+  const orderSh = ss.getSheetByName(CONFIG.ORDER_LOG_SHEET);
+  const returnSh = ss.getSheetByName(CONFIG.RETURN_LOG_SHEET);
+  const uploadSh = ss.getSheetByName(CONFIG.UPLOAD_LOG_SHEET);
+
+  if (orderSh) applyDuplicateConditionalFormatting_(orderSh);
+  if (returnSh) applyDuplicateConditionalFormatting_(returnSh);
+  if (uploadSh) applyDuplicateConditionalFormatting_(uploadSh);
   repairPlaybackUrls();
-  return { success: true, message: 'Conditional formatting and playback hyperlinks repaired in Google Sheets.' };
+  return { success: true, message: 'Conditional formatting refined across UploadLog, OrderLog, and ReturnLog. Forward and Return will no longer conflict.' };
 }
 
 /**
@@ -280,7 +299,7 @@ function setupSystem() {
     brandSh.appendRow(['BrandingFolderId', '', new Date(), 'Google Drive Folder for Brand Assets']);
   }
 
-  // Apply conditional formatting on OrderLog & ReturnLog
+  // Apply refined conditional formatting on OrderLog, ReturnLog, and UploadLog
   const orderSh = ss.getSheetByName(CONFIG.ORDER_LOG_SHEET);
   if (orderSh) {
     applyDuplicateConditionalFormatting_(orderSh);
@@ -288,6 +307,10 @@ function setupSystem() {
   const returnSh = ss.getSheetByName(CONFIG.RETURN_LOG_SHEET);
   if (returnSh) {
     applyDuplicateConditionalFormatting_(returnSh);
+  }
+  const uploadSh = ss.getSheetByName(CONFIG.UPLOAD_LOG_SHEET);
+  if (uploadSh) {
+    applyDuplicateConditionalFormatting_(uploadSh);
   }
 
   // Run repair for any existing rows where Column F has plain filename instead of clickable URL

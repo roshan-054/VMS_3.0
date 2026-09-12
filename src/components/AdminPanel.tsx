@@ -38,7 +38,7 @@ import {
   FileCode
 } from 'lucide-react';
 import { User, UserRole, UserStatus, AdminPermissions } from '../types';
-import { requestApi, checkBackendHealth, uploadBrandingImage, repairSheetPlaybackUrls, runSystemSetup, migrateDriveMonthlyFolders } from '../lib/api';
+import { requestApi, checkBackendHealth, uploadBrandingImage, repairSheetPlaybackUrls, runSystemSetup, migrateDriveMonthlyFolders, applySheetConditionalFormatting } from '../lib/api';
 import { getLocalUsers, deleteLocalUserByEmail, getDeletedUserEmails } from '../lib/localAuth';
 import {
   isMasterAdmin,
@@ -157,6 +157,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
   const [clearingCache, setClearingCache] = useState(false);
   const [testingHealth, setTestingHealth] = useState(false);
   const [repairingUrls, setRepairingUrls] = useState(false);
+  const [refiningFormatting, setRefiningFormatting] = useState(false);
   const [runningSetup, setRunningSetup] = useState(false);
   const [migratingFolders, setMigratingFolders] = useState(false);
   const [showCodeModal, setShowCodeModal] = useState(false);
@@ -315,6 +316,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
       onShowToast(err?.message || 'Setup request failed', 'error');
     } finally {
       setRunningSetup(false);
+    }
+  };
+
+  const handleRefineSheetFormatting = async () => {
+    setRefiningFormatting(true);
+    try {
+      const res = await applySheetConditionalFormatting();
+      if (res.success) {
+        onShowToast(res.message || 'Conditional formatting refined across UploadLog, OrderLog, and ReturnLog!', 'success');
+      } else {
+        onShowToast(res.error || 'Failed to refine sheet formatting', 'error');
+      }
+    } catch (err: any) {
+      onShowToast(err?.message || 'Formatting request failed', 'error');
+    } finally {
+      setRefiningFormatting(false);
     }
   };
 
@@ -1307,6 +1324,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                     >
                       <RefreshCw className={`w-3.5 h-3.5 ${repairingUrls ? 'animate-spin' : ''}`} />
                       {repairingUrls ? 'Repairing…' : 'Repair Links Now'}
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between p-3 bg-emerald-50/60 rounded-xl border border-emerald-100">
+                    <div>
+                      <span className="text-xs font-semibold text-emerald-950 block">
+                        Refine Sheet Duplicate Highlighting (Forward vs Return)
+                      </span>
+                      <span className="text-[11px] text-emerald-700/80">
+                        Updates UploadLog, OrderLog, and ReturnLog so same Order IDs with different Recording Types (Forward vs Return) are NOT highlighted in red.
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={refiningFormatting}
+                      onClick={handleRefineSheetFormatting}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0 ml-3"
+                    >
+                      <Check className={`w-3.5 h-3.5 ${refiningFormatting ? 'animate-spin' : ''}`} />
+                      {refiningFormatting ? 'Refining…' : 'Refine Highlighting Now'}
                     </button>
                   </div>
 
