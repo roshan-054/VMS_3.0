@@ -234,6 +234,73 @@ export async function dbGetQueueItem(id: string): Promise<QueueItem | null> {
   });
 }
 
+export async function clearUserCache(): Promise<{ count: number; message: string }> {
+  // 1. Clear in-memory blob cache
+  manualFileCache.clear();
+
+  // 2. Clear browser CacheStorage if available
+  if (typeof window !== 'undefined' && 'caches' in window) {
+    try {
+      const cacheNames = await window.caches.keys();
+      await Promise.all(cacheNames.map((name) => window.caches.delete(name)));
+    } catch (e) {
+      console.warn('CacheStorage deletion note:', e);
+    }
+  }
+
+  // 3. Clear temporary session storage
+  if (typeof window !== 'undefined' && window.sessionStorage) {
+    window.sessionStorage.clear();
+  }
+
+  // 4. Clear temporary query/data caches from localStorage (preserving auth/token/branding/settings)
+  const tempPrefixes = [
+    'vms_search_',
+    'vms_reports_',
+    'vms_analytics_',
+    'vms_cached_',
+    'ops_temp_',
+    'ops_cache_',
+  ];
+  let removedCount = 0;
+  const keysToRemove: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && tempPrefixes.some((p) => key.startsWith(p))) {
+      keysToRemove.push(key);
+    }
+  }
+  keysToRemove.forEach((k) => {
+    localStorage.removeItem(k);
+    removedCount++;
+  });
+
+  // 5. Clean completed queue items older than 24 hours if any to free IndexedDB space, while keeping pending uploads
+  try {
+    const all = await dbGetAllQueue();
+    const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+    for (const item of all) {
+      if (item.status === 'completed' && item.createdAt < oneDayAgo) {
+        await dbDeleteQueueItem(item.id);
+        removedCount++;
+      }
+    }
+  } catch (e) {
+    console.warn('Completed queue cleanup note:', e);
+  }
+
+  // Dispatch events to refresh UI components
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('ops_queue_updated'));
+    window.dispatchEvent(new CustomEvent('vms_cache_cleared'));
+  }
+
+  return {
+    count: removedCount,
+    message: 'Cache, temporary memory buffers, and browser storage cleared successfully.',
+  };
+}
+
 export async function clearAllApplicationCacheAndStorage(): Promise<void> {
   if (dbInstance) {
     dbInstance.close();

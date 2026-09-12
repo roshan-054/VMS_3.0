@@ -19,10 +19,13 @@ import {
   X,
   ChevronRight,
   Sun,
-  Moon
+  Moon,
+  Trash2,
+  RefreshCw,
+  Sparkles
 } from 'lucide-react';
 import { User, QueueItem } from './types';
-import { getStoredToken, setStoredToken, dbGetAllQueue, getStoredAutoRefreshInterval, getStoredNightMode, setStoredNightMode } from './lib/storage';
+import { getStoredToken, setStoredToken, dbGetAllQueue, getStoredAutoRefreshInterval, getStoredNightMode, setStoredNightMode, clearUserCache } from './lib/storage';
 import { getStoredBranding, subscribeBranding, applyFavicon, BrandingConfig } from './lib/branding';
 import { initUploadWorker } from './lib/uploadWorker';
 import { ScanRecord } from './components/ScanRecord';
@@ -83,6 +86,8 @@ export function App() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isNightMode, setIsNightMode] = useState<boolean>(() => getStoredNightMode());
   const [pendingQueueCount, setPendingQueueCount] = useState(0);
+  const [isClearingCache, setIsClearingCache] = useState(false);
+  const [isCacheClearModalOpen, setIsCacheClearModalOpen] = useState(false);
   const [toastInfo, setToastInfo] = useState<{
     id: number;
     msg: string;
@@ -94,6 +99,25 @@ export function App() {
     setIsNightMode(next);
     setStoredNightMode(next);
     showToast(next ? 'Warehouse Night Mode activated' : 'Standard Light Mode activated', 'info');
+  };
+
+  const handleClearCache = async (reloadAfter = false) => {
+    setIsClearingCache(true);
+    try {
+      const res = await clearUserCache();
+      refreshQueueBadge();
+      showToast(res.message || 'Cache & temporary memory cleared!', 'success');
+      setIsCacheClearModalOpen(false);
+      if (reloadAfter) {
+        setTimeout(() => {
+          window.location.reload();
+        }, 500);
+      }
+    } catch (e: any) {
+      showToast(`Cache clear failed: ${e.message || 'Error'}`, 'error');
+    } finally {
+      setTimeout(() => setIsClearingCache(false), 600);
+    }
   };
 
   // Initialize and subscribe to branding updates (Logo, Favicon, App Title)
@@ -258,6 +282,15 @@ export function App() {
 
         <div className="flex items-center gap-2">
           <button
+            id="mobile-clear-cache-btn"
+            onClick={() => setIsCacheClearModalOpen(true)}
+            className="p-2 rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition cursor-pointer"
+            title="Clear Station Cache"
+            aria-label="Clear Cache"
+          >
+            <Trash2 className="w-4 h-4 text-slate-500 hover:text-red-500" />
+          </button>
+          <button
             onClick={toggleNightMode}
             className="p-2 rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition cursor-pointer"
             title={isNightMode ? 'Switch to Light Mode' : 'Switch to Night Mode'}
@@ -357,7 +390,7 @@ export function App() {
                   setActiveTab(tab.id as any);
                   setIsMobileMenuOpen(false);
                 }}
-                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition ${
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
                   isActive
                     ? 'bg-blue-600 text-white shadow-sm'
                     : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
@@ -385,6 +418,24 @@ export function App() {
             );
           })}
 
+          {/* Quick Clear Cache Station Utility Button */}
+          <div className="pt-3 mt-3 border-t border-slate-100">
+            <button
+              id="nav-clear-cache-btn"
+              type="button"
+              onClick={() => setIsCacheClearModalOpen(true)}
+              className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition cursor-pointer group"
+              title="Purge temporary video buffers, browser cache, and stale storage"
+            >
+              <div className="flex items-center gap-3">
+                <Trash2 className="w-4 h-4 text-slate-400 group-hover:text-red-500 transition shrink-0" />
+                <span className="font-semibold text-slate-700 group-hover:text-slate-900">Clear Cache</span>
+              </div>
+              <span className="text-[10px] font-medium text-slate-500 group-hover:text-slate-700 bg-slate-100 group-hover:bg-slate-200 px-2 py-0.5 rounded-md border border-slate-200">
+                Purge
+              </span>
+            </button>
+          </div>
         </nav>
 
         {/* User Footer Profile & Actions */}
@@ -395,6 +446,16 @@ export function App() {
               <div className="text-[10px] text-slate-400 font-mono truncate">{currentUser.role}</div>
             </div>
             <div className="flex items-center gap-1">
+              <button
+                id="footer-clear-cache-btn"
+                onClick={() => handleClearCache(false)}
+                disabled={isClearingCache}
+                className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition shrink-0 cursor-pointer disabled:opacity-50"
+                title="Quick Clear Cache"
+                aria-label="Clear Cache"
+              >
+                <RefreshCw className={`w-4 h-4 ${isClearingCache ? 'animate-spin text-blue-600' : ''}`} />
+              </button>
               <button
                 onClick={toggleNightMode}
                 className="p-1.5 text-slate-400 hover:text-amber-500 hover:bg-slate-100 rounded-lg transition shrink-0 cursor-pointer"
@@ -457,6 +518,83 @@ export function App() {
           )}
         </main>
       </div>
+
+      {/* Clear Cache Confirmation & Action Modal */}
+      {isCacheClearModalOpen && (
+        <div
+          id="cache-clear-modal"
+          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4"
+        >
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden">
+            <div className="p-5 bg-gradient-to-r from-slate-900 to-slate-800 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-blue-500/20 border border-blue-400/30 flex items-center justify-center">
+                  <Trash2 className="w-4 h-4 text-blue-400" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm tracking-tight">Clear Station Cache</h3>
+                  <p className="text-[11px] text-slate-400">Optimize workstation speed and memory</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsCacheClearModalOpen(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs text-slate-600">
+              <p className="leading-relaxed text-slate-700">
+                Clearing the application cache frees up browser memory and purges temporary video buffers without logging you out.
+              </p>
+
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2 font-mono text-[11px]">
+                <div className="flex items-center gap-2 text-slate-700 font-semibold font-sans">
+                  <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+                  What will be cleared:
+                </div>
+                <ul className="space-y-1 text-slate-600 list-disc list-inside">
+                  <li>In-memory video chunk buffers & temporary blobs</li>
+                  <li>Browser CacheStorage and offline service caches</li>
+                  <li>Session query caches and stale search indexes</li>
+                  <li>Completed queue records older than 24 hours</li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsCacheClearModalOpen(false)}
+                className="px-3.5 py-2 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-100 font-medium text-xs transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                id="confirm-clear-cache-btn"
+                disabled={isClearingCache}
+                onClick={() => handleClearCache(false)}
+                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold text-xs shadow-sm transition inline-flex items-center gap-2 cursor-pointer"
+              >
+                <Trash2 className={`w-3.5 h-3.5 ${isClearingCache ? 'animate-spin' : ''}`} />
+                {isClearingCache ? 'Clearing Cache…' : 'Clear Cache Now'}
+              </button>
+              <button
+                type="button"
+                id="clear-cache-reload-btn"
+                disabled={isClearingCache}
+                onClick={() => handleClearCache(true)}
+                className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-semibold text-xs shadow-sm transition inline-flex items-center gap-2 cursor-pointer"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isClearingCache ? 'animate-spin' : ''}`} />
+                Clear & Reload
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Toast Notification Container */}
       {toastInfo && (
