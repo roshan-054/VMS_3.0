@@ -944,6 +944,9 @@ function advancedSearch_(p){
         const parsedPf = parts[1] || 'Amazon';
         const parsedType = parts[2] || (fName.toLowerCase().includes('return') ? 'Return' : 'Forward');
 
+        if (type && type !== 'all' && normalize_(parsedType) !== type) continue;
+        if (platform && platform !== 'all' && platform !== 'custom' && normalize_(parsedPf) !== platform) continue;
+
         rows.push({
           timestamp: file.getDateCreated() ? file.getDateCreated().toISOString() : new Date().toISOString(),
           orderId: parsedOrder,

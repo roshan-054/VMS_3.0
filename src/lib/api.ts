@@ -241,19 +241,31 @@ export async function checkDuplicate(meta: {
   platform: string;
   recordingType: string;
 }): Promise<VideoRecord | null> {
-  const token = getStoredToken();
+  const targetOrderId = normalizeOrderId(meta.orderId);
+  const targetType = (meta.recordingType || 'Forward').trim().toLowerCase();
+  if (!targetOrderId) return null;
 
   try {
     const res = await requestApi<{ isDuplicate?: boolean; existing?: any; results?: VideoRecord[] }>('checkDuplicateOrder', {
       orderId: meta.orderId,
       platform: meta.platform,
-      recordingType: meta.recordingType,
+      recordingType: meta.recordingType || 'Forward',
     });
     if (res.isDuplicate && res.existing) {
-      return res.existing;
+      const existingType = String(res.existing.recordingType || '').trim().toLowerCase();
+      // Only treat as duplicate if recordingType matches (Forward vs Return are separate)
+      if (!existingType || existingType === targetType || targetType === 'all') {
+        return res.existing;
+      }
     }
     if (Array.isArray(res.results) && res.results.length > 0) {
-      return res.results[0];
+      const matched = res.results.find(
+        (r) =>
+          normalizeOrderId(r.orderId) === targetOrderId &&
+          String(r.recordingType || 'Forward').trim().toLowerCase() === targetType &&
+          Boolean(r.fileId && r.fileId.length > 5)
+      );
+      if (matched) return matched;
     }
     return null;
   } catch (err) {
@@ -262,11 +274,17 @@ export async function checkDuplicate(meta: {
       const fallbackRes = await requestApi<{ results: VideoRecord[] }>('advancedSearch', {
         orderId: meta.orderId,
         platform: meta.platform,
-        recordingType: meta.recordingType,
-        limit: 1,
+        recordingType: meta.recordingType || 'Forward',
+        limit: 5,
       });
       if (Array.isArray(fallbackRes.results) && fallbackRes.results.length > 0) {
-        return fallbackRes.results[0];
+        const matched = fallbackRes.results.find(
+          (r) =>
+            normalizeOrderId(r.orderId) === targetOrderId &&
+            String(r.recordingType || 'Forward').trim().toLowerCase() === targetType &&
+            Boolean(r.fileId && r.fileId.length > 5)
+        );
+        if (matched) return matched;
       }
     } catch (fErr) {}
     return null;

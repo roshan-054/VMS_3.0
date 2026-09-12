@@ -38,7 +38,7 @@ import {
 } from 'lucide-react';
 import { PlatformType, RecordingType, QueueItem } from '../types';
 import { dbPutQueue, getStoredMaxVideoSizeMb } from '../lib/storage';
-import { requestApi, normalizeOrderId } from '../lib/api';
+import { requestApi, normalizeOrderId, checkDuplicate } from '../lib/api';
 import { triggerUploadWorker } from '../lib/uploadWorker';
 
 interface ScanRecordProps {
@@ -94,6 +94,72 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   const animFrameRef = useRef<number | null>(null);
   const bypassDuplicateRef = useRef<boolean>(false);
   const [currentLiveTime, setCurrentLiveTime] = useState<string>('');
+
+  // Live duplicate inspection per recording type
+  const [duplicateStatus, setDuplicateStatus] = useState<{
+    checkedOrder: string;
+    hasSameTypeDup: boolean;
+    hasOtherTypeRecord: boolean;
+    existingRecord?: any;
+    otherTypeRecord?: any;
+  } | null>(null);
+  const [isCheckingDup, setIsCheckingDup] = useState(false);
+  const [allowBypassDuplicate, setAllowBypassDuplicate] = useState(false);
+
+  // Debounced duplicate checker that distinguishes Forward from Return
+  useEffect(() => {
+    const trimmed = orderId.trim();
+    if (!trimmed || trimmed.length < 3) {
+      setDuplicateStatus(null);
+      setIsCheckingDup(false);
+      setAllowBypassDuplicate(false);
+      bypassDuplicateRef.current = false;
+      return;
+    }
+
+    let isMounted = true;
+    const timer = setTimeout(async () => {
+      setIsCheckingDup(true);
+      try {
+        const otherType: RecordingType = recordingType === 'Forward' ? 'Return' : 'Forward';
+        const [sameRes, otherRes] = await Promise.all([
+          checkDuplicate({
+            orderId: trimmed,
+            platform: effectivePlatform,
+            recordingType,
+          }),
+          checkDuplicate({
+            orderId: trimmed,
+            platform: effectivePlatform,
+            recordingType: otherType,
+          }),
+        ]);
+
+        if (isMounted) {
+          setDuplicateStatus({
+            checkedOrder: trimmed,
+            hasSameTypeDup: Boolean(sameRes && sameRes.fileId),
+            hasOtherTypeRecord: Boolean(otherRes && otherRes.fileId),
+            existingRecord: sameRes,
+            otherTypeRecord: otherRes,
+          });
+        }
+      } catch (e) {
+        if (isMounted) {
+          setDuplicateStatus(null);
+        }
+      } finally {
+        if (isMounted) {
+          setIsCheckingDup(false);
+        }
+      }
+    }, 450);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [orderId, recordingType, effectivePlatform]);
 
   // Component unmount cleanup: shut down hardware camera tracks when leaving the screen
   useEffect(() => {
@@ -1444,7 +1510,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                     key={type}
                     type="button"
                     onClick={() => setRecordingType(type)}
-                    className={`px-3 py-2.5 rounded-lg text-xs font-semibold border text-center transition ${
+                    className={`px-3 py-2.5 rounded-lg text-xs font-semibold border text-center transition cursor-pointer ${
                       recordingType === type
                         ? 'bg-blue-50 border-blue-600 text-blue-700 shadow-xs ring-1 ring-blue-500'
                         : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
@@ -1455,6 +1521,73 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                 ))}
               </div>
             </div>
+
+            {/* Live Duplicate & Recording Type Verification Card */}
+            {isCheckingDup && (
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs flex items-center gap-2 text-slate-500 animate-pulse">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-500" />
+                <span>Checking records for {recordingType}…</span>
+              </div>
+            )}
+
+            {!isCheckingDup && duplicateStatus && duplicateStatus.checkedOrder === orderId.trim() && (
+              <div className="text-xs space-y-1.5">
+                {duplicateStatus.hasSameTypeDup ? (
+                  <div className="bg-amber-50 border border-amber-300 text-amber-900 rounded-lg p-2.5 space-y-2">
+                    <div className="flex items-center justify-between font-bold">
+                      <span className="flex items-center gap-1.5 text-amber-800">
+                        <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
+                        Existing {recordingType} Video in Drive
+                      </span>
+                      {duplicateStatus.existingRecord?.playbackUrl && (
+                        <a
+                          href={duplicateStatus.existingRecord.playbackUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[11px] text-blue-600 hover:underline inline-flex items-center gap-1 font-semibold"
+                        >
+                          View <ExternalLink className="w-3 h-3" />
+                        </a>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-amber-700 leading-snug">
+                      Order <strong>{orderId}</strong> already has a completed <strong>{recordingType}</strong> video recorded on {duplicateStatus.existingRecord?.timestamp ? new Date(duplicateStatus.existingRecord.timestamp).toLocaleDateString() : 'earlier session'}.
+                    </p>
+                    <label className="flex items-center gap-2 pt-1 border-t border-amber-200/80 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={allowBypassDuplicate}
+                        onChange={(e) => {
+                          setAllowBypassDuplicate(e.target.checked);
+                          bypassDuplicateRef.current = e.target.checked;
+                        }}
+                        className="w-3.5 h-3.5 rounded text-amber-600 border-amber-300 focus:ring-amber-500"
+                      />
+                      <span className="text-[11px] font-semibold text-amber-900">
+                        Re-record & Upload Anyway (Bypass Duplicate Guard)
+                      </span>
+                    </label>
+                  </div>
+                ) : duplicateStatus.hasOtherTypeRecord ? (
+                  <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-lg p-2.5 flex items-start gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <div>
+                      <div className="font-bold text-emerald-800">
+                        {recordingType === 'Return' ? 'Outbound Forward Video on Record' : 'Inbound Return Video on Record'}
+                      </div>
+                      <p className="text-[11px] text-emerald-700 mt-0.5 leading-snug">
+                        Ready to record <strong>{recordingType}</strong>. It is treated as a separate verification record and will be saved in the <strong>{recordingType === 'Return' ? 'ReturnLog' : 'OrderLog'}</strong> tab.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-blue-50/70 border border-blue-200 text-blue-800 rounded-lg px-2.5 py-1.5 flex items-center gap-1.5 text-[11px]">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                    <span>New Order ID — ready to record <strong>{recordingType}</strong>.</span>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Platform Selection */}
             <div>
