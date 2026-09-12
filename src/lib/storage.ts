@@ -235,8 +235,25 @@ export async function dbGetQueueItem(id: string): Promise<QueueItem | null> {
 }
 
 export async function clearUserCache(): Promise<{ count: number; message: string }> {
-  // 1. Clear in-memory blob cache
-  manualFileCache.clear();
+  // 1. Fetch current queue to protect active or pending video items
+  let activeIds = new Set<string>();
+  try {
+    const queue = await dbGetAllQueue();
+    queue.forEach((item) => {
+      if (item.status === 'pending' || item.status === 'uploading' || item.status === 'paused') {
+        activeIds.add(item.id);
+      }
+    });
+  } catch (e) {
+    console.warn('Queue inspect note:', e);
+  }
+
+  // Clear in-memory blob cache ONLY for finished/non-active items
+  for (const key of manualFileCache.keys()) {
+    if (!activeIds.has(key)) {
+      manualFileCache.delete(key);
+    }
+  }
 
   // 2. Clear browser CacheStorage if available
   if (typeof window !== 'undefined' && 'caches' in window) {
