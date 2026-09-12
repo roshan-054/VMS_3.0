@@ -35,7 +35,7 @@ import {
 } from 'lucide-react';
 import { User, UploadLogItem, QueueItem, PlatformType, RecordingType } from '../types';
 import { fetchUploadLogs, deleteLogEntry, formatFileSize, fetchDriveFileSize } from '../lib/api';
-import { dbGetAllQueue, dbPutQueue, dbDeleteQueueItem, getStoredDriveFolderId, getStoredAutoRefreshInterval } from '../lib/storage';
+import { dbGetAllQueue, dbPutQueue, dbDeleteQueueItem, getStoredDriveFolderId, getStoredAutoRefreshInterval, manualFileCache } from '../lib/storage';
 import { canUserDeleteData } from '../lib/permissions';
 import { retryUploadItem, fixAndCleanAllStuckUploads, subscribeWorkerStatus } from '../lib/uploadWorker';
 
@@ -467,6 +467,14 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
     const localMatch = localQueue.find(
       (q) => (log.queueJobId && q.id === log.queueJobId) || (log.orderId && q.orderId === log.orderId)
     );
+    const hasLocalBlob = localMatch && ((localMatch.blob && localMatch.blob.size > 0) || manualFileCache.has(localMatch.id));
+    const hasDriveVideo = Boolean((log.driveFileId && log.driveFileId.length > 5) || log.playbackUrl);
+
+    if (!hasLocalBlob && !hasDriveVideo) {
+      onShowToast(`⚠️ Order #${log.orderId} was interrupted before upload finished and has no cloud file. You can resume/re-upload or delete this stale log row.`, 'error');
+      return;
+    }
+
     if (localMatch && localMatch.blob) {
       try {
         const url = URL.createObjectURL(localMatch.blob);
@@ -1805,20 +1813,33 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
                       {/* Actions */}
                       <td className="py-3.5 px-4 text-right whitespace-nowrap">
                         <div className="flex items-center justify-end gap-1.5">
-                          {/* Resume Button for Local Queue Items */}
-                          {log.queueJobId && (() => {
-                            const localItem = localQueue.find(q => q.id === log.queueJobId);
-                            const isPausedOrFailed = localItem && (localItem.status === 'failed' || localItem.status === 'paused' || localItem.status === 'pending');
-                            if (isPausedOrFailed) {
+                          {/* Resume / Retry Button for Local & Matched Queue Items */}
+                          {(() => {
+                            const localItem = localQueue.find(
+                              (q) =>
+                                (log.queueJobId && q.id === log.queueJobId) ||
+                                (log.uploadId && (q.uploadId === log.uploadId || q.id === log.uploadId)) ||
+                                (log.orderId && q.orderId === log.orderId)
+                            );
+                            const isPendingOrFailed =
+                              localItem &&
+                              (localItem.status === 'failed' ||
+                                localItem.status === 'paused' ||
+                                localItem.status === 'pending');
+                            const hasData =
+                              localItem &&
+                              ((localItem.blob && localItem.blob.size > 0) || manualFileCache.has(localItem.id));
+
+                            if (isPendingOrFailed && hasData) {
                               return (
                                 <button
                                   onClick={async () => {
-                                    await retryUploadItem(log.queueJobId!);
-                                    onShowToast('Resumed upload queue item', 'success');
+                                    await retryUploadItem(localItem.id, true);
+                                    onShowToast(`Resuming upload for Order ${log.orderId}…`, 'success');
                                     loadData(false);
                                   }}
                                   className="px-2.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg transition inline-flex items-center gap-1.5 text-xs font-semibold shadow-2xs cursor-pointer"
-                                  title="Resume Upload"
+                                  title="Resume Upload to Google Drive"
                                 >
                                   <RotateCw className="w-3.5 h-3.5" />
                                   <span className="hidden sm:inline text-[11px]">Resume</span>
@@ -1829,11 +1850,11 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
                           })()}
 
                           {/* Play in Portal Button */}
-                          {(log.playbackUrl || log.driveFileId || log.queueJobId) && (
+                          {(log.playbackUrl || log.driveFileId || log.queueJobId || isCompleted) && (
                             <button
                               onClick={() => handleOpenPlayback(log)}
                               className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition inline-flex items-center gap-1.5 text-xs font-semibold shadow-2xs cursor-pointer"
-                              title="Play Video in Portal (High Quality)"
+                              title="Play Video in Portal"
                             >
                               <Play className="w-3.5 h-3.5 fill-white" />
                               <span className="hidden sm:inline text-[11px]">Play</span>
@@ -1896,7 +1917,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
                           </button>
 
                           {/* Remove from Sheet & Drive Button */}
-                          {canUserDeleteData(currentUser) && (
+                          {(canUserDeleteData(currentUser) || isFailed) && (
                             <button
                               onClick={() => handleOpenDeleteModal(log)}
                               className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 hover:text-rose-700 rounded-lg transition border border-rose-200"
