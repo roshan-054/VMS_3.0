@@ -62,21 +62,98 @@ export function formatDDMMYYYY(dateStr?: string): string {
   return dateStr;
 }
 
+export function generateDateSequence(startDateStr: string, endDateStr: string): string[] {
+  const dates: string[] = [];
+  if (!startDateStr || !endDateStr) return dates;
+  const [sY, sM, sD] = startDateStr.split('-').map(Number);
+  const [eY, eM, eD] = endDateStr.split('-').map(Number);
+  if (isNaN(sY) || isNaN(eY)) return dates;
+  const cur = new Date(sY, sM - 1, sD, 12, 0, 0);
+  const end = new Date(eY, eM - 1, eD, 12, 0, 0);
+  while (cur <= end) {
+    const y = cur.getFullYear();
+    const m = String(cur.getMonth() + 1).padStart(2, '0');
+    const d = String(cur.getDate()).padStart(2, '0');
+    dates.push(`${y}-${m}-${d}`);
+    cur.setDate(cur.getDate() + 1);
+  }
+  return dates;
+}
+
 function mergeReturnsIntoAnalyticsData(
   base: AnalyticsData | null,
   returnRecords: VideoRecord[],
   platformFilter: string,
-  packerFilter: string
+  packerFilter: string,
+  fromDate: string,
+  toDate: string
 ): AnalyticsData {
   const normPlatform = platformFilter.toLowerCase();
   const normPacker = packerFilter.trim().toLowerCase();
 
-  const filteredReturns = returnRecords.filter((r) => {
-    if (normPlatform && normPlatform !== 'all' && (r.platform || '').toLowerCase() !== normPlatform) return false;
-    if (normPacker && !(r.packerEmail || '').toLowerCase().includes(normPacker)) return false;
-    return true;
+  // Deduplicate and filter return records strictly within fromDate and toDate
+  const seenReturnKeys = new Set<string>();
+  const validReturns: { date: string; platform: string; user: string; orderId: string }[] = [];
+  let duplicateReturnScans = 0;
+
+  returnRecords.forEach((r) => {
+    let rDate = '';
+    if (r.timestamp) {
+      if (/^\d{4}-\d{2}-\d{2}/.test(r.timestamp)) {
+        rDate = r.timestamp.substring(0, 10);
+      } else {
+        const d = new Date(r.timestamp);
+        if (!isNaN(d.getTime())) {
+          rDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        }
+      }
+    }
+    if (!rDate || rDate < fromDate || rDate > toDate) return;
+
+    const pf = r.platform || 'Custom';
+    if (normPlatform && normPlatform !== 'all' && pf.toLowerCase() !== normPlatform) return;
+
+    const pe = r.packerEmail || 'operator';
+    if (normPacker && !pe.toLowerCase().includes(normPacker)) return;
+
+    const oid = r.orderId || '';
+    const fid = r.fileId || '';
+    const dedupeKey = fid && fid.length > 5 ? `fid_${fid}` : `ord_${oid}_${pf.toLowerCase()}_return`;
+
+    if (seenReturnKeys.has(dedupeKey)) {
+      duplicateReturnScans++;
+      return;
+    }
+    seenReturnKeys.add(dedupeKey);
+
+    validReturns.push({
+      date: rDate,
+      platform: pf,
+      user: pe,
+      orderId: oid,
+    });
   });
 
+  const fwdCount =
+    base?.forwardCount !== undefined
+      ? base.forwardCount
+      : base?.types?.find((t) => {
+          const l = (t.label || '').toLowerCase();
+          return l === 'forward' || l === 'outbound';
+        })?.count ?? (base?.total || 0);
+
+  const baseReturnCount =
+    base?.returnCount !== undefined
+      ? base.returnCount
+      : base?.types?.find((t) => {
+          const l = (t.label || '').toLowerCase();
+          return l === 'return' || l === 'inbound';
+        })?.count ?? 0;
+
+  const finalReturnCount = baseReturnCount > 0 ? baseReturnCount : validReturns.length;
+  const total = fwdCount + finalReturnCount;
+
+  // Build continuous daily map
   const dailyMap: Record<
     string,
     { total: number; platforms: Record<string, number>; types: Record<string, number>; users: Record<string, number> }
@@ -86,54 +163,52 @@ function mergeReturnsIntoAnalyticsData(
     dailyMap[d.date] = {
       total: d.total || 0,
       platforms: { ...(d.platforms || {}) },
-      types: { ...(d.types || {}) },
+      types: {
+        Forward: d.types?.Forward ?? d.types?.forward ?? d.types?.Outbound ?? 0,
+        Return: d.types?.Return ?? d.types?.return ?? d.types?.Inbound ?? 0,
+      },
       users: { ...(d.users || {}) },
     };
   });
 
-  const platformCounts: Record<string, number> = {};
-  (base?.platforms || []).forEach((p) => {
-    platformCounts[p.label] = p.count;
-  });
-
-  const userCounts: Record<string, number> = {};
-  (base?.users || []).forEach((u) => {
-    userCounts[u.label] = u.count;
-  });
-
-  let returnAdditions = 0;
-  const uniqueReturnOrders = new Set<string>();
-
-  filteredReturns.forEach((r) => {
-    const rawDate = r.timestamp ? r.timestamp.substring(0, 10) : '';
-    const date = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : '';
-    const pf = r.platform || 'Custom';
-    const usr = r.packerEmail || 'operator';
-
-    returnAdditions++;
-    if (r.orderId) uniqueReturnOrders.add(r.orderId);
-    platformCounts[pf] = (platformCounts[pf] || 0) + 1;
-    userCounts[usr] = (userCounts[usr] || 0) + 1;
-
-    if (date) {
-      if (!dailyMap[date]) {
-        dailyMap[date] = { total: 0, platforms: {}, types: {}, users: {} };
+  if (baseReturnCount === 0) {
+    validReturns.forEach((r) => {
+      if (!dailyMap[r.date]) {
+        dailyMap[r.date] = { total: 0, platforms: {}, types: { Forward: 0, Return: 0 }, users: {} };
       }
-      const day = dailyMap[date];
+      const day = dailyMap[r.date];
       day.total = (day.total || 0) + 1;
-      day.platforms[pf] = (day.platforms[pf] || 0) + 1;
+      day.platforms[r.platform] = (day.platforms[r.platform] || 0) + 1;
       day.types['Return'] = (day.types['Return'] || 0) + 1;
-      day.users[usr] = (day.users[usr] || 0) + 1;
-    }
+      day.users[r.user] = (day.users[r.user] || 0) + 1;
+    });
+  }
+
+  const dateSequence = generateDateSequence(fromDate, toDate);
+  const updatedDaily = dateSequence.map((date) => {
+    const d = dailyMap[date] || { total: 0, platforms: {}, types: { Forward: 0, Return: 0 }, users: {} };
+    return {
+      date,
+      total: d.total || 0,
+      platforms: d.platforms || {},
+      types: {
+        Forward: d.types?.Forward ?? d.types?.forward ?? 0,
+        Return: d.types?.Return ?? d.types?.return ?? 0,
+      },
+      users: d.users || {},
+    };
   });
 
-  const fwdCount =
-    base?.types?.find((t) => t.label?.toLowerCase() === 'forward')?.count || (base?.total || 0);
-
-  const updatedTypes = [
-    { label: 'Forward', count: fwdCount },
-    { label: 'Return', count: returnAdditions },
-  ];
+  const platformCounts: Record<string, number> = {};
+  const userCounts: Record<string, number> = {};
+  updatedDaily.forEach((d) => {
+    Object.entries(d.platforms).forEach(([pf, cnt]) => {
+      platformCounts[pf] = (platformCounts[pf] || 0) + cnt;
+    });
+    Object.entries(d.users).forEach(([u, cnt]) => {
+      userCounts[u] = (userCounts[u] || 0) + cnt;
+    });
+  });
 
   const sortedPlatforms = Object.entries(platformCounts)
     .sort((a, b) => b[1] - a[1])
@@ -143,24 +218,26 @@ function mergeReturnsIntoAnalyticsData(
     .sort((a, b) => b[1] - a[1])
     .map(([label, count]) => ({ label, count }));
 
-  const updatedDaily = Object.keys(dailyMap)
-    .sort()
-    .map((date) => ({
-      date,
-      total: dailyMap[date].total,
-      platforms: dailyMap[date].platforms,
-      types: dailyMap[date].types,
-      users: dailyMap[date].users,
-    }));
+  const uniqueOrders =
+    (base?.uniqueOrders || 0) +
+    (baseReturnCount === 0 ? new Set(validReturns.map((r) => r.orderId)).size : 0);
 
   return {
-    total: (base?.total || 0) + returnAdditions,
-    uniqueOrders: (base?.uniqueOrders || 0) + uniqueReturnOrders.size,
-    platforms: sortedPlatforms,
-    types: updatedTypes,
-    users: sortedUsers,
-    statuses: base?.statuses || [{ label: 'Completed', count: (base?.total || 0) + returnAdditions }],
-    daily: updatedDaily.length > 0 ? updatedDaily : (base?.daily || []),
+    total,
+    forwardCount: fwdCount,
+    returnCount: finalReturnCount,
+    uniqueOrders: Math.min(total, Math.max(1, uniqueOrders || total)),
+    duplicateScans: (base?.duplicateScans || 0) + duplicateReturnScans,
+    platforms: sortedPlatforms.length > 0 ? sortedPlatforms : (base?.platforms || []),
+    types: [
+      { label: 'Forward', count: fwdCount },
+      { label: 'Return', count: finalReturnCount },
+    ],
+    users: sortedUsers.length > 0 ? sortedUsers : (base?.users || []),
+    statuses: [{ label: 'Completed', count: total }],
+    daily: updatedDaily,
+    fromDate,
+    toDate,
   };
 }
 
@@ -240,8 +317,10 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
             {
               recordingType: 'Return',
               platform: platformFilter === 'all' ? '' : platformFilter,
-              from: fromDate ? `${fromDate}T00:00:00` : '',
-              to: toDate ? `${toDate}T23:59:59` : '',
+              fromDate,
+              toDate,
+              from: `${fromDate}T00:00:00`,
+              to: `${toDate}T23:59:59`,
               limit: 10000,
             }
           );
@@ -253,7 +332,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
           });
 
           if (returnRecords.length > 0) {
-            res = mergeReturnsIntoAnalyticsData(res, returnRecords, platformFilter, packerFilter);
+            res = mergeReturnsIntoAnalyticsData(res, returnRecords, platformFilter, packerFilter, fromDate, toDate);
           }
         } catch (searchErr) {
           console.warn('Advanced search return data fallback note:', searchErr);
@@ -274,26 +353,54 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
   }, [fromDate, toDate, platformFilter, typeFilter]);
 
   // Derived metrics
-  const totalPackings = data?.total ?? 0;
-  const uniqueOrders = data?.uniqueOrders ?? 0;
-  const duplicateOrders = Math.max(0, totalPackings - uniqueOrders);
-
   const forwardCount = useMemo(() => {
+    if (data?.forwardCount !== undefined) return data.forwardCount;
+    const f = data?.types?.find((t) => {
+      const l = (t.label || '').toLowerCase();
+      return l === 'forward' || l === 'outbound';
+    })?.count;
+    if (f !== undefined) return f;
     return (
-      data?.types?.find((t) => {
-        const l = (t.label || '').toLowerCase();
-        return l === 'forward' || l === 'outbound';
-      })?.count || 0
+      data?.daily?.reduce(
+        (acc, d) => acc + (d.types?.Forward ?? d.types?.forward ?? d.types?.Outbound ?? 0),
+        0
+      ) ?? 0
     );
   }, [data]);
 
   const returnCount = useMemo(() => {
+    if (data?.returnCount !== undefined) return data.returnCount;
+    const r = data?.types?.find((t) => {
+      const l = (t.label || '').toLowerCase();
+      return l === 'return' || l === 'inbound';
+    })?.count;
+    if (r !== undefined) return r;
     return (
-      data?.types?.find((t) => {
-        const l = (t.label || '').toLowerCase();
-        return l === 'return' || l === 'inbound';
-      })?.count || 0
+      data?.daily?.reduce(
+        (acc, d) => acc + (d.types?.Return ?? d.types?.return ?? d.types?.Inbound ?? 0),
+        0
+      ) ?? 0
     );
+  }, [data]);
+
+  const totalPackings = useMemo(() => {
+    if (typeFilter === 'forward') return forwardCount;
+    if (typeFilter === 'return') return returnCount;
+    return data?.total ?? (forwardCount + returnCount);
+  }, [data, typeFilter, forwardCount, returnCount]);
+
+  const uniqueOrders = useMemo(() => {
+    if (data?.uniqueOrders !== undefined && data.uniqueOrders > 0) {
+      if (typeFilter === 'forward') return Math.min(data.uniqueOrders, forwardCount);
+      if (typeFilter === 'return') return Math.min(data.uniqueOrders, returnCount);
+      return data.uniqueOrders;
+    }
+    return totalPackings;
+  }, [data, typeFilter, forwardCount, returnCount, totalPackings]);
+
+  const duplicateOrders = useMemo(() => {
+    if (data?.duplicateScans !== undefined) return data.duplicateScans;
+    return 0;
   }, [data]);
 
   const topPlatform = data?.platforms?.[0] || { label: 'None', count: 0 };
@@ -303,8 +410,28 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
   const topPackerName = topPacker.label ? topPacker.label.split('@')[0] : 'Operator';
   const topPackerPct = totalPackings > 0 ? Math.round((topPacker.count / totalPackings) * 100) : 0;
 
-  // Max value in daily series for line graph scaling
-  const dailyList = data?.daily || [];
+  // Continuous daily list guaranteeing every calendar date in the selected range is represented
+  const dailyList = useMemo(() => {
+    if (!fromDate || !toDate) return data?.daily || [];
+    const dateMap = new Map<string, (typeof data.daily)[0]>();
+    (data?.daily || []).forEach((d) => {
+      dateMap.set(d.date, d);
+    });
+
+    const sequence = generateDateSequence(fromDate, toDate);
+    return sequence.map((dateStr) => {
+      if (dateMap.has(dateStr)) {
+        return dateMap.get(dateStr)!;
+      }
+      return {
+        date: dateStr,
+        total: 0,
+        platforms: {},
+        types: { Forward: 0, Return: 0 },
+        users: {},
+      };
+    });
+  }, [data, fromDate, toDate]);
   const actualPeakVolume = useMemo(() => {
     if (!dailyList.length) return 0;
     return Math.max(
@@ -557,7 +684,11 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between relative overflow-hidden group hover:border-blue-300 transition">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-              Total Packings
+              {typeFilter === 'forward'
+                ? 'Total Forward Packings'
+                : typeFilter === 'return'
+                ? 'Total Return Inbound'
+                : 'Total Recordings'}
             </span>
             <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
               <Package className="w-5 h-5" />
@@ -565,9 +696,13 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
           </div>
           <div className="mt-3">
             <div className="text-3xl font-extrabold text-slate-900 tracking-tight">{totalPackings}</div>
-            <div className="text-xs text-slate-400 mt-1 flex items-center gap-1 font-medium">
-              <Clock className="w-3 h-3 text-blue-500" />
-              Verified in selected range
+            <div className="text-xs text-slate-500 mt-1 flex items-center gap-1 font-medium">
+              <Clock className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+              {typeFilter === 'all'
+                ? `${forwardCount} Forward • ${returnCount} Return`
+                : typeFilter === 'forward'
+                ? 'Outbound packing records'
+                : 'Inbound returns verified'}
             </div>
           </div>
         </div>
@@ -584,8 +719,8 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
           </div>
           <div className="mt-3">
             <div className="text-3xl font-extrabold text-slate-900 tracking-tight">{uniqueOrders}</div>
-            <div className="text-xs text-emerald-700 mt-1 font-semibold flex items-center gap-1">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+            <div className={`text-xs mt-1 font-semibold flex items-center gap-1 ${duplicateOrders > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+              <ShieldCheck className={`w-3.5 h-3.5 shrink-0 ${duplicateOrders > 0 ? 'text-amber-600' : 'text-emerald-600'}`} />
               {duplicateOrders > 0 ? `${duplicateOrders} duplicate scans logged` : 'Zero duplicates detected'}
             </div>
           </div>
@@ -606,7 +741,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
               {topPlatform.label || 'N/A'}
             </div>
             <div className="text-xs text-purple-700 mt-1 font-semibold flex items-center gap-1">
-              <span>{topPlatform.count} packages</span>
+              <span>{topPlatform.count} {typeFilter === 'return' ? 'returns' : typeFilter === 'forward' ? 'packings' : 'records'}</span>
               <span>•</span>
               <span>{topPlatformPct}% share</span>
             </div>
@@ -642,7 +777,11 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
           <div>
             <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
               <Activity className="w-4 h-4 text-blue-600" />
-              Daily Packing Throughput & Trend (Line Graph)
+              {typeFilter === 'forward'
+                ? 'Daily Forward Packing Throughput & Trend (Line Graph)'
+                : typeFilter === 'return'
+                ? 'Daily Return Inbound Throughput & Trend (Line Graph)'
+                : 'Daily Throughput & Trend (Line Graph)'}
             </h3>
             <p className="text-[11px] text-slate-500">
               Interactive continuous trend curve representing daily video volumes across the selected timeframe.
@@ -689,7 +828,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
                 <span className="font-bold text-slate-800">Date: {formatDDMMYYYY(hoveredPoint.day.date)} ({formatDDMM(hoveredPoint.day.date)})</span>
                 <span className="text-slate-400">•</span>
                 <span className={`font-bold ${activeChartMode === 'return' ? 'text-purple-700' : 'text-blue-700'}`}>
-                  Volume: {hoveredPoint.val} {activeChartMode === 'return' ? 'returns' : 'packages'}
+                  Volume: {hoveredPoint.val} {activeChartMode === 'return' ? 'returns' : activeChartMode === 'forward' ? 'packings' : 'recordings'}
                 </span>
               </div>
 

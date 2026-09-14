@@ -105,23 +105,63 @@ export const Reports: React.FC<ReportsProps> = ({ onShowToast }) => {
           const searchRes = await requestApi<{ results?: any[]; rows?: any[] }>('advancedSearch', {
             recordingType: 'Return',
             platform: platformFilter === 'all' ? '' : platformFilter,
+            fromDate,
+            toDate,
             from: fromDate ? `${fromDate}T00:00:00` : '',
             to: toDate ? `${toDate}T23:59:59` : '',
             limit: 10000,
           });
           const returnList = searchRes?.results || searchRes?.rows || [];
           if (returnList.length > 0) {
-            const mappedReturns = returnList.map((r) => ({
-              'Timestamp': r.timestamp,
-              'Source': 'Return',
-              'Order ID': r.orderId,
-              'Platform': r.platform,
-              'Recording Type': 'Return',
-              'User Email': r.packerEmail,
-              'Status': r.status || 'Completed',
-              'Drive File ID': r.fileId,
-              'Video Playback URL': r.playbackUrl || (r.fileId ? `https://drive.google.com/file/d/${r.fileId}/preview` : ''),
-            }));
+            // Strict range validation for return records
+            const filteredReturns = returnList.filter((r) => {
+              let rDate = '';
+              if (r.timestamp) {
+                if (/^\d{4}-\d{2}-\d{2}/.test(r.timestamp)) {
+                  rDate = r.timestamp.substring(0, 10);
+                } else {
+                  const d = new Date(r.timestamp);
+                  if (!isNaN(d.getTime())) {
+                    rDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                  }
+                }
+              }
+              return rDate >= fromDate && rDate <= toDate;
+            });
+
+            const existingKeys = new Set(
+              rows.map((r) => {
+                const fid = r['Drive File ID'] || r.fileId || '';
+                const oid = r['Order ID'] || r.orderId || '';
+                const pf = (r['Platform'] || r.platform || '').toLowerCase();
+                const rt = (r['Recording Type'] || r.recordingType || '').toLowerCase();
+                return fid && fid.length > 5 ? `fid_${fid}` : `ord_${oid}_${pf}_${rt}`;
+              })
+            );
+
+            const seenNew = new Set<string>();
+            const mappedReturns = filteredReturns
+              .filter((r) => {
+                const fid = r.fileId || '';
+                const oid = r.orderId || '';
+                const pf = (r.platform || '').toLowerCase();
+                const key = fid && fid.length > 5 ? `fid_${fid}` : `ord_${oid}_${pf}_return`;
+                if (existingKeys.has(key) || seenNew.has(key)) return false;
+                seenNew.add(key);
+                return true;
+              })
+              .map((r) => ({
+                'Timestamp': r.timestamp,
+                'Source': 'Return',
+                'Order ID': r.orderId,
+                'Platform': r.platform,
+                'Recording Type': 'Return',
+                'User Email': r.packerEmail,
+                'Status': r.status || 'Completed',
+                'Drive File ID': r.fileId,
+                'Video Playback URL': r.playbackUrl || (r.fileId ? `https://drive.google.com/file/d/${r.fileId}/preview` : ''),
+              }));
+
             rows = [...rows, ...mappedReturns];
           }
         } catch (searchErr) {

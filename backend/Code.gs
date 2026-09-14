@@ -858,8 +858,10 @@ function advancedSearch_(p){
   const status = normalize_(p.status);
   const packer = normalize_(p.packer);
   const video = normalize_(p.video);
-  const from = p.fromDate ? new Date(p.fromDate+'T00:00:00') : null;
-  const to = p.toDate ? new Date(p.toDate+'T23:59:59') : null;
+  const rawFrom = p.fromDate || p.from;
+  const rawTo = p.toDate || p.to;
+  const from = rawFrom ? (String(rawFrom).includes('T') ? new Date(rawFrom) : new Date(String(rawFrom) + 'T00:00:00')) : null;
+  const to = rawTo ? (String(rawTo).includes('T') ? new Date(rawTo) : new Date(String(rawTo) + 'T23:59:59')) : null;
 
   // If specific order search is active, do not cap at 100 - scan all rows
   const hasSpecificSearch = !!(rawOrder || packer || from || to);
@@ -2398,6 +2400,9 @@ function getAnalyticsData_(p){
   const platform=normalize_(p.platform), type=normalize_(p.recordingType), packer=normalize_(p.packer), status=normalize_(p.status);
   const rows=[];
   const seenKeys = {};
+  const seenFids = {};
+  const seenOpKeys = {};
+  let duplicateScanCount = 0;
 
   const sheetsToScan = [
     { name: CONFIG.ORDER_LOG_SHEET, defaultType: 'Forward' },
@@ -2428,9 +2433,16 @@ function getAnalyticsData_(p){
         if (packer && !normalize_(pe).includes(packer)) continue;
         if (status && normalize_(st) !== status) continue;
 
-        const recKey = fid && fid.length > 5 ? ('fid_' + fid) : ('ord_' + normalizeOrderId_(oid) + '_' + normalize_(pf) + '_' + rtNorm);
+        const opKey = normalizeOrderId_(oid) + '_' + normalize_(pf) + '_' + rtNorm;
+        if (seenOpKeys[opKey]) {
+          duplicateScanCount++;
+        }
+        seenOpKeys[opKey] = (seenOpKeys[opKey] || 0) + 1;
+
+        const recKey = fid && fid.length > 5 ? ('fid_' + fid) : ('ord_' + opKey);
         if (seenKeys[recKey]) continue;
         seenKeys[recKey] = true;
+        if (fid) seenFids[fid] = true;
 
         rows.push({
           date: dateOnly_(ts),
@@ -2438,7 +2450,8 @@ function getAnalyticsData_(p){
           type: rt,
           user: pe || 'Unknown',
           status: st || 'Completed',
-          orderId: oid
+          orderId: oid,
+          fileId: fid
         });
       }
     } catch(err) {
@@ -2466,9 +2479,9 @@ function getAnalyticsData_(p){
         if (st !== 'Completed') continue;
         if (!oid && !fid) continue;
 
-        const recKey = fid && fid.length > 5 ? ('fid_' + fid) : ('ord_' + normalizeOrderId_(oid) + '_' + normalize_(pf) + '_' + rtNorm);
-        if (seenKeys[recKey]) continue;
-        seenKeys[recKey] = true;
+        if (fid && seenFids[fid]) continue;
+        const opKey = normalizeOrderId_(oid) + '_' + normalize_(pf) + '_' + rtNorm;
+        if (seenOpKeys[opKey]) continue;
 
         if (!isAdmin && normalize_(pe) !== email) continue;
         if (platform && normalize_(pf) !== platform) continue;
@@ -2476,13 +2489,20 @@ function getAnalyticsData_(p){
         if (packer && !normalize_(pe).includes(packer)) continue;
         if (status && normalize_(st) !== status) continue;
 
+        const recKey = fid && fid.length > 5 ? ('fid_' + fid) : ('ord_' + opKey);
+        if (seenKeys[recKey]) continue;
+        seenKeys[recKey] = true;
+        seenOpKeys[opKey] = 1;
+        if (fid) seenFids[fid] = true;
+
         rows.push({
           date: dateOnly_(ts),
           platform: pf || 'Unknown',
           type: rt,
           user: pe || 'Unknown',
           status: st || 'Completed',
-          orderId: oid
+          orderId: oid,
+          fileId: fid
         });
       }
     }
@@ -2507,25 +2527,44 @@ function getAnalyticsData_(p){
   });
 
   const dates = [];
-  for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
-    dates.push(dateOnly_(new Date(d)));
+  const curDate = new Date(from.getTime());
+  while (curDate <= to) {
+    dates.push(dateOnly_(curDate));
+    curDate.setDate(curDate.getDate() + 1);
   }
 
   const daily = dates.map(date => {
     const d = dailyMap[date] || { date, total: 0, platforms: {}, types: {}, users: {} };
-    return { date, total: d.total, platforms: d.platforms, types: d.types, users: d.users };
+    const fCount = (d.types && (d.types['Forward'] || d.types['forward'] || d.types['Outbound'])) || 0;
+    const rCount = (d.types && (d.types['Return'] || d.types['return'] || d.types['Inbound'])) || 0;
+    return {
+      date,
+      total: d.total || 0,
+      platforms: d.platforms || {},
+      types: { Forward: fCount, Return: rCount },
+      users: d.users || {}
+    };
   });
 
-  const typesCount = countBy('type');
-  if (!typesCount.some(t => t.label === 'Forward')) typesCount.push({ label: 'Forward', count: 0 });
-  if (!typesCount.some(t => t.label === 'Return')) typesCount.push({ label: 'Return', count: 0 });
+  const forwardCount = rows.filter(r => r.type === 'Forward').length;
+  const returnCount = rows.filter(r => r.type === 'Return').length;
+  const uniqueOrderSet = new Set();
+  rows.forEach(r => { if (r.orderId) uniqueOrderSet.add(r.orderId); });
+
+  const typesCount = [
+    { label: 'Forward', count: forwardCount },
+    { label: 'Return', count: returnCount }
+  ];
 
   return {
     success: true,
     fromDate: p.fromDate,
     toDate: p.toDate,
     total: rows.length,
-    uniqueOrders: [...new Set(rows.map(r => r.orderId))].length,
+    forwardCount: forwardCount,
+    returnCount: returnCount,
+    uniqueOrders: uniqueOrderSet.size,
+    duplicateScans: duplicateScanCount,
     platforms: countBy('platform'),
     types: typesCount,
     users: countBy('user'),

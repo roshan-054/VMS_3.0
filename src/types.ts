@@ -97,6 +97,9 @@ export interface UploadLogItem {
 export interface AnalyticsData {
   total: number;
   uniqueOrders: number;
+  duplicateScans?: number;
+  forwardCount?: number;
+  returnCount?: number;
   platforms: { label: string; count: number }[];
   types: { label: string; count: number }[];
   users: { label: string; count: number }[];
@@ -108,4 +111,6 @@ export interface AnalyticsData {
     types: Record<string, number>;
     users: Record<string, number>;
   }[];
+  fromDate?: string;
+  toDate?: string;
 }
