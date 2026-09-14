@@ -1273,11 +1273,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                 </div>
               </div>
 
-              {/* 5. Google Sheet Maintenance & Playback Links Repair */}
+              {/* 6. Google Sheet Maintenance & Playback Links Repair */}
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
                 <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
                   <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-xs">
-                    5
+                    6
                   </div>
                   <div>
                     <h4 className="text-xs font-bold text-slate-900">Google Sheet & Drive Structure Maintenance</h4>
@@ -1307,26 +1307,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                     </button>
                   </div>
 
-                  <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
-                    <div>
-                      <span className="text-xs font-semibold text-slate-800 block">
-                        Fix Non-Clickable Playback URLs (Column F)
-                      </span>
-                      <span className="text-[11px] text-slate-500">
-                        Scans OrderLog & ReturnLog sheets, converting plain file names in Column F to clickable Google Drive preview links
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      disabled={repairingUrls}
-                      onClick={handleRepairPlaybackUrls}
-                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0 ml-3"
-                    >
-                      <RefreshCw className={`w-3.5 h-3.5 ${repairingUrls ? 'animate-spin' : ''}`} />
-                      {repairingUrls ? 'Repairing…' : 'Repair Links Now'}
-                    </button>
-                  </div>
-
                   <div className="flex items-center justify-between p-3 bg-emerald-50/60 rounded-xl border border-emerald-100">
                     <div>
                       <span className="text-xs font-semibold text-emerald-950 block">
@@ -1344,6 +1324,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                     >
                       <Check className={`w-3.5 h-3.5 ${refiningFormatting ? 'animate-spin' : ''}`} />
                       {refiningFormatting ? 'Refining…' : 'Refine Highlighting Now'}
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+                    <div>
+                      <span className="text-xs font-semibold text-slate-800 block">
+                        Fix Non-Clickable Playback URLs (Column F)
+                      </span>
+                      <span className="text-[11px] text-slate-500">
+                        Scans OrderLog & ReturnLog sheets, converting plain file names in Column F to clickable Google Drive preview links
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={repairingUrls}
+                      onClick={handleRepairPlaybackUrls}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0 ml-3"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${repairingUrls ? 'animate-spin' : ''}`} />
+                      {repairingUrls ? 'Repairing…' : 'Repair Links Now'}
                     </button>
                   </div>
 
@@ -1369,11 +1369,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                 </div>
               </div>
 
-              {/* 6. Cache & Storage Management */}
+              {/* 7. Cache & Storage Management */}
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
                 <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
                   <div className="w-7 h-7 rounded-lg bg-red-50 text-red-600 flex items-center justify-center font-bold text-xs">
-                    6
+                    7
                   </div>
                   <div>
                     <h4 className="text-xs font-bold text-slate-900">Cache & Storage Management</h4>

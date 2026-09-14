@@ -92,8 +92,45 @@ export const Reports: React.FC<ReportsProps> = ({ onShowToast }) => {
         status: statusFilter === 'all' ? '' : statusFilter,
         video: videoFilter === 'all' ? '' : videoFilter,
       });
-      setPreviewRows(res.rows || []);
-      onShowToast(`Generated report with ${res.rows?.length || 0} verified records.`, 'info');
+
+      let rows = res.rows || [];
+      const hasReturns = rows.some((r) => {
+        const rt = (r['Recording Type'] || r.recordingType || '').toLowerCase();
+        return rt === 'return' || rt === 'inbound';
+      });
+
+      // Fallback for environments where the active deployment hasn't been updated yet
+      if (typeFilter !== 'forward' && !hasReturns) {
+        try {
+          const searchRes = await requestApi<{ results?: any[]; rows?: any[] }>('advancedSearch', {
+            recordingType: 'Return',
+            platform: platformFilter === 'all' ? '' : platformFilter,
+            from: fromDate ? `${fromDate}T00:00:00` : '',
+            to: toDate ? `${toDate}T23:59:59` : '',
+            limit: 10000,
+          });
+          const returnList = searchRes?.results || searchRes?.rows || [];
+          if (returnList.length > 0) {
+            const mappedReturns = returnList.map((r) => ({
+              'Timestamp': r.timestamp,
+              'Source': 'Return',
+              'Order ID': r.orderId,
+              'Platform': r.platform,
+              'Recording Type': 'Return',
+              'User Email': r.packerEmail,
+              'Status': r.status || 'Completed',
+              'Drive File ID': r.fileId,
+              'Video Playback URL': r.playbackUrl || (r.fileId ? `https://drive.google.com/file/d/${r.fileId}/preview` : ''),
+            }));
+            rows = [...rows, ...mappedReturns];
+          }
+        } catch (searchErr) {
+          console.warn('Advanced search fallback note for reports:', searchErr);
+        }
+      }
+
+      setPreviewRows(rows);
+      onShowToast(`Generated report with ${rows.length} verified records.`, 'info');
     } catch (err: any) {
       console.warn('Report error:', err);
       onShowToast(err.message || 'Report query failed', 'error');
@@ -140,8 +177,14 @@ export const Reports: React.FC<ReportsProps> = ({ onShowToast }) => {
   const stats = useMemo(() => {
     const total = displayRows.length;
     const uniqueOrders = new Set(displayRows.map((r) => r['Order ID'] || r.orderId)).size;
-    const forwardCount = displayRows.filter((r) => (r['Recording Type'] || r.recordingType) === 'Forward').length;
-    const returnCount = displayRows.filter((r) => (r['Recording Type'] || r.recordingType) === 'Return').length;
+    const forwardCount = displayRows.filter((r) => {
+      const rt = (r['Recording Type'] || r.recordingType || '').toLowerCase();
+      return rt === 'forward' || rt === 'outbound';
+    }).length;
+    const returnCount = displayRows.filter((r) => {
+      const rt = (r['Recording Type'] || r.recordingType || '').toLowerCase();
+      return rt === 'return' || rt === 'inbound';
+    }).length;
     const platforms: Record<string, number> = {};
     displayRows.forEach((r) => {
       const p = r['Platform'] || r.platform || 'Other';

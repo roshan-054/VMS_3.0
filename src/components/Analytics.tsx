@@ -20,7 +20,7 @@ import {
   Activity,
   CalendarDays
 } from 'lucide-react';
-import { AnalyticsData } from '../types';
+import { AnalyticsData, VideoRecord } from '../types';
 import { requestApi } from '../lib/api';
 
 interface AnalyticsProps {
@@ -60,6 +60,108 @@ export function formatDDMMYYYY(dateStr?: string): string {
     return `${parts[2]}-${parts[1]}-${parts[0]}`;
   }
   return dateStr;
+}
+
+function mergeReturnsIntoAnalyticsData(
+  base: AnalyticsData | null,
+  returnRecords: VideoRecord[],
+  platformFilter: string,
+  packerFilter: string
+): AnalyticsData {
+  const normPlatform = platformFilter.toLowerCase();
+  const normPacker = packerFilter.trim().toLowerCase();
+
+  const filteredReturns = returnRecords.filter((r) => {
+    if (normPlatform && normPlatform !== 'all' && (r.platform || '').toLowerCase() !== normPlatform) return false;
+    if (normPacker && !(r.packerEmail || '').toLowerCase().includes(normPacker)) return false;
+    return true;
+  });
+
+  const dailyMap: Record<
+    string,
+    { total: number; platforms: Record<string, number>; types: Record<string, number>; users: Record<string, number> }
+  > = {};
+
+  (base?.daily || []).forEach((d) => {
+    dailyMap[d.date] = {
+      total: d.total || 0,
+      platforms: { ...(d.platforms || {}) },
+      types: { ...(d.types || {}) },
+      users: { ...(d.users || {}) },
+    };
+  });
+
+  const platformCounts: Record<string, number> = {};
+  (base?.platforms || []).forEach((p) => {
+    platformCounts[p.label] = p.count;
+  });
+
+  const userCounts: Record<string, number> = {};
+  (base?.users || []).forEach((u) => {
+    userCounts[u.label] = u.count;
+  });
+
+  let returnAdditions = 0;
+  const uniqueReturnOrders = new Set<string>();
+
+  filteredReturns.forEach((r) => {
+    const rawDate = r.timestamp ? r.timestamp.substring(0, 10) : '';
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : '';
+    const pf = r.platform || 'Custom';
+    const usr = r.packerEmail || 'operator';
+
+    returnAdditions++;
+    if (r.orderId) uniqueReturnOrders.add(r.orderId);
+    platformCounts[pf] = (platformCounts[pf] || 0) + 1;
+    userCounts[usr] = (userCounts[usr] || 0) + 1;
+
+    if (date) {
+      if (!dailyMap[date]) {
+        dailyMap[date] = { total: 0, platforms: {}, types: {}, users: {} };
+      }
+      const day = dailyMap[date];
+      day.total = (day.total || 0) + 1;
+      day.platforms[pf] = (day.platforms[pf] || 0) + 1;
+      day.types['Return'] = (day.types['Return'] || 0) + 1;
+      day.users[usr] = (day.users[usr] || 0) + 1;
+    }
+  });
+
+  const fwdCount =
+    base?.types?.find((t) => t.label?.toLowerCase() === 'forward')?.count || (base?.total || 0);
+
+  const updatedTypes = [
+    { label: 'Forward', count: fwdCount },
+    { label: 'Return', count: returnAdditions },
+  ];
+
+  const sortedPlatforms = Object.entries(platformCounts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([label, count]) => ({ label, count }));
+
+  const sortedUsers = Object.entries(userCounts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([label, count]) => ({ label, count }));
+
+  const updatedDaily = Object.keys(dailyMap)
+    .sort()
+    .map((date) => ({
+      date,
+      total: dailyMap[date].total,
+      platforms: dailyMap[date].platforms,
+      types: dailyMap[date].types,
+      users: dailyMap[date].users,
+    }));
+
+  return {
+    total: (base?.total || 0) + returnAdditions,
+    uniqueOrders: (base?.uniqueOrders || 0) + uniqueReturnOrders.size,
+    platforms: sortedPlatforms,
+    types: updatedTypes,
+    users: sortedUsers,
+    statuses: base?.statuses || [{ label: 'Completed', count: (base?.total || 0) + returnAdditions }],
+    daily: updatedDaily.length > 0 ? updatedDaily : (base?.daily || []),
+  };
 }
 
 export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
@@ -115,13 +217,49 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
 
     setLoading(true);
     try {
-      const res = await requestApi<AnalyticsData>('getAnalyticsData', {
+      let res: AnalyticsData = (await requestApi<AnalyticsData>('getAnalyticsData', {
         fromDate,
         toDate,
         platform: platformFilter === 'all' ? '' : platformFilter,
         recordingType: typeFilter === 'all' ? '' : typeFilter,
         packer: packerFilter.trim(),
-      });
+      })) as unknown as AnalyticsData;
+
+      // Seamless fallback for environments where the active Apps Script deployment
+      // only indexed OrderLog or where ReturnLog data needs to be merged
+      const returnInRes =
+        res?.types?.find((t) => {
+          const l = (t.label || '').toLowerCase();
+          return l === 'return' || l === 'inbound';
+        })?.count || 0;
+
+      if (typeFilter !== 'forward' && returnInRes === 0) {
+        try {
+          const searchRes = await requestApi<{ results?: VideoRecord[]; rows?: VideoRecord[]; total?: number }>(
+            'advancedSearch',
+            {
+              recordingType: 'Return',
+              platform: platformFilter === 'all' ? '' : platformFilter,
+              from: fromDate ? `${fromDate}T00:00:00` : '',
+              to: toDate ? `${toDate}T23:59:59` : '',
+              limit: 10000,
+            }
+          );
+
+          const rawList = searchRes?.results || searchRes?.rows || [];
+          const returnRecords = rawList.filter((r) => {
+            const rt = (r.recordingType || '').toLowerCase();
+            return rt === 'return' || rt === 'inbound';
+          });
+
+          if (returnRecords.length > 0) {
+            res = mergeReturnsIntoAnalyticsData(res, returnRecords, platformFilter, packerFilter);
+          }
+        } catch (searchErr) {
+          console.warn('Advanced search return data fallback note:', searchErr);
+        }
+      }
+
       setData(res);
     } catch (err: any) {
       console.warn('Analytics fetch error:', err);
@@ -140,8 +278,23 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
   const uniqueOrders = data?.uniqueOrders ?? 0;
   const duplicateOrders = Math.max(0, totalPackings - uniqueOrders);
 
-  const forwardCount = data?.types?.find((t) => t.label === 'Forward')?.count || 0;
-  const returnCount = data?.types?.find((t) => t.label === 'Return')?.count || 0;
+  const forwardCount = useMemo(() => {
+    return (
+      data?.types?.find((t) => {
+        const l = (t.label || '').toLowerCase();
+        return l === 'forward' || l === 'outbound';
+      })?.count || 0
+    );
+  }, [data]);
+
+  const returnCount = useMemo(() => {
+    return (
+      data?.types?.find((t) => {
+        const l = (t.label || '').toLowerCase();
+        return l === 'return' || l === 'inbound';
+      })?.count || 0
+    );
+  }, [data]);
 
   const topPlatform = data?.platforms?.[0] || { label: 'None', count: 0 };
   const topPlatformPct = totalPackings > 0 ? Math.round((topPlatform.count / totalPackings) * 100) : 0;
@@ -156,8 +309,10 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
     if (!dailyList.length) return 0;
     return Math.max(
       ...dailyList.map((d) => {
-        if (activeChartMode === 'forward') return d.types?.Forward || 0;
-        if (activeChartMode === 'return') return d.types?.Return || 0;
+        const fwdVal = d.types?.Forward ?? d.types?.forward ?? d.types?.Outbound ?? 0;
+        const retVal = d.types?.Return ?? d.types?.return ?? d.types?.Inbound ?? 0;
+        if (activeChartMode === 'forward') return fwdVal;
+        if (activeChartMode === 'return') return retVal;
         return d.total;
       }),
       0
@@ -182,8 +337,10 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
     const count = dailyList.length;
     return dailyList.map((d, index) => {
       let val = d.total;
-      if (activeChartMode === 'forward') val = d.types?.Forward || 0;
-      if (activeChartMode === 'return') val = d.types?.Return || 0;
+      const fwdVal = d.types?.Forward ?? d.types?.forward ?? d.types?.Outbound ?? 0;
+      const retVal = d.types?.Return ?? d.types?.return ?? d.types?.Inbound ?? 0;
+      if (activeChartMode === 'forward') val = fwdVal;
+      if (activeChartMode === 'return') val = retVal;
 
       const x = count === 1 ? padding.left + plotWidth / 2 : padding.left + (index / (count - 1)) * plotWidth;
       const y = padding.top + plotHeight - (val / (maxDaily || 1)) * plotHeight;
@@ -524,17 +681,21 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
         {/* Stable Day Inspector Banner - Fixed height container to prevent layout shifting/flickering */}
         <div className="min-h-[46px] flex items-center">
           {hoveredPoint ? (
-            <div className="w-full bg-blue-50/90 border border-blue-200 p-2.5 sm:px-3 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs transition-all animate-in fade-in duration-150">
+            <div className={`w-full p-2.5 sm:px-3 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs transition-all animate-in fade-in duration-150 ${
+              activeChartMode === 'return' ? 'bg-purple-50/90 border border-purple-200' : 'bg-blue-50/90 border border-blue-200'
+            }`}>
               <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-blue-600 shrink-0" />
+                <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${activeChartMode === 'return' ? 'bg-purple-600' : 'bg-blue-600'}`} />
                 <span className="font-bold text-slate-800">Date: {formatDDMMYYYY(hoveredPoint.day.date)} ({formatDDMM(hoveredPoint.day.date)})</span>
                 <span className="text-slate-400">•</span>
-                <span className="font-bold text-blue-700">Volume: {hoveredPoint.val} packages</span>
+                <span className={`font-bold ${activeChartMode === 'return' ? 'text-purple-700' : 'text-blue-700'}`}>
+                  Volume: {hoveredPoint.val} {activeChartMode === 'return' ? 'returns' : 'packages'}
+                </span>
               </div>
 
               <div className="flex items-center gap-3 text-[11px] text-slate-600 font-medium">
-                <span>Forward: <strong className="text-blue-700">{hoveredPoint.day.types?.Forward || 0}</strong></span>
-                <span>Return: <strong className="text-purple-700">{hoveredPoint.day.types?.Return || 0}</strong></span>
+                <span>Forward: <strong className="text-blue-700">{hoveredPoint.day.types?.Forward ?? hoveredPoint.day.types?.forward ?? hoveredPoint.day.types?.Outbound ?? 0}</strong></span>
+                <span>Return: <strong className="text-purple-700">{hoveredPoint.day.types?.Return ?? hoveredPoint.day.types?.return ?? hoveredPoint.day.types?.Inbound ?? 0}</strong></span>
                 <span>Amazon: <strong className="text-slate-800">{hoveredPoint.day.platforms?.Amazon || 0}</strong></span>
                 <span>D2C: <strong className="text-slate-800">{hoveredPoint.day.platforms?.D2C || 0}</strong></span>
                 <span>JioMart: <strong className="text-slate-800">{hoveredPoint.day.platforms?.JioMart || 0}</strong></span>
@@ -543,7 +704,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
           ) : (
             <div className="w-full bg-slate-50/80 border border-slate-100 p-2.5 sm:px-3 rounded-xl flex items-center justify-between text-xs text-slate-500">
               <span className="flex items-center gap-2">
-                <Sparkles className="w-3.5 h-3.5 text-blue-500" />
+                <Sparkles className={`w-3.5 h-3.5 ${activeChartMode === 'return' ? 'text-purple-500' : 'text-blue-500'}`} />
                 <span>Hover or drag along the curve to inspect daily platform and order details.</span>
               </span>
               <span className="text-[11px] font-mono text-slate-400 hidden sm:inline">
@@ -581,12 +742,26 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
               >
                 <defs>
                   <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#3B82F6" stopOpacity="0.32" />
-                    <stop offset="100%" stopColor="#3B82F6" stopOpacity="0.00" />
+                    <stop
+                      offset="0%"
+                      stopColor={activeChartMode === 'return' ? '#A855F7' : '#3B82F6'}
+                      stopOpacity="0.32"
+                    />
+                    <stop
+                      offset="100%"
+                      stopColor={activeChartMode === 'return' ? '#A855F7' : '#3B82F6'}
+                      stopOpacity="0.00"
+                    />
                   </linearGradient>
                   <linearGradient id="lineGradient" x1="0" y1="0" x2="1" y2="0">
-                    <stop offset="0%" stopColor="#2563EB" />
-                    <stop offset="100%" stopColor="#4F46E5" />
+                    <stop
+                      offset="0%"
+                      stopColor={activeChartMode === 'return' ? '#9333EA' : '#2563EB'}
+                    />
+                    <stop
+                      offset="100%"
+                      stopColor={activeChartMode === 'return' ? '#7E22CE' : '#4F46E5'}
+                    />
                   </linearGradient>
                 </defs>
 
@@ -642,7 +817,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
                     y1={padding.top}
                     x2={hoveredPoint.x}
                     y2={padding.top + plotHeight}
-                    stroke="#3B82F6"
+                    stroke={activeChartMode === 'return' ? '#A855F7' : '#3B82F6'}
                     strokeDasharray="3 3"
                     strokeWidth="1.5"
                     className="pointer-events-none"
@@ -660,7 +835,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
                           cx={p.x}
                           cy={p.y}
                           r="8"
-                          fill="#93C5FD"
+                          fill={activeChartMode === 'return' ? '#E9D5FF' : '#93C5FD'}
                           opacity="0.6"
                         />
                       )}
@@ -670,7 +845,15 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
                         cx={p.x}
                         cy={p.y}
                         r={isHovered ? 5.5 : 3.5}
-                        fill={isHovered ? '#1D4ED8' : '#3B82F6'}
+                        fill={
+                          activeChartMode === 'return'
+                            ? isHovered
+                              ? '#7E22CE'
+                              : '#9333EA'
+                            : isHovered
+                            ? '#1D4ED8'
+                            : '#3B82F6'
+                        }
                         stroke="#FFFFFF"
                         strokeWidth="2"
                       />
@@ -716,7 +899,11 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
                       y={padding.top + plotHeight + 22}
                       textAnchor="middle"
                       className={`text-[11px] font-mono pointer-events-none font-medium ${
-                        hoveredIndex === idx ? 'fill-blue-700 font-bold' : 'fill-slate-500'
+                        hoveredIndex === idx
+                          ? activeChartMode === 'return'
+                            ? 'fill-purple-700 font-bold'
+                            : 'fill-blue-700 font-bold'
+                          : 'fill-slate-500'
                       }`}
                     >
                       {formatDDMM(p.day.date)}
@@ -729,8 +916,19 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
             <div className="flex items-center justify-between text-xs text-slate-500 px-2 pt-2 border-t border-slate-100 font-medium">
               <span>Start: <strong className="text-slate-700 font-mono">{formatDDMMYYYY(dailyList[0]?.date)}</strong></span>
               <span className="font-semibold text-slate-700 flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-blue-600 animate-pulse" />
-                Peak Volume: <strong className="text-blue-700 font-mono font-bold">{actualPeakVolume} packings/day</strong>
+                <span
+                  className={`w-2 h-2 rounded-full animate-pulse ${
+                    activeChartMode === 'return' ? 'bg-purple-600' : 'bg-blue-600'
+                  }`}
+                />
+                Peak Volume:{' '}
+                <strong
+                  className={`font-mono font-bold ${
+                    activeChartMode === 'return' ? 'text-purple-700' : 'text-blue-700'
+                  }`}
+                >
+                  {actualPeakVolume} {activeChartMode === 'return' ? 'returns' : 'packings'}/day
+                </strong>
               </span>
               <span>End: <strong className="text-slate-700 font-mono">{formatDDMMYYYY(dailyList[dailyList.length - 1]?.date)}</strong></span>
             </div>

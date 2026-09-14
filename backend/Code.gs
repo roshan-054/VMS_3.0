@@ -213,6 +213,69 @@ function applyDuplicateConditionalFormatting_(sh) {
   }
 }
 
+function formatFileSize_(bytes) {
+  if (bytes === undefined || bytes === null || bytes === '' || bytes === '—' || bytes === '0' || bytes === 0) return '—';
+  if (typeof bytes === 'string' && (bytes.includes('MB') || bytes.includes('KB') || bytes.includes('GB') || bytes.includes('B'))) {
+    return bytes;
+  }
+  const n = Number(bytes);
+  if (isNaN(n) || n <= 0) return String(bytes);
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(2) + ' MB';
+  return (n / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
+function standardizeSheetFileSizes_() {
+  const ss = ss_();
+  let convertedCount = 0;
+
+  // 1. UploadLog (Column F is index 6 in 1-based)
+  try {
+    const uploadSh = ss.getSheetByName(CONFIG.UPLOAD_LOG_SHEET);
+    if (uploadSh) {
+      const data = uploadSh.getDataRange().getValues();
+      for (let i = 1; i < data.length; i++) {
+        const rawSize = data[i][5];
+        if (typeof rawSize === 'number' || (typeof rawSize === 'string' && /^\d+(\.\d+)?$/.test(rawSize.trim()))) {
+          const formatted = formatFileSize_(rawSize);
+          if (formatted !== '—' && formatted !== String(rawSize)) {
+            uploadSh.getRange(i + 1, 6).setValue(formatted);
+            convertedCount++;
+          }
+        }
+      }
+    }
+  } catch(e) {
+    console.warn('UploadLog size standardization note:', e);
+  }
+
+  // 2. OrderLog & ReturnLog (Column G is index 7 in 1-based)
+  [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET].forEach(function(sName) {
+    try {
+      const sh = ss.getSheetByName(sName);
+      if (sh) {
+        const data = sh.getDataRange().getValues();
+        for (let i = 1; i < data.length; i++) {
+          const rawSize = data[i][6];
+          if (typeof rawSize === 'number' || (typeof rawSize === 'string' && /^\d+(\.\d+)?$/.test(rawSize.trim()))) {
+            const formatted = formatFileSize_(rawSize);
+            if (formatted !== '—' && formatted !== String(rawSize)) {
+              sh.getRange(i + 1, 7).setValue(formatted);
+              convertedCount++;
+            }
+          }
+        }
+      }
+    } catch(e) {
+      console.warn(sName + ' size standardization note:', e);
+    }
+  });
+
+  SpreadsheetApp.flush();
+  return { success: true, convertedCount: convertedCount };
+}
+
 function applyFormattingEndpoint_() {
   const ss = ss_();
   const orderSh = ss.getSheetByName(CONFIG.ORDER_LOG_SHEET);
@@ -223,7 +286,8 @@ function applyFormattingEndpoint_() {
   if (returnSh) applyDuplicateConditionalFormatting_(returnSh);
   if (uploadSh) applyDuplicateConditionalFormatting_(uploadSh);
   repairPlaybackUrls();
-  return { success: true, message: 'Conditional formatting refined across UploadLog, OrderLog, and ReturnLog. Forward and Return will no longer conflict.' };
+  standardizeSheetFileSizes_();
+  return { success: true, message: 'Conditional formatting refined & file sizes standardized across UploadLog, OrderLog, and ReturnLog.' };
 }
 
 /**
@@ -1356,10 +1420,11 @@ function startUpload_(p){
         const rPlatform = String(uploadData[i][2] || '').trim();
         const rType = String(uploadData[i][12] || 'Forward').trim();
         const rStatus = String(uploadData[i][10] || '').trim();
+        const displaySize = formatFileSize_(size);
         if (normalize_(rOrder) === normalize_(order) && normalize_(rPlatform) === normalize_(platform) && normalize_(rType) === normalize_(type)) {
           if (rStatus === 'Started' || rStatus === 'Pending' || rStatus === 'In Progress') {
             uploadSh.getRange(i + 1, 1, 1, 15).setValues([[
-              new Date(), order, platform, user.email, name, size, uploadId, 'Session Created', 0, '', 'Started', '', type, source, queueJobId
+              new Date(), order, platform, user.email, name, displaySize, uploadId, 'Session Created', 0, '', 'Started', '', type, source, queueJobId
             ]]);
             updatedExisting = true;
             break;
@@ -1367,7 +1432,7 @@ function startUpload_(p){
         }
       }
       if (!updatedExisting) {
-        logUpload_([new Date(), order, platform, user.email, name, size, uploadId, 'Session Created', 0, '', 'Started', '', type, source, queueJobId]);
+        logUpload_([new Date(), order, platform, user.email, name, formatFileSize_(size), uploadId, 'Session Created', 0, '', 'Started', '', type, source, queueJobId]);
       }
 
       return {
@@ -1572,6 +1637,7 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
     }
 
     if (!alreadyLogged) {
+      const formattedSize = formatFileSize_(s.size);
       targetLogSheet.appendRow([
         new Date(),
         s.order,
@@ -1579,7 +1645,7 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
         s.packerEmail || (user ? user.email : ''),
         fid,
         playback,
-        s.size || '',
+        formattedSize || '',
         'Completed',
         s.type,
         s.queueJobId || '',
@@ -1593,7 +1659,7 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
           s.platform,
           s.packerEmail || (user ? user.email : ''),
           s.name,
-          s.size,
+          formattedSize || '',
           'Recording & Cloud Upload Complete',
           s.type
         ]);
@@ -2260,32 +2326,63 @@ function getReportData_(p){
   if(String(p.toDate||'')>today)throw new Error('Future dates are not allowed.');
   const platform=normalize_(p.platform), type=normalize_(p.recordingType), packer=normalize_(p.packer), status=normalize_(p.status);
   const video=String(p.video||'');
-  const rows=[], v=sheet_(CONFIG.ORDER_LOG_SHEET).getDataRange().getValues();
-  for(let i=1; i<v.length; i++){
-    const ts=v[i][0] instanceof Date ? v[i][0] : new Date(v[i][0]);
-    if(isNaN(ts) || !inRange_(ts,from,to)) continue;
-    const pe=String(v[i][3]||''), pf=String(v[i][2]||''), rt=String(v[i][8]||'Forward'), st=String(v[i][7]||'');
-    if(!isAdmin && normalize_(pe)!==email) continue;
-    if(platform && normalize_(pf)!==platform) continue;
-    if(type && normalize_(rt)!==type) continue;
-    if(packer && !(normalize_(pe).includes(packer))) continue;
-    if(status && normalize_(st)!==status) continue;
-    const fid=String(v[i][4]||''), available=!!fid && driveExists_(fid);
-    if(video==='yes' && !available) continue;
-    if(video==='no' && available) continue;
-    if(!available) continue;
-    rows.push({
-      'Timestamp': ts.toISOString(),
-      'Source': 'Order',
-      'Order ID': String(v[i][1]||''),
-      'Platform': pf,
-      'Recording Type': rt,
-      'User Email': pe,
-      'Status': st,
-      'Drive File ID': fid,
-      'Video Playback URL': String(v[i][5]||'')
-    });
-  }
+  const rows=[];
+  const seenKeys={};
+
+  const sheetsToScan = [
+    { name: CONFIG.ORDER_LOG_SHEET, defaultType: 'Forward', source: 'Order' },
+    { name: CONFIG.RETURN_LOG_SHEET, defaultType: 'Return', source: 'Return' }
+  ];
+
+  sheetsToScan.forEach(target => {
+    try {
+      const sh = ss_().getSheetByName(target.name);
+      if (!sh) return;
+      const v = sh.getDataRange().getValues();
+      for (let i = 1; i < v.length; i++) {
+        const ts = v[i][0] instanceof Date ? v[i][0] : new Date(v[i][0]);
+        if (isNaN(ts) || !inRange_(ts, from, to)) continue;
+        const oid = String(v[i][1] || '').trim();
+        const pf = String(v[i][2] || '').trim();
+        const pe = String(v[i][3] || '').trim();
+        const fid = String(v[i][4] || '').trim();
+        const pUrl = String(v[i][5] || '').trim();
+        const st = String(v[i][7] || 'Completed').trim();
+        const rawRt = String(v[i][8] || target.defaultType).trim();
+        const rtNorm = normalize_(rawRt);
+        const rt = (rtNorm === 'return' || rtNorm === 'inbound') ? 'Return' : 'Forward';
+
+        if (!isAdmin && normalize_(pe) !== email) continue;
+        if (platform && normalize_(pf) !== platform) continue;
+        if (type && normalize_(rt) !== type) continue;
+        if (packer && !(normalize_(pe).includes(packer))) continue;
+        if (status && normalize_(st) !== status) continue;
+
+        const available = !!fid && fid.length > 5 && fid !== 'undefined' && fid !== 'null';
+        if (video === 'yes' && !available) continue;
+        if (video === 'no' && available) continue;
+
+        const recKey = fid && fid.length > 5 ? ('fid_' + fid) : ('ord_' + normalizeOrderId_(oid) + '_' + normalize_(pf) + '_' + rtNorm);
+        if (seenKeys[recKey]) continue;
+        seenKeys[recKey] = true;
+
+        rows.push({
+          'Timestamp': ts.toISOString(),
+          'Source': target.source,
+          'Order ID': oid,
+          'Platform': pf,
+          'Recording Type': rt,
+          'User Email': pe,
+          'Status': st,
+          'Drive File ID': fid,
+          'Video Playback URL': pUrl || (fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : '')
+        });
+      }
+    } catch(err) {
+      console.warn('Report scan error for ' + target.name + ':', err);
+    }
+  });
+
   return {success: true, fromDate: p.fromDate, toDate: p.toDate, rows};
 }
 
@@ -2299,58 +2396,138 @@ function getAnalyticsData_(p){
   if(String(p.toDate||'')>today)throw new Error('Future dates are not allowed.');
 
   const platform=normalize_(p.platform), type=normalize_(p.recordingType), packer=normalize_(p.packer), status=normalize_(p.status);
-  const rows=[], v=sheet_(CONFIG.ORDER_LOG_SHEET).getDataRange().getValues();
+  const rows=[];
+  const seenKeys = {};
 
-  for(let i=1; i<v.length; i++){
-    const ts=v[i][0] instanceof Date ? v[i][0] : new Date(v[i][0]);
-    if(isNaN(ts) || !inRange_(ts,from,to)) continue;
-    const pe=String(v[i][3]||''), pf=String(v[i][2]||''), rt=String(v[i][8]||'Forward'), st=String(v[i][7]||'');
-    if(!isAdmin && normalize_(pe)!==email) continue;
-    if(platform && normalize_(pf)!==platform) continue;
-    if(type && normalize_(rt)!==type) continue;
-    if(packer && normalize_(pe)!==packer) continue;
-    if(status && normalize_(st)!==status) continue;
+  const sheetsToScan = [
+    { name: CONFIG.ORDER_LOG_SHEET, defaultType: 'Forward' },
+    { name: CONFIG.RETURN_LOG_SHEET, defaultType: 'Return' }
+  ];
 
-    const fid=String(v[i][4]||'');
-    if(!fid || !driveExists_(fid)) continue;
+  sheetsToScan.forEach(target => {
+    try {
+      const sh = ss_().getSheetByName(target.name);
+      if (!sh) return;
+      const v = sh.getDataRange().getValues();
+      for (let i = 1; i < v.length; i++) {
+        const ts = v[i][0] instanceof Date ? v[i][0] : new Date(v[i][0]);
+        if (isNaN(ts) || !inRange_(ts, from, to)) continue;
+        const oid = String(v[i][1] || '').trim();
+        const pf = String(v[i][2] || '').trim();
+        const pe = String(v[i][3] || '').trim();
+        const fid = String(v[i][4] || '').trim();
+        const st = String(v[i][7] || 'Completed').trim();
+        const rawRt = String(v[i][8] || target.defaultType).trim();
+        const rtNorm = normalize_(rawRt);
+        const rt = (rtNorm === 'return' || rtNorm === 'inbound') ? 'Return' : 'Forward';
 
-    rows.push({date: dateOnly_(ts), platform: pf, type: rt, user: pe, status: st, orderId: String(v[i][1]||'')});
-  }
+        if (!oid && !fid) continue;
+        if (!isAdmin && normalize_(pe) !== email) continue;
+        if (platform && normalize_(pf) !== platform) continue;
+        if (type && normalize_(rt) !== type) continue;
+        if (packer && !normalize_(pe).includes(packer)) continue;
+        if (status && normalize_(st) !== status) continue;
 
-  const countBy=(key)=>{
-    const m={};
-    rows.forEach(r=>{const k=r[key]||'Unknown';m[k]=(m[k]||0)+1});
-    return Object.keys(m).sort((a,b)=>m[b]-m[a]).map(k=>({label:k,count:m[k]}));
-  };
+        const recKey = fid && fid.length > 5 ? ('fid_' + fid) : ('ord_' + normalizeOrderId_(oid) + '_' + normalize_(pf) + '_' + rtNorm);
+        if (seenKeys[recKey]) continue;
+        seenKeys[recKey] = true;
 
-  const dailyMap={};
-  rows.forEach(r=>{
-    if(!dailyMap[r.date])dailyMap[r.date]={date:r.date,total:0,platforms:{},types:{},users:{}};
-    const d=dailyMap[r.date];
-    d.total++;
-    d.platforms[r.platform]=(d.platforms[r.platform]||0)+1;
-    d.types[r.type]=(d.types[r.type]||0)+1;
-    d.users[r.user]=(d.users[r.user]||0)+1;
+        rows.push({
+          date: dateOnly_(ts),
+          platform: pf || 'Unknown',
+          type: rt,
+          user: pe || 'Unknown',
+          status: st || 'Completed',
+          orderId: oid
+        });
+      }
+    } catch(err) {
+      console.warn('Analytics scan error for ' + target.name + ':', err);
+    }
   });
 
-  const dates=[];
-  for(let d=new Date(from); d<=to; d.setDate(d.getDate()+1)){
+  // Also check UPLOAD_LOG_SHEET for completed records not logged in the specific sheets
+  try {
+    const uploadSh = ss_().getSheetByName(CONFIG.UPLOAD_LOG_SHEET);
+    if (uploadSh) {
+      const uv = uploadSh.getDataRange().getValues();
+      for (let i = 1; i < uv.length; i++) {
+        const ts = uv[i][0] instanceof Date ? uv[i][0] : new Date(uv[i][0]);
+        if (isNaN(ts) || !inRange_(ts, from, to)) continue;
+        const oid = String(uv[i][1] || '').trim();
+        const pf = String(uv[i][2] || '').trim();
+        const pe = String(uv[i][3] || '').trim();
+        const fid = String(uv[i][9] || '').trim();
+        const st = String(uv[i][10] || '').trim();
+        const rawRt = String(uv[i][12] || 'Forward').trim();
+        const rtNorm = normalize_(rawRt);
+        const rt = (rtNorm === 'return' || rtNorm === 'inbound') ? 'Return' : 'Forward';
+
+        if (st !== 'Completed') continue;
+        if (!oid && !fid) continue;
+
+        const recKey = fid && fid.length > 5 ? ('fid_' + fid) : ('ord_' + normalizeOrderId_(oid) + '_' + normalize_(pf) + '_' + rtNorm);
+        if (seenKeys[recKey]) continue;
+        seenKeys[recKey] = true;
+
+        if (!isAdmin && normalize_(pe) !== email) continue;
+        if (platform && normalize_(pf) !== platform) continue;
+        if (type && normalize_(rt) !== type) continue;
+        if (packer && !normalize_(pe).includes(packer)) continue;
+        if (status && normalize_(st) !== status) continue;
+
+        rows.push({
+          date: dateOnly_(ts),
+          platform: pf || 'Unknown',
+          type: rt,
+          user: pe || 'Unknown',
+          status: st || 'Completed',
+          orderId: oid
+        });
+      }
+    }
+  } catch(err) {
+    console.warn('UploadLog scan error in Analytics:', err);
+  }
+
+  const countBy = (key) => {
+    const m = {};
+    rows.forEach(r => { const k = r[key] || 'Unknown'; m[k] = (m[k] || 0) + 1; });
+    return Object.keys(m).sort((a, b) => m[b] - m[a]).map(k => ({ label: k, count: m[k] }));
+  };
+
+  const dailyMap = {};
+  rows.forEach(r => {
+    if (!dailyMap[r.date]) dailyMap[r.date] = { date: r.date, total: 0, platforms: {}, types: {}, users: {} };
+    const d = dailyMap[r.date];
+    d.total++;
+    d.platforms[r.platform] = (d.platforms[r.platform] || 0) + 1;
+    d.types[r.type] = (d.types[r.type] || 0) + 1;
+    d.users[r.user] = (d.users[r.user] || 0) + 1;
+  });
+
+  const dates = [];
+  for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
     dates.push(dateOnly_(new Date(d)));
   }
 
-  const daily=dates.map(date=>{
-    const d=dailyMap[date]||{date,total:0,platforms:{},types:{},users:{}};
-    return {date,total:d.total,platforms:d.platforms,types:d.types,users:d.users};
+  const daily = dates.map(date => {
+    const d = dailyMap[date] || { date, total: 0, platforms: {}, types: {}, users: {} };
+    return { date, total: d.total, platforms: d.platforms, types: d.types, users: d.users };
   });
+
+  const typesCount = countBy('type');
+  if (!typesCount.some(t => t.label === 'Forward')) typesCount.push({ label: 'Forward', count: 0 });
+  if (!typesCount.some(t => t.label === 'Return')) typesCount.push({ label: 'Return', count: 0 });
 
   return {
     success: true,
     fromDate: p.fromDate,
     toDate: p.toDate,
     total: rows.length,
-    uniqueOrders: [...new Set(rows.map(r=>r.orderId))].length,
+    uniqueOrders: [...new Set(rows.map(r => r.orderId))].length,
     platforms: countBy('platform'),
-    types: countBy('type'),
+    types: typesCount,
     users: countBy('user'),
     statuses: countBy('status'),
     daily
