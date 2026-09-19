@@ -188,6 +188,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
       setFaviconUrlInput(updated.faviconUrl || '');
       setAppNameInput(updated.appName || 'VMS 3.0');
       setAppSubtitleInput(updated.appSubtitle || 'Order Packing System');
+      if (updated.videoDriveFolderId) {
+        setDriveFolderIdInput(updated.videoDriveFolderId);
+      }
     });
     syncCloudBranding().catch(() => {});
 
@@ -269,8 +272,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
 
   const handleSaveSettings = (e: React.FormEvent) => {
     e.preventDefault();
+    const cleanFolderId = driveFolderIdInput.trim();
     setStoredApiUrl(apiUrlInput.trim());
-    setStoredDriveFolderId(driveFolderIdInput.trim());
+    setStoredDriveFolderId(cleanFolderId);
     setStoredChunkSizeMb(chunkSizeMbInput);
     setStoredAutoUpload(autoUploadInput);
     setStoredAutoResume(autoResumeInput);
@@ -278,11 +282,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
     setStoredNightMode(nightModeInput);
     setStoredMaxConcurrentUploads(maxConcurrentInput);
 
+    // Save permanently to Google Sheet Branding tab and script properties
+    setStoredBranding({
+      videoDriveFolderId: cleanFolderId,
+    });
+
     window.dispatchEvent(new CustomEvent('ops_config_updated', { detail: { chunkSizeMb: chunkSizeMbInput } }));
     window.dispatchEvent(new CustomEvent('ops_queue_updated'));
 
     onShowToast(
-      `Drive & System configuration saved! Concurrency set to ${maxConcurrentInput} video(s). Night mode ${nightModeInput ? 'enabled' : 'disabled'}.`,
+      `Drive & System configuration saved permanently to Google Sheet "Branding" tab! Concurrency: ${maxConcurrentInput}.`,
       'success'
     );
   };
@@ -936,31 +945,55 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
 
               {/* 2. Google Drive Root Folder ID */}
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
-                <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-                  <div className="w-7 h-7 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center font-bold text-xs">
-                    2
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center font-bold text-xs">
+                      2
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900">Google Drive Root Folder ID</h4>
+                      <p className="text-[11px] text-slate-500">Parent folder where all platform, recording type, and date subfolders are created</p>
+                    </div>
                   </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-slate-900">Google Drive Root Folder ID</h4>
-                    <p className="text-[11px] text-slate-500">Parent folder where all platform, recording type, and date subfolders are created</p>
-                  </div>
+
+                  <span className="bg-emerald-50 text-emerald-700 text-[10px] font-bold px-2.5 py-1 rounded-lg border border-emerald-200 flex items-center gap-1 shrink-0">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    Sheet Synced: &quot;Branding&quot; Tab
+                  </span>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    Drive Folder ID (Optional / Custom)
-                  </label>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Drive Folder ID or Full Drive Folder URL
+                    </label>
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      Key: VideoDriveFolderId
+                    </span>
+                  </div>
                   <input
                     type="text"
                     disabled={disableSettings}
                     value={driveFolderIdInput}
-                    onChange={(e) => setDriveFolderIdInput(e.target.value)}
-                    placeholder="e.g. 1ukj0fkTayl7rX8ib13sO-wD_jQSa2Izy"
+                    onChange={(e) => {
+                      const val = e.target.value.trim();
+                      const match = val.match(/folders\/([a-zA-Z0-9_-]+)/);
+                      setDriveFolderIdInput(match ? match[1] : e.target.value);
+                    }}
+                    placeholder="e.g. 1DonGlWoJtRc30fsSi7zHjE5G5xlDPiLA or paste full folder link"
                     className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50"
                   />
-                  <p className="text-[11px] text-slate-400 mt-1">
-                    Leave blank to automatically use the default <code>VMS_Packing_Videos</code> root folder in your Drive.
-                  </p>
+                  <div className="mt-2 bg-slate-50 rounded-xl p-3 border border-slate-200 text-[11px] text-slate-600 space-y-1">
+                    <p className="font-semibold text-slate-800 flex items-center gap-1.5">
+                      <span className="text-purple-600">✦</span> Stored Permanently in Google Sheet &quot;Branding&quot; Tab
+                    </p>
+                    <p>
+                      Changes made here save directly to row <code>VideoDriveFolderId</code> in your connected Google Sheet. Alternatively, you can directly open your Google Sheet, go to the <strong>Branding</strong> tab, and paste the new Folder ID into row <code>VideoDriveFolderId</code>.
+                    </p>
+                    <p className="text-slate-400 text-[10px]">
+                      Accepts either the raw Folder ID (e.g. <code>1DonGlWo...</code>) or the full Google Drive link (e.g. <code>https://drive.google.com/drive/folders/...</code>).
+                    </p>
+                  </div>
                 </div>
               </div>
 

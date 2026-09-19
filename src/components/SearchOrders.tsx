@@ -30,6 +30,7 @@ import {
   Loader2,
   RotateCw
 } from 'lucide-react';
+import { HighQualityVideoPlayer } from './HighQualityVideoPlayer';
 import { VideoRecord, User } from '../types';
 import { requestApi, formatFileSize, deleteLogEntry, fetchDriveFileSize } from '../lib/api';
 import { canUserDeleteData } from '../lib/permissions';
@@ -731,39 +732,16 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast, current
 
             {/* Modal Body: Scrollable */}
             <div className="overflow-y-auto p-4 sm:p-6 space-y-6">
-              {/* Video Player Display Area */}
-              <div className="relative aspect-video bg-black rounded-xl overflow-hidden shadow-inner flex items-center justify-center w-full max-h-[50vh]">
-                {selectedRecord.fileId ? (
-                  <iframe
-                    src={`https://drive.google.com/file/d/${selectedRecord.fileId}/preview`}
-                    className="w-full h-full border-0 bg-black min-h-[300px]"
-                    allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-                    title={`Video Player - Order ${selectedRecord.orderId}`}
-                  />
-                ) : selectedRecord.driveLink ? (
-                  <div className="p-8 text-center space-y-3">
-                    <Video className="w-12 h-12 text-blue-400 mx-auto" />
-                    <p className="text-xs text-slate-300">
-                      High-resolution video recorded and securely stored on Google Drive.
-                    </p>
-                    <a
-                      href={selectedRecord.driveLink}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-sm transition"
-                    >
-                      <Play className="w-3.5 h-3.5 fill-white" />
-                      Watch on Google Drive
-                    </a>
-                  </div>
-                ) : (
-                  <div className="p-8 text-center space-y-2">
-                    <AlertCircle className="w-10 h-10 text-amber-400 mx-auto" />
-                    <p className="text-xs text-slate-400">
-                      Drive File ID not directly previewable. Check Drive Link below.
-                    </p>
-                  </div>
-                )}
+              {/* High Quality Video Player Display Area */}
+              <div className="w-full">
+                <HighQualityVideoPlayer
+                  fileId={selectedRecord.fileId}
+                  driveLink={selectedRecord.driveLink}
+                  orderId={selectedRecord.orderId}
+                  fileName={selectedRecord.fileName}
+                  title={`Order #${selectedRecord.orderId} (${selectedRecord.platform} - ${selectedRecord.recordingType})`}
+                  autoPlay={false}
+                />
               </div>
 
               {/* Comprehensive Order Metadata Breakdown */}

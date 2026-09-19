@@ -34,9 +34,10 @@
 - Authentication strictly enforced via created ID / email and password (no demo/workstation bypass mode).
 - Registration creates verified operator/admin accounts with immediate session activation.
 
-### 7. Permanent Cloud Branding & Drive Image Integration (Admin Only)
-- Admin configuration panel in `AdminPanel.tsx` (`Logo & Favicon` sub-tab).
-- **Google Sheet Persistence**: Branding (Logo URL, Favicon URL, App Name, Subtitle) is permanently stored in the dedicated `Branding` sheet tab via Apps Script and referenced from there on every load.
+### 7. Permanent Cloud Branding & Drive Integration (Admin Only)
+- Admin configuration panel in `AdminPanel.tsx` (`Logo & Favicon` and `System Settings` sub-tabs).
+- **Google Sheet Persistence**: Branding (Logo URL, Favicon URL, App Name, Subtitle) and **VideoDriveFolderId** (Google Drive root folder ID for videos) are permanently stored in the dedicated `Branding` sheet tab via Apps Script and referenced from there on every load.
+- **Drive Folder Path Portability**: Moving or changing the root video folder requires only updating the `VideoDriveFolderId` row in the `Branding` sheet tab (or changing it in the Admin Panel and clicking Save), with no code changes or redeployments required. Accepts clean folder IDs or full Google Drive folder links.
 - **Drive Image Asset Storage**: Uploaded logos and favicons are automatically stored inside a dedicated `VMS_Branding` folder in Google Drive and their permanent web URLs are recorded into the Google Sheet.
 - **Favicon Synchronization**: Dynamically updates the document `<link rel="icon">` element and browser tab title.
 - **Permanent Retention**: Configured branding remains permanently active across all screens (Sidebar, Mobile header, Login screen, and Browser tabs).

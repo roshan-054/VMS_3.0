@@ -134,7 +134,40 @@ function ss_() {
 
 function parentFolder_(customFolderId) {
   const props = scriptProps_();
-  const folderId = customFolderId || props.getProperty('PARENT_FOLDER_ID') || CONFIG.HARDWIRED_PARENT_FOLDER_ID;
+  let folderId = customFolderId;
+
+  // 1. If not explicitly provided in call, check the Branding sheet tab
+  if (!folderId) {
+    try {
+      const sh = ss_().getSheetByName(CONFIG.BRANDING_SHEET);
+      if (sh) {
+        const data = sh.getDataRange().getValues();
+        for (let i = 1; i < data.length; i++) {
+          const k = String(data[i][0] || '').trim();
+          if (k === 'VideoDriveFolderId' || k === 'DriveFolderId') {
+            const v = String(data[i][1] || '').trim();
+            if (v) {
+              const urlMatch = v.match(/folders\/([a-zA-Z0-9_-]+)/);
+              folderId = urlMatch ? urlMatch[1] : v;
+              break;
+            }
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  // 2. Fall back to script properties or hardwired ID
+  if (!folderId) {
+    folderId = props.getProperty('PARENT_FOLDER_ID') || CONFIG.HARDWIRED_PARENT_FOLDER_ID;
+  }
+
+  // Clean if full URL passed
+  if (folderId && typeof folderId === 'string') {
+    const urlMatch = folderId.match(/folders\/([a-zA-Z0-9_-]+)/);
+    if (urlMatch) folderId = urlMatch[1];
+  }
+
   if(folderId && folderId.length > 5){
     try {
       return DriveApp.getFolderById(folderId);
@@ -353,14 +386,19 @@ function setupSystem() {
     if(sh.getFrozenRows()===0)sh.setFrozenRows(1);
   });
 
-  // Seed default branding settings if Branding sheet is empty
+  // Seed default branding settings if Branding sheet is empty or missing keys
   const brandSh = ss.getSheetByName(CONFIG.BRANDING_SHEET);
-  if (brandSh && brandSh.getLastRow() <= 1) {
-    brandSh.appendRow(['AppName', 'VMS 3.0', new Date(), 'Application Display Name']);
-    brandSh.appendRow(['AppSubtitle', 'Order Packing System', new Date(), 'Workstation Subtitle']);
-    brandSh.appendRow(['LogoUrl', '', new Date(), 'Logo Image URL or Drive Direct Link']);
-    brandSh.appendRow(['FaviconUrl', '', new Date(), 'Browser Favicon URL or Drive Direct Link']);
-    brandSh.appendRow(['BrandingFolderId', '', new Date(), 'Google Drive Folder for Brand Assets']);
+  if (brandSh) {
+    const bVals = brandSh.getDataRange().getValues();
+    const existingKeys = new Set(bVals.map(r => String(r[0] || '').trim()));
+    if (!existingKeys.has('AppName')) brandSh.appendRow(['AppName', 'VMS 3.0', new Date(), 'Application Display Name']);
+    if (!existingKeys.has('AppSubtitle')) brandSh.appendRow(['AppSubtitle', 'Order Packing System', new Date(), 'Workstation Subtitle']);
+    if (!existingKeys.has('LogoUrl')) brandSh.appendRow(['LogoUrl', '', new Date(), 'Logo Image URL or Drive Direct Link']);
+    if (!existingKeys.has('FaviconUrl')) brandSh.appendRow(['FaviconUrl', '', new Date(), 'Browser Favicon URL or Drive Direct Link']);
+    if (!existingKeys.has('BrandingFolderId')) brandSh.appendRow(['BrandingFolderId', '', new Date(), 'Google Drive Folder for Brand Assets']);
+    if (!existingKeys.has('VideoDriveFolderId') && !existingKeys.has('DriveFolderId')) {
+      brandSh.appendRow(['VideoDriveFolderId', CONFIG.HARDWIRED_PARENT_FOLDER_ID || '', new Date(), 'Google Drive Root Folder ID for Video Uploads']);
+    }
   }
 
   // Apply refined conditional formatting on OrderLog, ReturnLog, and UploadLog
@@ -2595,6 +2633,7 @@ function getBrandingConfig_() {
   let logoUrl = '';
   let faviconUrl = '';
   let brandingFolderId = '';
+  let videoDriveFolderId = '';
 
   try {
     const sh = sheet_(CONFIG.BRANDING_SHEET);
@@ -2607,6 +2646,10 @@ function getBrandingConfig_() {
       if (key === 'LogoUrl' && val) logoUrl = val;
       if (key === 'FaviconUrl' && val) faviconUrl = val;
       if (key === 'BrandingFolderId' && val) brandingFolderId = val;
+      if ((key === 'VideoDriveFolderId' || key === 'DriveFolderId') && val) {
+        const urlMatch = val.match(/folders\/([a-zA-Z0-9_-]+)/);
+        videoDriveFolderId = urlMatch ? urlMatch[1] : val;
+      }
     }
   } catch (e) {
     // Fall back to script properties
@@ -2617,13 +2660,18 @@ function getBrandingConfig_() {
     brandingFolderId = props.getProperty('VMS_BRANDING_FOLDER_ID') || '';
   }
 
+  if (!videoDriveFolderId) {
+    videoDriveFolderId = props.getProperty('PARENT_FOLDER_ID') || CONFIG.HARDWIRED_PARENT_FOLDER_ID || '';
+  }
+
   return {
     success: true,
     appName: appName,
     appSubtitle: appSubtitle,
     logoUrl: logoUrl,
     faviconUrl: faviconUrl,
-    brandingFolderId: brandingFolderId
+    brandingFolderId: brandingFolderId,
+    videoDriveFolderId: videoDriveFolderId
   };
 }
 
@@ -2680,14 +2728,25 @@ function saveBrandingConfig_(p) {
     props.setProperty('VMS_BRANDING_FOLDER_ID', val);
     updateOrInsert('BrandingFolderId', val, 'Google Drive Folder for Brand Assets');
   }
+  if (p.videoDriveFolderId !== undefined || p.driveFolderId !== undefined) {
+    const rawVal = String(p.videoDriveFolderId || p.driveFolderId || '').trim();
+    let cleanFolderId = rawVal;
+    const urlMatch = rawVal.match(/folders\/([a-zA-Z0-9_-]+)/);
+    if (urlMatch) {
+      cleanFolderId = urlMatch[1];
+    }
+    props.setProperty('PARENT_FOLDER_ID', cleanFolderId);
+    updateOrInsert('VideoDriveFolderId', cleanFolderId, 'Google Drive Root Folder ID for Video Uploads');
+  }
 
   return {
     success: true,
-    message: 'Branding saved to Google Sheet "Branding" tab and Script Properties permanently.',
+    message: 'Settings saved to Google Sheet "Branding" tab and Script Properties permanently.',
     appName: p.appName,
     appSubtitle: p.appSubtitle,
     logoUrl: p.logoUrl,
-    faviconUrl: p.faviconUrl
+    faviconUrl: p.faviconUrl,
+    videoDriveFolderId: p.videoDriveFolderId || p.driveFolderId
   };
 }
 

@@ -461,6 +461,7 @@ export async function fetchCloudBranding(): Promise<{
   faviconUrl?: string;
   appName?: string;
   appSubtitle?: string;
+  videoDriveFolderId?: string;
 } | null> {
   try {
     const res = await requestApi<{
@@ -468,6 +469,7 @@ export async function fetchCloudBranding(): Promise<{
       faviconUrl?: string;
       appName?: string;
       appSubtitle?: string;
+      videoDriveFolderId?: string;
     }>('getBranding', {});
     if (res.success) {
       return {
@@ -475,6 +477,7 @@ export async function fetchCloudBranding(): Promise<{
         faviconUrl: res.faviconUrl || '',
         appName: res.appName || '',
         appSubtitle: res.appSubtitle || '',
+        videoDriveFolderId: res.videoDriveFolderId || '',
       };
     }
   } catch (err) {}
@@ -482,10 +485,11 @@ export async function fetchCloudBranding(): Promise<{
 }
 
 export async function saveCloudBranding(config: {
-  logoUrl: string;
-  faviconUrl: string;
-  appName: string;
-  appSubtitle: string;
+  logoUrl?: string;
+  faviconUrl?: string;
+  appName?: string;
+  appSubtitle?: string;
+  videoDriveFolderId?: string;
 }): Promise<boolean> {
   try {
     const res = await requestApi('saveBranding', config);

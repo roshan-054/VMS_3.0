@@ -33,6 +33,7 @@ import {
   Radio,
   Share2
 } from 'lucide-react';
+import { HighQualityVideoPlayer } from './HighQualityVideoPlayer';
 import { User, UploadLogItem, QueueItem, PlatformType, RecordingType } from '../types';
 import { fetchUploadLogs, deleteLogEntry, formatFileSize, fetchDriveFileSize } from '../lib/api';
 import { dbGetAllQueue, dbPutQueue, dbDeleteQueueItem, getStoredDriveFolderId, getStoredAutoRefreshInterval, manualFileCache } from '../lib/storage';
@@ -1991,7 +1992,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-3 sm:p-5 animate-in fade-in duration-200">
           <div className="bg-slate-900 border border-slate-700/80 rounded-2xl max-w-4xl w-full overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
             {/* Modal Header */}
-            <div className="p-4 border-b border-slate-800 bg-slate-950 flex flex-wrap items-center justify-between gap-3 text-white">
+            <div className="p-4 border-b border-slate-800 bg-slate-950 flex flex-wrap items-center justify-between gap-3 text-white shrink-0">
               <div className="flex items-center gap-2.5 min-w-0">
                 <div className="w-8 h-8 rounded-lg bg-blue-600/20 text-blue-400 border border-blue-500/30 flex items-center justify-center shrink-0">
                   <Film className="w-4 h-4" />
@@ -2035,41 +2036,20 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
             </div>
 
             {/* Video Player Display Area */}
-            <div className="relative aspect-video bg-black flex items-center justify-center w-full max-h-[64vh] overflow-hidden">
-              {localBlobUrl ? (
-                <div className="relative w-full h-full flex items-center justify-center">
-                  <video
-                    src={localBlobUrl}
-                    controls
-                    autoPlay
-                    playsInline
-                    className="w-full h-full object-contain max-h-[64vh]"
-                  />
-                  <div className="absolute top-3 left-3 bg-slate-900/80 backdrop-blur-xs text-amber-300 text-[10px] font-mono px-2 py-1 rounded border border-amber-500/30">
-                    ● Local Station Master Recording (Zero Latency)
-                  </div>
-                </div>
-              ) : playbackLog.driveFileId ? (
-                <iframe
-                  src={`https://drive.google.com/file/d/${playbackLog.driveFileId}/preview`}
-                  allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-                  className="w-full h-full border-0 bg-black min-h-[380px]"
-                  loading="eager"
-                  title={`Video Playback - Order ${playbackLog.orderId}`}
-                />
-              ) : (
-                <div className="p-8 text-center space-y-2">
-                  <AlertTriangle className="w-10 h-10 text-amber-400 mx-auto" />
-                  <h4 className="text-sm font-semibold text-white">Video is Queued or Processing</h4>
-                  <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                    This recording has not finished syncing to Google Drive yet. Check the progress in the upload queue.
-                  </p>
-                </div>
-              )}
+            <div className="w-full flex-1 overflow-y-auto">
+              <HighQualityVideoPlayer
+                fileId={playbackLog.driveFileId}
+                driveLink={playbackLog.playbackUrl || (playbackLog.driveFileId ? `https://drive.google.com/file/d/${playbackLog.driveFileId}/view` : undefined)}
+                localBlobUrl={localBlobUrl || undefined}
+                orderId={playbackLog.orderId}
+                fileName={playbackLog.fileName}
+                title={`Order #${playbackLog.orderId} (${playbackLog.platform} - ${playbackLog.recordingType})`}
+                autoPlay={false}
+              />
             </div>
 
             {/* Playback Actions & Options Toolbar */}
-            <div className="p-3.5 bg-slate-950 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="p-3.5 bg-slate-950 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs shrink-0">
               <div className="flex items-center gap-2 text-slate-400 text-[11px]">
                 <span className="font-semibold text-slate-300">Packer:</span> {playbackLog.packerEmail}
                 <span>•</span>
@@ -2077,33 +2057,6 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                {/* View in Drive Button */}
-                {playbackLog.driveFileId && (
-                  <a
-                    href={`https://drive.google.com/file/d/${playbackLog.driveFileId}/view`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-xl transition inline-flex items-center gap-1.5 shadow-2xs"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                    View in Google Drive
-                  </a>
-                )}
-
-                {/* Download Button */}
-                {playbackLog.driveFileId && (
-                  <a
-                    href={`https://drive.google.com/uc?export=download&id=${playbackLog.driveFileId}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    download
-                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold rounded-xl transition inline-flex items-center gap-1.5 border border-slate-700"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    Download MP4
-                  </a>
-                )}
-
                 {/* Copy Link Button */}
                 {playbackLog.driveFileId && (
                   <button
@@ -2111,7 +2064,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
                       const url = `https://drive.google.com/file/d/${playbackLog.driveFileId}/view`;
                       copyToClipboard(url, 'Google Drive Video Link', 'modal_drive_link');
                     }}
-                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium rounded-xl transition inline-flex items-center gap-1.5 border border-slate-700"
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium rounded-xl transition inline-flex items-center gap-1.5 border border-slate-700 cursor-pointer"
                   >
                     {copiedId === 'modal_drive_link' ? (
                       <Check className="w-3.5 h-3.5 text-emerald-400" />

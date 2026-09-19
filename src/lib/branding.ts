@@ -1,10 +1,12 @@
 import { fetchCloudBranding, saveCloudBranding } from './api';
+import { getStoredDriveFolderId, setStoredDriveFolderId } from './storage';
 
 export interface BrandingConfig {
   logoUrl: string;
   faviconUrl: string;
   appName: string;
   appSubtitle: string;
+  videoDriveFolderId?: string;
 }
 
 const BRANDING_STORAGE_KEY = 'ops_vms_branding_config_v3';
@@ -15,6 +17,7 @@ export const DEFAULT_BRANDING: BrandingConfig = {
   faviconUrl: '',
   appName: 'VMS 3.0',
   appSubtitle: 'Order Packing System',
+  videoDriveFolderId: '',
 };
 
 let isCloudSynced = false;
@@ -29,7 +32,11 @@ export async function syncCloudBranding(): Promise<BrandingConfig> {
         faviconUrl: cloud.faviconUrl !== undefined && cloud.faviconUrl !== null ? cloud.faviconUrl : local.faviconUrl,
         appName: cloud.appName || local.appName || DEFAULT_BRANDING.appName,
         appSubtitle: cloud.appSubtitle || local.appSubtitle || DEFAULT_BRANDING.appSubtitle,
+        videoDriveFolderId: cloud.videoDriveFolderId || local.videoDriveFolderId || getStoredDriveFolderId(),
       };
+      if (cloud.videoDriveFolderId) {
+        setStoredDriveFolderId(cloud.videoDriveFolderId);
+      }
       localStorage.setItem(BRANDING_STORAGE_KEY, JSON.stringify(merged));
       applyFavicon(merged.faviconUrl);
       if (merged.appName) {
@@ -62,6 +69,7 @@ export function getStoredBranding(): BrandingConfig {
       faviconUrl: parsed.faviconUrl || '',
       appName: parsed.appName || DEFAULT_BRANDING.appName,
       appSubtitle: parsed.appSubtitle || DEFAULT_BRANDING.appSubtitle,
+      videoDriveFolderId: parsed.videoDriveFolderId || getStoredDriveFolderId(),
     };
   } catch {
     return DEFAULT_BRANDING;
@@ -97,6 +105,9 @@ export function setStoredBranding(config: Partial<BrandingConfig>): BrandingConf
 
   try {
     localStorage.setItem(BRANDING_STORAGE_KEY, JSON.stringify(updated));
+    if (updated.videoDriveFolderId) {
+      setStoredDriveFolderId(updated.videoDriveFolderId);
+    }
   } catch (err) {
     console.error('Failed to persist branding config:', err);
   }
