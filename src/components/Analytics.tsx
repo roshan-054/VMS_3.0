@@ -18,9 +18,14 @@ import {
   ShieldCheck,
   ChevronRight,
   Activity,
-  CalendarDays
+  CalendarDays,
+  Timer,
+  Search,
+  ArrowUpDown,
+  CheckCircle,
+  FileSpreadsheet
 } from 'lucide-react';
-import { AnalyticsData, VideoRecord } from '../types';
+import { AnalyticsData, DailyMetricItem, VideoRecord } from '../types';
 import { requestApi } from '../lib/api';
 
 interface AnalyticsProps {
@@ -62,6 +67,43 @@ export function formatDDMMYYYY(dateStr?: string): string {
   return dateStr;
 }
 
+export function formatTime12h(dateOrIso?: string | Date): string {
+  if (!dateOrIso) return '';
+  const str = String(dateOrIso).trim();
+  if (/^\d{1,2}:\d{2}\s*(AM|PM)$/i.test(str)) {
+    return str;
+  }
+  const d = dateOrIso instanceof Date ? dateOrIso : new Date(dateOrIso);
+  if (isNaN(d.getTime())) return str;
+  let hours = d.getHours();
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12;
+  hours = hours ? hours : 12;
+  return `${String(hours).padStart(2, '0')}:${minutes} ${ampm}`;
+}
+
+export function formatOperatingDuration(minutes?: number): string {
+  if (!minutes || minutes <= 0) return '0 min';
+  const hrs = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (hrs > 0 && mins > 0) return `${hrs}h ${mins}m`;
+  if (hrs > 0) return `${hrs} hr${hrs > 1 ? 's' : ''}`;
+  return `${mins} min${mins > 1 ? 's' : ''}`;
+}
+
+export function getDayOfWeekStr(dateStr?: string): string {
+  if (!dateStr) return '';
+  const parts = dateStr.trim().split('-');
+  if (parts.length === 3) {
+    const d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]), 12, 0, 0);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleDateString('en-US', { weekday: 'short' });
+    }
+  }
+  return '';
+}
+
 export function generateDateSequence(startDateStr: string, endDateStr: string): string[] {
   const dates: string[] = [];
   if (!startDateStr || !endDateStr) return dates;
@@ -78,6 +120,90 @@ export function generateDateSequence(startDateStr: string, endDateStr: string): 
     cur.setDate(cur.getDate() + 1);
   }
   return dates;
+}
+
+function computeDailyShiftMetrics(dailyList: DailyMetricItem[], records?: VideoRecord[]): DailyMetricItem[] {
+  if (!records || records.length === 0) return dailyList;
+
+  const dayRecordsMap: Record<
+    string,
+    {
+      minMs: number;
+      maxMs: number;
+      firstIso: string;
+      lastIso: string;
+      lastOrder: string;
+      lastPf: string;
+      lastPacker: string;
+    }
+  > = {};
+
+  records.forEach((r) => {
+    let rDate = '';
+    let rMs = 0;
+    let iso = '';
+    if (r.timestamp) {
+      if (/^\d{4}-\d{2}-\d{2}/.test(r.timestamp)) {
+        rDate = r.timestamp.substring(0, 10);
+      }
+      const d = new Date(r.timestamp);
+      if (!isNaN(d.getTime())) {
+        rMs = d.getTime();
+        iso = d.toISOString();
+        if (!rDate) {
+          rDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        }
+      }
+    }
+    if (!rDate || !rMs) return;
+
+    if (!dayRecordsMap[rDate]) {
+      dayRecordsMap[rDate] = {
+        minMs: rMs,
+        maxMs: rMs,
+        firstIso: iso,
+        lastIso: iso,
+        lastOrder: r.orderId || '',
+        lastPf: r.platform || '',
+        lastPacker: r.packerEmail || '',
+      };
+    } else {
+      const item = dayRecordsMap[rDate];
+      if (rMs < item.minMs) {
+        item.minMs = rMs;
+        item.firstIso = iso;
+      }
+      if (rMs > item.maxMs) {
+        item.maxMs = rMs;
+        item.lastIso = iso;
+        item.lastOrder = r.orderId || item.lastOrder;
+        item.lastPf = r.platform || item.lastPf;
+        item.lastPacker = r.packerEmail || item.lastPacker;
+      }
+    }
+  });
+
+  return dailyList.map((d) => {
+    const rec = dayRecordsMap[d.date];
+    if (rec) {
+      const firstTime = formatTime12h(new Date(rec.minMs));
+      const lastTime = formatTime12h(new Date(rec.maxMs));
+      const opMins = Math.max(0, Math.round((rec.maxMs - rec.minMs) / 60000));
+      return {
+        ...d,
+        firstRecordTime: d.firstRecordTime || firstTime,
+        lastRecordTime: d.lastRecordTime || lastTime,
+        firstTimestamp: d.firstTimestamp || rec.firstIso,
+        lastTimestamp: d.lastTimestamp || rec.lastIso,
+        operatingMinutes:
+          d.operatingMinutes !== undefined && d.operatingMinutes > 0 ? d.operatingMinutes : opMins,
+        lastOrderId: d.lastOrderId || rec.lastOrder,
+        lastPlatform: d.lastPlatform || rec.lastPf,
+        lastPacker: d.lastPacker || rec.lastPacker,
+      };
+    }
+    return d;
+  });
 }
 
 function mergeReturnsIntoAnalyticsData(
@@ -156,11 +282,12 @@ function mergeReturnsIntoAnalyticsData(
   // Build continuous daily map
   const dailyMap: Record<
     string,
-    { total: number; platforms: Record<string, number>; types: Record<string, number>; users: Record<string, number> }
+    DailyMetricItem
   > = {};
 
   (base?.daily || []).forEach((d) => {
     dailyMap[d.date] = {
+      date: d.date,
       total: d.total || 0,
       platforms: { ...(d.platforms || {}) },
       types: {
@@ -168,13 +295,27 @@ function mergeReturnsIntoAnalyticsData(
         Return: d.types?.Return ?? d.types?.return ?? d.types?.Inbound ?? 0,
       },
       users: { ...(d.users || {}) },
+      firstRecordTime: d.firstRecordTime || '',
+      lastRecordTime: d.lastRecordTime || '',
+      firstTimestamp: d.firstTimestamp || '',
+      lastTimestamp: d.lastTimestamp || '',
+      operatingMinutes: d.operatingMinutes || 0,
+      lastOrderId: d.lastOrderId || '',
+      lastPlatform: d.lastPlatform || '',
+      lastPacker: d.lastPacker || '',
     };
   });
 
   if (baseReturnCount === 0) {
     validReturns.forEach((r) => {
       if (!dailyMap[r.date]) {
-        dailyMap[r.date] = { total: 0, platforms: {}, types: { Forward: 0, Return: 0 }, users: {} };
+        dailyMap[r.date] = {
+          date: r.date,
+          total: 0,
+          platforms: {},
+          types: { Forward: 0, Return: 0 },
+          users: {},
+        };
       }
       const day = dailyMap[r.date];
       day.total = (day.total || 0) + 1;
@@ -185,8 +326,14 @@ function mergeReturnsIntoAnalyticsData(
   }
 
   const dateSequence = generateDateSequence(fromDate, toDate);
-  const updatedDaily = dateSequence.map((date) => {
-    const d = dailyMap[date] || { total: 0, platforms: {}, types: { Forward: 0, Return: 0 }, users: {} };
+  const updatedDaily: DailyMetricItem[] = dateSequence.map((date) => {
+    const d = dailyMap[date] || {
+      date,
+      total: 0,
+      platforms: {},
+      types: { Forward: 0, Return: 0 },
+      users: {},
+    };
     return {
       date,
       total: d.total || 0,
@@ -196,6 +343,14 @@ function mergeReturnsIntoAnalyticsData(
         Return: d.types?.Return ?? d.types?.return ?? 0,
       },
       users: d.users || {},
+      firstRecordTime: d.firstRecordTime || '',
+      lastRecordTime: d.lastRecordTime || '',
+      firstTimestamp: d.firstTimestamp || '',
+      lastTimestamp: d.lastTimestamp || '',
+      operatingMinutes: d.operatingMinutes || 0,
+      lastOrderId: d.lastOrderId || '',
+      lastPlatform: d.lastPlatform || '',
+      lastPacker: d.lastPacker || '',
     };
   });
 
@@ -238,6 +393,8 @@ function mergeReturnsIntoAnalyticsData(
     daily: updatedDaily,
     fromDate,
     toDate,
+    latestRecordingTimeToday: base?.latestRecordingTimeToday || '',
+    avgDailyWrapUpTime: base?.avgDailyWrapUpTime || '',
   };
 }
 
@@ -339,6 +496,27 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
         }
       }
 
+      // Also enrich daily items with shift start/end timestamps from any available video search logs
+      try {
+        const fullLogsRes = await requestApi<{ results?: VideoRecord[]; rows?: VideoRecord[]; total?: number }>(
+          'advancedSearch',
+          {
+            platform: platformFilter === 'all' ? '' : platformFilter,
+            fromDate,
+            toDate,
+            from: `${fromDate}T00:00:00`,
+            to: `${toDate}T23:59:59`,
+            limit: 10000,
+          }
+        );
+        const allLogs = fullLogsRes?.results || fullLogsRes?.rows || [];
+        if (allLogs.length > 0 && res?.daily) {
+          res.daily = computeDailyShiftMetrics(res.daily, allLogs);
+        }
+      } catch (logErr) {
+        console.warn('Shift metrics log enrichment note:', logErr);
+      }
+
       setData(res);
     } catch (err: any) {
       console.warn('Analytics fetch error:', err);
@@ -411,9 +589,9 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
   const topPackerPct = totalPackings > 0 ? Math.round((topPacker.count / totalPackings) * 100) : 0;
 
   // Continuous daily list guaranteeing every calendar date in the selected range is represented
-  const dailyList = useMemo(() => {
+  const dailyList: DailyMetricItem[] = useMemo(() => {
     if (!fromDate || !toDate) return data?.daily || [];
-    const dateMap = new Map<string, (typeof data.daily)[0]>();
+    const dateMap = new Map<string, DailyMetricItem>();
     (data?.daily || []).forEach((d) => {
       dateMap.set(d.date, d);
     });
@@ -429,9 +607,174 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
         platforms: {},
         types: { Forward: 0, Return: 0 },
         users: {},
+        firstRecordTime: '',
+        lastRecordTime: '',
+        firstTimestamp: '',
+        lastTimestamp: '',
+        operatingMinutes: 0,
+        lastOrderId: '',
+        lastPlatform: '',
+        lastPacker: '',
       };
     });
   }, [data, fromDate, toDate]);
+
+  // Daily shift timing metrics & summary stats
+  const shiftMetrics = useMemo(() => {
+    const todayStr = getLocalDateStr(0);
+    const todayItem = dailyList.find((d) => d.date === todayStr);
+
+    const activeDays = dailyList.filter((d) => d.total > 0 && d.lastRecordTime);
+    const latestActiveDay = [...activeDays].reverse()[0];
+
+    const todayRecordedTill =
+      data?.latestRecordingTimeToday ||
+      todayItem?.lastRecordTime ||
+      '';
+    const todayShiftStart = todayItem?.firstRecordTime || '';
+    const todayActiveMins = todayItem?.operatingMinutes || 0;
+
+    const latestCutoff = todayRecordedTill || latestActiveDay?.lastRecordTime || '';
+    const latestCutoffDate = todayRecordedTill ? todayStr : latestActiveDay?.date || '';
+
+    // Calculate average daily wrap-up time across active days
+    let avgCutoffMinutes = 0;
+    let avgOperatingMinutes = 0;
+    if (activeDays.length > 0) {
+      let totalCutoffMinutes = 0;
+      let validCutoffCount = 0;
+      let totalOpMins = 0;
+
+      activeDays.forEach((d) => {
+        if (d.lastRecordTime) {
+          const match = d.lastRecordTime.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+          if (match) {
+            let h = parseInt(match[1], 10);
+            const m = parseInt(match[2], 10);
+            const ampm = match[3].toUpperCase();
+            if (ampm === 'PM' && h < 12) h += 12;
+            if (ampm === 'AM' && h === 12) h = 0;
+            totalCutoffMinutes += h * 60 + m;
+            validCutoffCount++;
+          }
+        }
+        if (d.operatingMinutes) {
+          totalOpMins += d.operatingMinutes;
+        }
+      });
+
+      if (validCutoffCount > 0) {
+        avgCutoffMinutes = Math.round(totalCutoffMinutes / validCutoffCount);
+      }
+      avgOperatingMinutes = Math.round(totalOpMins / activeDays.length);
+    }
+
+    let avgWrapUpFormatted = data?.avgDailyWrapUpTime || '';
+    if (!avgWrapUpFormatted && avgCutoffMinutes > 0) {
+      let h = Math.floor(avgCutoffMinutes / 60);
+      const m = avgCutoffMinutes % 60;
+      const ampm = h >= 12 ? 'PM' : 'AM';
+      h = h % 12;
+      h = h ? h : 12;
+      avgWrapUpFormatted = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')} ${ampm}`;
+    }
+
+    return {
+      todayRecordedTill,
+      todayShiftStart,
+      todayActiveMins,
+      latestCutoff,
+      latestCutoffDate,
+      avgWrapUpFormatted,
+      avgOperatingMinutes,
+      activeDaysCount: activeDays.length,
+    };
+  }, [dailyList, data]);
+
+  // Daily Table State: Search & Sort
+  const [dailyTableSearch, setDailyTableSearch] = useState('');
+  const [dailyTableSort, setDailyTableSort] = useState<'date-desc' | 'date-asc' | 'volume-desc' | 'cutoff-desc'>('date-desc');
+
+  const filteredSortedDailyList = useMemo(() => {
+    let list = [...dailyList];
+
+    if (dailyTableSearch.trim()) {
+      const q = dailyTableSearch.toLowerCase().trim();
+      list = list.filter((d) => {
+        const dStr = formatDDMMYYYY(d.date).toLowerCase();
+        const rawDate = d.date.toLowerCase();
+        const lastOrd = (d.lastOrderId || '').toLowerCase();
+        const lastPf = (d.lastPlatform || '').toLowerCase();
+        const dayName = getDayOfWeekStr(d.date).toLowerCase();
+        return (
+          dStr.includes(q) ||
+          rawDate.includes(q) ||
+          lastOrd.includes(q) ||
+          lastPf.includes(q) ||
+          dayName.includes(q)
+        );
+      });
+    }
+
+    list.sort((a, b) => {
+      if (dailyTableSort === 'date-desc') {
+        return b.date.localeCompare(a.date);
+      }
+      if (dailyTableSort === 'date-asc') {
+        return a.date.localeCompare(b.date);
+      }
+      if (dailyTableSort === 'volume-desc') {
+        return b.total - a.total;
+      }
+      if (dailyTableSort === 'cutoff-desc') {
+        const timeToMins = (t?: string) => {
+          if (!t) return -1;
+          const match = t.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+          if (!match) return -1;
+          let h = parseInt(match[1], 10);
+          const m = parseInt(match[2], 10);
+          if (match[3].toUpperCase() === 'PM' && h < 12) h += 12;
+          if (match[3].toUpperCase() === 'AM' && h === 12) h = 0;
+          return h * 60 + m;
+        };
+        return timeToMins(b.lastRecordTime) - timeToMins(a.lastRecordTime);
+      }
+      return 0;
+    });
+
+    return list;
+  }, [dailyList, dailyTableSearch, dailyTableSort]);
+
+  const handleExportDailyCsv = () => {
+    if (!dailyList.length) {
+      onShowToast('No daily records to export', 'error');
+      return;
+    }
+
+    const headers = ['Date', 'Day', 'Total Records', 'Forward Count', 'Return Count', 'Shift Start Time', 'Recorded Till (Shift Cutoff)', 'Active Operating Duration (Mins)', 'Last Recorded Order ID', 'Last Platform'];
+    const rows = dailyList.map((d) => [
+      formatDDMMYYYY(d.date),
+      getDayOfWeekStr(d.date),
+      d.total,
+      d.types?.Forward ?? d.types?.forward ?? 0,
+      d.types?.Return ?? d.types?.return ?? 0,
+      d.firstRecordTime || 'N/A',
+      d.lastRecordTime || 'N/A',
+      d.operatingMinutes || 0,
+      d.lastOrderId ? `"${d.lastOrderId}"` : 'N/A',
+      d.lastPlatform || 'N/A',
+    ]);
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((e) => e.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `VMS_Daily_Shift_Cutoffs_${fromDate}_to_${toDate}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    onShowToast('Daily shift summary exported successfully', 'success');
+  };
   const actualPeakVolume = useMemo(() => {
     if (!dailyList.length) return 0;
     return Math.max(
@@ -679,7 +1022,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
       </div>
 
       {/* Modern Dynamic KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
         {/* Card 1: Total Verified Recordings */}
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between relative overflow-hidden group hover:border-blue-300 transition">
           <div className="flex items-center justify-between">
@@ -707,7 +1050,38 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
           </div>
         </div>
 
-        {/* Card 2: Unique Orders & Duplicates */}
+        {/* Card 2: Daily Shift Cutoff / Recorded Till */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between relative overflow-hidden group hover:border-indigo-300 transition">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+              Recorded Till (Cutoff)
+            </span>
+            <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold">
+              <Timer className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="mt-3">
+            <div className="text-2xl font-extrabold text-slate-900 tracking-tight flex items-baseline gap-1.5">
+              <span>{shiftMetrics.latestCutoff || '—'}</span>
+              {shiftMetrics.todayRecordedTill && (
+                <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-md">
+                  TODAY
+                </span>
+              )}
+            </div>
+            <div className="text-xs text-indigo-700 mt-1 font-semibold flex items-center gap-1 truncate">
+              {shiftMetrics.avgWrapUpFormatted ? (
+                <span>Avg. Cutoff: <strong>{shiftMetrics.avgWrapUpFormatted}</strong></span>
+              ) : shiftMetrics.todayActiveMins > 0 ? (
+                <span>Active: <strong>{formatOperatingDuration(shiftMetrics.todayActiveMins)}</strong></span>
+              ) : (
+                <span>Daily recording wrap-up</span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Card 3: Unique Orders & Duplicates */}
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between relative overflow-hidden group hover:border-emerald-300 transition">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
@@ -726,7 +1100,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
           </div>
         </div>
 
-        {/* Card 3: Top Performing Platform */}
+        {/* Card 4: Top Performing Platform */}
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between relative overflow-hidden group hover:border-purple-300 transition">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
@@ -748,7 +1122,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
           </div>
         </div>
 
-        {/* Card 4: Top Packer Operator */}
+        {/* Card 5: Top Packer Operator */}
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between relative overflow-hidden group hover:border-amber-300 transition">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
@@ -825,26 +1199,40 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
             }`}>
               <div className="flex items-center gap-2">
                 <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${activeChartMode === 'return' ? 'bg-purple-600' : 'bg-blue-600'}`} />
-                <span className="font-bold text-slate-800">Date: {formatDDMMYYYY(hoveredPoint.day.date)} ({formatDDMM(hoveredPoint.day.date)})</span>
+                <span className="font-bold text-slate-800">
+                  Date: {formatDDMMYYYY(hoveredPoint.day.date)} ({getDayOfWeekStr(hoveredPoint.day.date)})
+                </span>
                 <span className="text-slate-400">•</span>
                 <span className={`font-bold ${activeChartMode === 'return' ? 'text-purple-700' : 'text-blue-700'}`}>
                   Volume: {hoveredPoint.val} {activeChartMode === 'return' ? 'returns' : activeChartMode === 'forward' ? 'packings' : 'recordings'}
                 </span>
+                {hoveredPoint.day.lastRecordTime && (
+                  <>
+                    <span className="text-slate-400">•</span>
+                    <span className="inline-flex items-center gap-1 font-bold text-emerald-800 bg-emerald-100/90 px-2 py-0.5 rounded-md">
+                      <Clock className="w-3 h-3 text-emerald-600" />
+                      Recorded Till: {hoveredPoint.day.lastRecordTime}
+                    </span>
+                  </>
+                )}
               </div>
 
               <div className="flex items-center gap-3 text-[11px] text-slate-600 font-medium">
+                {hoveredPoint.day.firstRecordTime && (
+                  <span>Start: <strong className="text-slate-700">{hoveredPoint.day.firstRecordTime}</strong></span>
+                )}
+                {hoveredPoint.day.operatingMinutes !== undefined && hoveredPoint.day.operatingMinutes > 0 && (
+                  <span>Active Span: <strong className="text-indigo-700">{formatOperatingDuration(hoveredPoint.day.operatingMinutes)}</strong></span>
+                )}
                 <span>Forward: <strong className="text-blue-700">{hoveredPoint.day.types?.Forward ?? hoveredPoint.day.types?.forward ?? hoveredPoint.day.types?.Outbound ?? 0}</strong></span>
                 <span>Return: <strong className="text-purple-700">{hoveredPoint.day.types?.Return ?? hoveredPoint.day.types?.return ?? hoveredPoint.day.types?.Inbound ?? 0}</strong></span>
-                <span>Amazon: <strong className="text-slate-800">{hoveredPoint.day.platforms?.Amazon || 0}</strong></span>
-                <span>D2C: <strong className="text-slate-800">{hoveredPoint.day.platforms?.D2C || 0}</strong></span>
-                <span>JioMart: <strong className="text-slate-800">{hoveredPoint.day.platforms?.JioMart || 0}</strong></span>
               </div>
             </div>
           ) : (
             <div className="w-full bg-slate-50/80 border border-slate-100 p-2.5 sm:px-3 rounded-xl flex items-center justify-between text-xs text-slate-500">
               <span className="flex items-center gap-2">
                 <Sparkles className={`w-3.5 h-3.5 ${activeChartMode === 'return' ? 'text-purple-500' : 'text-blue-500'}`} />
-                <span>Hover or drag along the curve to inspect daily platform and order details.</span>
+                <span>Hover or drag along the curve to inspect daily volumes, shift start times, and cutoff recording hours.</span>
               </span>
               <span className="text-[11px] font-mono text-slate-400 hidden sm:inline">
                 {points.length} data points
@@ -1249,6 +1637,231 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
           ) : (
             <p className="text-xs text-slate-400 p-4 text-center">No operator records available.</p>
           )}
+        </div>
+      </div>
+
+      {/* Dedicated Section: Daily Breakdown & Shift Operating Window Table ("Till What Time Recording is Done") */}
+      <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-3">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+              <Timer className="w-4 h-4 text-indigo-600" />
+              Daily Shift Cutoff & Recording Schedule Breakdown
+            </h3>
+            <p className="text-[11px] text-slate-500">
+              Detailed log of shift start times, cutoff recording hours (till what time recording was done), and active station operating spans per day.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Table Search */}
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={dailyTableSearch}
+                onChange={(e) => setDailyTableSearch(e.target.value)}
+                placeholder="Search date, day, order ID…"
+                className="pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-700 placeholder-slate-400 focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 w-48 sm:w-56"
+              />
+            </div>
+
+            {/* Sort Select */}
+            <div className="flex items-center gap-1 bg-slate-50 border border-slate-300 rounded-lg px-2 py-1">
+              <ArrowUpDown className="w-3 h-3 text-slate-500" />
+              <select
+                value={dailyTableSort}
+                onChange={(e) => setDailyTableSort(e.target.value as any)}
+                className="text-xs font-semibold text-slate-700 bg-transparent focus:outline-none cursor-pointer"
+              >
+                <option value="date-desc">Date (Newest First)</option>
+                <option value="date-asc">Date (Oldest First)</option>
+                <option value="volume-desc">Volume (Highest First)</option>
+                <option value="cutoff-desc">Recorded Till (Latest First)</option>
+              </select>
+            </div>
+
+            {/* Export CSV Button */}
+            <button
+              onClick={handleExportDailyCsv}
+              className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer"
+              title="Export daily cutoff breakdown as CSV"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Export CSV</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Daily Shift Table */}
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="border-b border-slate-200 bg-slate-50/75 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                <th className="py-2.5 px-3">Date & Day</th>
+                <th className="py-2.5 px-3">Daily Volume</th>
+                <th className="py-2.5 px-3">Shift Started</th>
+                <th className="py-2.5 px-3 bg-indigo-50/50 text-indigo-900 border-x border-indigo-100/60">
+                  <div className="flex items-center gap-1">
+                    <Clock className="w-3 h-3 text-indigo-600" />
+                    <span>Recorded Till (Cutoff)</span>
+                  </div>
+                </th>
+                <th className="py-2.5 px-3">Active Duration</th>
+                <th className="py-2.5 px-3">Last Logged Package</th>
+                <th className="py-2.5 px-3 text-right">Station Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 text-xs">
+              {filteredSortedDailyList.length > 0 ? (
+                filteredSortedDailyList.map((d) => {
+                  const isToday = d.date === getLocalDateStr(0);
+                  const fwdCount = d.types?.Forward ?? d.types?.forward ?? 0;
+                  const retCount = d.types?.Return ?? d.types?.return ?? 0;
+                  const dayOfWeek = getDayOfWeekStr(d.date);
+
+                  return (
+                    <tr
+                      key={d.date}
+                      className={`hover:bg-slate-50/80 transition ${
+                        isToday ? 'bg-blue-50/30' : ''
+                      }`}
+                    >
+                      {/* Date & Day */}
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-900 font-mono">
+                            {formatDDMMYYYY(d.date)}
+                          </span>
+                          <span className="text-[11px] font-medium text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                            {dayOfWeek}
+                          </span>
+                          {isToday && (
+                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-full">
+                              Today
+                            </span>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Daily Volume */}
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-900 font-mono text-sm">
+                            {d.total}
+                          </span>
+                          {d.total > 0 && (
+                            <div className="flex items-center gap-1 text-[10px]">
+                              {fwdCount > 0 && (
+                                <span className="bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded font-medium">
+                                  F: {fwdCount}
+                                </span>
+                              )}
+                              {retCount > 0 && (
+                                <span className="bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded font-medium">
+                                  R: {retCount}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Shift Started (First Record) */}
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        {d.firstRecordTime ? (
+                          <div className="flex items-center gap-1.5 text-slate-700 font-mono font-medium">
+                            <Clock className="w-3.5 h-3.5 text-slate-400" />
+                            <span>{d.firstRecordTime}</span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400 font-mono">—</span>
+                        )}
+                      </td>
+
+                      {/* Recorded Till (Daily Cutoff) - Highlighted Column */}
+                      <td className="py-3 px-3 whitespace-nowrap bg-indigo-50/40 border-x border-indigo-100/50">
+                        {d.lastRecordTime ? (
+                          <div className="inline-flex items-center gap-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200 px-2.5 py-1 rounded-lg font-mono font-bold shadow-2xs">
+                            <Clock className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>{d.lastRecordTime}</span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400 font-mono">—</span>
+                        )}
+                      </td>
+
+                      {/* Active Duration */}
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        {d.operatingMinutes !== undefined && d.operatingMinutes > 0 ? (
+                          <div className="space-y-1">
+                            <div className="font-semibold text-slate-700">
+                              {formatOperatingDuration(d.operatingMinutes)}
+                            </div>
+                            <div className="w-20 bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                              <div
+                                className="bg-indigo-500 h-full rounded-full"
+                                style={{
+                                  width: `${Math.min(100, Math.round((d.operatingMinutes / 720) * 100))}%`,
+                                }}
+                              />
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )}
+                      </td>
+
+                      {/* Last Logged Package */}
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        {d.lastOrderId ? (
+                          <div className="space-y-0.5 max-w-[180px]">
+                            <div className="font-mono text-slate-800 font-bold truncate">
+                              {d.lastOrderId}
+                            </div>
+                            {d.lastPlatform && (
+                              <div className="text-[10px] text-slate-500 font-medium truncate">
+                                Platform: {d.lastPlatform}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )}
+                      </td>
+
+                      {/* Station Status */}
+                      <td className="py-3 px-3 whitespace-nowrap text-right">
+                        {d.total > 0 ? (
+                          isToday ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                              Active Today
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full">
+                              <CheckCircle className="w-3 h-3 text-slate-400" />
+                              Shift Concluded
+                            </span>
+                          )
+                        ) : (
+                          <span className="text-[11px] text-slate-400 italic">
+                            Station Idle
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td colSpan={7} className="py-8 text-center text-slate-400 text-xs">
+                    No matching daily shift records found.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>

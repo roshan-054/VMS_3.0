@@ -2484,6 +2484,8 @@ function getAnalyticsData_(p){
 
         rows.push({
           date: dateOnly_(ts),
+          timestamp: ts.toISOString(),
+          timeMs: ts.getTime(),
           platform: pf || 'Unknown',
           type: rt,
           user: pe || 'Unknown',
@@ -2535,6 +2537,8 @@ function getAnalyticsData_(p){
 
         rows.push({
           date: dateOnly_(ts),
+          timestamp: ts.toISOString(),
+          timeMs: ts.getTime(),
           platform: pf || 'Unknown',
           type: rt,
           user: pe || 'Unknown',
@@ -2556,12 +2560,38 @@ function getAnalyticsData_(p){
 
   const dailyMap = {};
   rows.forEach(r => {
-    if (!dailyMap[r.date]) dailyMap[r.date] = { date: r.date, total: 0, platforms: {}, types: {}, users: {} };
+    if (!dailyMap[r.date]) {
+      dailyMap[r.date] = {
+        date: r.date,
+        total: 0,
+        platforms: {},
+        types: {},
+        users: {},
+        firstTimeMs: r.timeMs,
+        lastTimeMs: r.timeMs,
+        firstTimestamp: r.timestamp,
+        lastTimestamp: r.timestamp,
+        lastOrderId: r.orderId,
+        lastPlatform: r.platform,
+        lastPacker: r.user
+      };
+    }
     const d = dailyMap[r.date];
     d.total++;
     d.platforms[r.platform] = (d.platforms[r.platform] || 0) + 1;
     d.types[r.type] = (d.types[r.type] || 0) + 1;
     d.users[r.user] = (d.users[r.user] || 0) + 1;
+    if (r.timeMs && (!d.firstTimeMs || r.timeMs < d.firstTimeMs)) {
+      d.firstTimeMs = r.timeMs;
+      d.firstTimestamp = r.timestamp;
+    }
+    if (r.timeMs && (!d.lastTimeMs || r.timeMs > d.lastTimeMs)) {
+      d.lastTimeMs = r.timeMs;
+      d.lastTimestamp = r.timestamp;
+      d.lastOrderId = r.orderId;
+      d.lastPlatform = r.platform;
+      d.lastPacker = r.user;
+    }
   });
 
   const dates = [];
@@ -2575,12 +2605,30 @@ function getAnalyticsData_(p){
     const d = dailyMap[date] || { date, total: 0, platforms: {}, types: {}, users: {} };
     const fCount = (d.types && (d.types['Forward'] || d.types['forward'] || d.types['Outbound'])) || 0;
     const rCount = (d.types && (d.types['Return'] || d.types['return'] || d.types['Inbound'])) || 0;
+
+    let firstRecordTime = '';
+    let lastRecordTime = '';
+    let operatingMinutes = 0;
+    if (d.firstTimeMs && d.lastTimeMs) {
+      firstRecordTime = Utilities.formatDate(new Date(d.firstTimeMs), Session.getScriptTimeZone(), 'hh:mm a');
+      lastRecordTime = Utilities.formatDate(new Date(d.lastTimeMs), Session.getScriptTimeZone(), 'hh:mm a');
+      operatingMinutes = Math.max(0, Math.round((d.lastTimeMs - d.firstTimeMs) / 60000));
+    }
+
     return {
       date,
       total: d.total || 0,
       platforms: d.platforms || {},
       types: { Forward: fCount, Return: rCount },
-      users: d.users || {}
+      users: d.users || {},
+      firstRecordTime: firstRecordTime,
+      lastRecordTime: lastRecordTime,
+      firstTimestamp: d.firstTimestamp || '',
+      lastTimestamp: d.lastTimestamp || '',
+      operatingMinutes: operatingMinutes,
+      lastOrderId: d.lastOrderId || '',
+      lastPlatform: d.lastPlatform || '',
+      lastPacker: d.lastPacker || ''
     };
   });
 
@@ -2593,6 +2641,13 @@ function getAnalyticsData_(p){
     { label: 'Forward', count: forwardCount },
     { label: 'Return', count: returnCount }
   ];
+
+  const todayStr = dateOnly_(new Date());
+  const todayEntry = dailyMap[todayStr];
+  let latestRecordingTimeToday = '';
+  if (todayEntry && todayEntry.lastTimeMs) {
+    latestRecordingTimeToday = Utilities.formatDate(new Date(todayEntry.lastTimeMs), Session.getScriptTimeZone(), 'hh:mm a');
+  }
 
   return {
     success: true,
@@ -2607,7 +2662,8 @@ function getAnalyticsData_(p){
     types: typesCount,
     users: countBy('user'),
     statuses: countBy('status'),
-    daily
+    daily,
+    latestRecordingTimeToday: latestRecordingTimeToday
   };
 }
 

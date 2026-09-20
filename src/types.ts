@@ -94,6 +94,22 @@ export interface UploadLogItem {
   downloadUrl?: string;
 }
 
+export interface DailyMetricItem {
+  date: string;
+  total: number;
+  platforms: Record<string, number>;
+  types: Record<string, number>;
+  users: Record<string, number>;
+  firstRecordTime?: string;
+  lastRecordTime?: string; // Daily shift conclusion / till what time recording is done
+  firstTimestamp?: string;
+  lastTimestamp?: string;
+  operatingMinutes?: number;
+  lastOrderId?: string;
+  lastPlatform?: string;
+  lastPacker?: string;
+}
+
 export interface AnalyticsData {
   total: number;
   uniqueOrders: number;
@@ -104,13 +120,9 @@ export interface AnalyticsData {
   types: { label: string; count: number }[];
   users: { label: string; count: number }[];
   statuses: { label: string; count: number }[];
-  daily: {
-    date: string;
-    total: number;
-    platforms: Record<string, number>;
-    types: Record<string, number>;
-    users: Record<string, number>;
-  }[];
+  daily: DailyMetricItem[];
   fromDate?: string;
   toDate?: string;
+  latestRecordingTimeToday?: string;
+  avgDailyWrapUpTime?: string;
 }
