@@ -54,7 +54,7 @@ export function setStoredDriveFolderId(folderId: string): void {
   localStorage.setItem('ops_drive_folder_id', folderId.trim());
 }
 
-export const DEFAULT_CHUNK_SIZE_MB = 16;
+export const DEFAULT_CHUNK_SIZE_MB = 4;
 export const DEFAULT_CHUNK_SIZE_BYTES = DEFAULT_CHUNK_SIZE_MB * 1024 * 1024;
 
 export function getCustomStoredChunkSizeMb(): number | null {

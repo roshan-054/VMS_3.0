@@ -36,7 +36,7 @@ const CONFIG = {
 
   // Limits
   MAX_VIDEO_BYTES: 1024 * 1024 * 1024 * 5, // 5 GB
-  DEFAULT_CHUNK_BYTES: 16 * 1024 * 1024, // 16 MB
+  DEFAULT_CHUNK_BYTES: 4 * 1024 * 1024, // 4 MB (aligned to 256 KB Google Drive blocks)
   SESSION_SECONDS: 86400, // 24 hours
   RESERVATION_SECONDS: 86400,
   ALLOWED_PLATFORMS: ['Amazon', 'D2C', 'JioMart', 'Custom']
@@ -826,30 +826,71 @@ function cleanupStuckUploads_(p){
       const fileId = String(data[i][9] || '').trim();
       const rawDate = data[i][0];
       const rowTime = rawDate instanceof Date ? rawDate.getTime() : new Date(rawDate).getTime();
-      const isOld = isNaN(rowTime) || (now - rowTime > 3 * 60 * 1000); // older than 3 minutes
+      const isOld = isNaN(rowTime) || (now - rowTime > 5 * 60 * 1000); // older than 5 minutes
 
-      // If status is in progress / started / initiated / stale and has no completed fileId
-      const isUnfinished = (rawStatus === 'in progress' || rawStatus === 'started' || rawStatus === 'initiated' || rawStatus === 'uploading' || rawStatus === 'session created' || rawStatus === 'interrupted / stale' || rawStatus === 'stale') && !fileId;
+      const isFailedOrInterrupted = (
+        rawStatus === 'failed' ||
+        rawStatus === 'interrupted / stale' ||
+        rawStatus === 'stale' ||
+        rawStatus === 'error' ||
+        rawStatus.indexOf('fail') !== -1 ||
+        rawStatus.indexOf('interrupt') !== -1 ||
+        rawStatus.indexOf('stale') !== -1 ||
+        rawStatus.indexOf('expired') !== -1
+      ) && !fileId;
 
-      if (isUnfinished) {
-        if (purgeInterrupted) {
+      const isAbandonedInProgress = (
+        rawStatus === 'in progress' ||
+        rawStatus === 'started' ||
+        rawStatus === 'initiated' ||
+        rawStatus === 'uploading' ||
+        rawStatus === 'session created'
+      ) && !fileId && isOld;
+
+      if (purgeInterrupted) {
+        if (isFailedOrInterrupted || isAbandonedInProgress) {
           uploadSh.deleteRow(i + 1);
           cleanedRows++;
-        } else {
+        }
+      } else {
+        if (isAbandonedInProgress) {
           uploadSh.getRange(i + 1, 11).setValue('Interrupted / Stale');
-          uploadSh.getRange(i + 1, 8).setValue('Upload session expired or reset by operator');
+          uploadSh.getRange(i + 1, 8).setValue('Upload session timed out or reset');
           cleanedRows++;
         }
       }
     }
 
-    // Clean up PropertiesService UPLOAD_* and DUPRES_* keys
+    // Clean up expired PropertiesService UPLOAD_* and DUPRES_* keys (older than 30 minutes)
     const props = PropertiesService.getScriptProperties();
     const allProps = props.getProperties();
     for (const k in allProps) {
-      if (k.startsWith('UPLOAD_') || k.startsWith('DUPRES_')) {
-        props.deleteProperty(k);
-        clearedProps++;
+      if (k.startsWith('UPLOAD_')) {
+        let isStaleProp = true;
+        try {
+          const sObj = JSON.parse(allProps[k]);
+          const cTime = Number(sObj.createdAt || 0);
+          if (cTime && (now - cTime < 30 * 60 * 1000)) {
+            isStaleProp = false; // keep active upload sessions under 30 minutes!
+          }
+        } catch(_) {}
+        if (isStaleProp || purgeInterrupted) {
+          props.deleteProperty(k);
+          clearedProps++;
+        }
+      } else if (k.startsWith('DUPRES_')) {
+        let isStaleRes = true;
+        try {
+          const rObj = JSON.parse(allProps[k]);
+          const rTime = Number(rObj.time || 0);
+          if (rTime && (now - rTime < CONFIG.RESERVATION_SECONDS * 1000)) {
+            isStaleRes = false;
+          }
+        } catch(_) {}
+        if (isStaleRes || purgeInterrupted) {
+          props.deleteProperty(k);
+          clearedProps++;
+        }
       }
     }
 
@@ -859,8 +900,8 @@ function cleanupStuckUploads_(p){
       clearedProperties: clearedProps,
       purged: purgeInterrupted,
       message: purgeInterrupted
-        ? `Successfully purged ${cleanedRows} interrupted upload row(s) and cleared active session locks.`
-        : `Successfully resolved ${cleanedRows} stuck upload row(s) and cleared active session locks.`
+        ? `Successfully purged ${cleanedRows} interrupted/failed upload row(s) and cleared stale session locks.`
+        : `Successfully resolved ${cleanedRows} stuck upload row(s) and cleared stale session locks.`
     };
   }, 10000);
 }
@@ -1347,7 +1388,49 @@ function updateUploadLog_(uploadId, stage, progress, fileId, status, error, queu
   }
 }
 
-/* ---------- Start Upload Session ---------- */
+/**
+ * Helper to initiate a Google Drive v3 Resumable Upload Session
+ */
+function initDriveResumableSession_(name, mime, size, parentFolderId) {
+  try {
+    const oauthToken = ScriptApp.getOAuthToken();
+    if (!oauthToken) {
+      console.warn('initDriveResumableSession_: No OAuth token available.');
+      return '';
+    }
+    const driveSessionResp = UrlFetchApp.fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true', {
+      method: 'post',
+      contentType: 'application/json; charset=UTF-8',
+      headers: {
+        Authorization: 'Bearer ' + oauthToken,
+        'X-Upload-Content-Type': mime || 'video/mp4',
+        'X-Upload-Content-Length': String(size)
+      },
+      payload: JSON.stringify({
+        name: name,
+        mimeType: mime || 'video/mp4',
+        parents: [parentFolderId]
+      }),
+      muteHttpExceptions: true
+    });
+
+    const respCode = driveSessionResp.getResponseCode();
+    if ((respCode >= 200 && respCode < 300) || respCode === 308) {
+      const headers = driveSessionResp.getHeaders ? driveSessionResp.getHeaders() : driveSessionResp.getAllHeaders();
+      for (const key in headers) {
+        if (key.toLowerCase() === 'location') {
+          return String(headers[key] || '').trim();
+        }
+      }
+    } else {
+      console.warn('initDriveResumableSession_ failed code: ' + respCode + ' ' + driveSessionResp.getContentText());
+    }
+  } catch(dErr) {
+    console.warn('Drive resumable session create note:', dErr);
+  }
+  return '';
+}
+
 /* ---------- Start Upload Session ---------- */
 function startUpload_(p){
   const user = session_(p.token);
@@ -1384,44 +1467,11 @@ function startUpload_(p){
   const recordingDate = p.recordingDate ? String(p.recordingDate).trim() : '';
   const folder = dateFolder_(platform, type, driveFolderId, recordingDate);
 
-  // Initiate Google Drive Resumable Upload Session (Direct Drive v3 API) only for large files (> 12 MB)
-  // For small and medium files (<= 12 MB), native targetFolder.createFile(blob) in Apps Script is 10x faster (~1.2s)
+  // Initiate Google Drive Resumable Upload Session (Direct Drive v3 API) for large files (> 12 MB)
   let uploadUrl = '';
   const isSmallFile = size <= 12 * 1024 * 1024;
   if (!isSmallFile) {
-    try {
-      const oauthToken = ScriptApp.getOAuthToken();
-      if (oauthToken) {
-        const driveSessionResp = UrlFetchApp.fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true', {
-          method: 'post',
-          contentType: 'application/json; charset=UTF-8',
-          headers: {
-            Authorization: 'Bearer ' + oauthToken,
-            'X-Upload-Content-Type': mime,
-            'X-Upload-Content-Length': String(size)
-          },
-          payload: JSON.stringify({
-            name: name,
-            mimeType: mime,
-            parents: [folder.getId()]
-          }),
-          muteHttpExceptions: true
-        });
-
-        const respCode = driveSessionResp.getResponseCode();
-        if (respCode >= 200 && respCode < 300 || respCode === 308) {
-          const headers = driveSessionResp.getHeaders ? driveSessionResp.getHeaders() : driveSessionResp.getAllHeaders();
-          for (const key in headers) {
-            if (key.toLowerCase() === 'location') {
-              uploadUrl = String(headers[key] || '').trim();
-              break;
-            }
-          }
-        }
-      }
-    } catch(dErr) {
-      console.warn('Drive resumable session create note:', dErr);
-    }
+    uploadUrl = initDriveResumableSession_(name, mime, size, folder.getId());
   }
 
   let reservation = null;
@@ -1451,7 +1501,7 @@ function startUpload_(p){
       PropertiesService.getScriptProperties().setProperty('UPLOAD_' + uploadId, JSON.stringify(sessionData));
       if (reservation) setReservationUpload_(reservation.key, uploadId);
 
-      // Reuse existing unfinished row if present, otherwise log new
+      // Reuse existing unfinished or failed row if present, otherwise log new
       const uploadSh = sheet_(CONFIG.UPLOAD_LOG_SHEET);
       const uploadData = uploadSh.getDataRange().getValues();
       let updatedExisting = false;
@@ -1459,10 +1509,10 @@ function startUpload_(p){
         const rOrder = String(uploadData[i][1] || '').trim();
         const rPlatform = String(uploadData[i][2] || '').trim();
         const rType = String(uploadData[i][12] || 'Forward').trim();
-        const rStatus = String(uploadData[i][10] || '').trim();
+        const rStatus = normalize_(String(uploadData[i][10] || ''));
         const displaySize = formatFileSize_(size);
         if (normalize_(rOrder) === normalize_(order) && normalize_(rPlatform) === normalize_(platform) && normalize_(rType) === normalize_(type)) {
-          if (rStatus === 'Started' || rStatus === 'Pending' || rStatus === 'In Progress') {
+          if (rStatus === 'started' || rStatus === 'pending' || rStatus === 'in progress' || rStatus === 'failed' || rStatus.indexOf('fail') !== -1 || rStatus.indexOf('interrupt') !== -1 || rStatus.indexOf('stale') !== -1 || rStatus.indexOf('expired') !== -1) {
             uploadSh.getRange(i + 1, 1, 1, 15).setValues([[
               new Date(), order, platform, user.email, name, displaySize, uploadId, 'Session Created', 0, '', 'Started', '', type, source, queueJobId
             ]]);
@@ -1483,7 +1533,7 @@ function startUpload_(p){
         fileName: name,
         fileSize: size,
         hasResumableUrl: !!uploadUrl,
-        isDuplicate: !!done
+        isDuplicate: false
       };
     } catch(e) {
       if(reservation&&reservation.key)releaseReservation_(reservation.key);
@@ -1497,7 +1547,14 @@ function uploadChunk_(p){
   const user = session_(p.token);
   const uploadId = p.uploadId;
   const raw = PropertiesService.getScriptProperties().getProperty('UPLOAD_' + uploadId);
-  if(!raw) throw new Error('Upload session expired or invalid. Please retry.');
+  if (!raw) {
+    return {
+      success: false,
+      sessionExpired: true,
+      needRestart: true,
+      error: 'Upload session not found or expired. Re-initiating fresh session automatically.'
+    };
+  }
 
   const s = JSON.parse(raw);
   const total = Number(p.totalSize || s.size);
@@ -1568,17 +1625,60 @@ function uploadChunk_(p){
 
       if (code >= 400) {
         const errText = resp.getContentText();
-        console.error('Google Drive Resumable API error: ' + code + ' ' + errText);
+        console.warn('Google Drive Resumable API response code ' + code + ': ' + errText);
         if (code === 404 || code === 410) {
-          updateUploadLog_(uploadId, 'Session Expired', 0, '', 'Failed', 'Drive upload session expired. Please retry.');
-          throw new Error('Google Drive upload session expired. Please retry.');
+          // If this is chunkIndex 0, auto-renew session immediately on backend and retry chunk 0
+          if (chunkIndex === 0) {
+            const freshFolder = dateFolder_(s.platform, s.type, s.driveFolderId || CONFIG.HARDWIRED_PARENT_FOLDER_ID, s.recordingDate);
+            const newUploadUrl = initDriveResumableSession_(s.name, s.mime, total, freshFolder.getId());
+            if (newUploadUrl) {
+              s.uploadUrl = newUploadUrl;
+              PropertiesService.getScriptProperties().setProperty('UPLOAD_' + uploadId, JSON.stringify(s));
+              const retryResp = UrlFetchApp.fetch(newUploadUrl, {
+                method: 'put',
+                contentType: s.mime,
+                headers: { 'Content-Range': contentRange },
+                payload: chunkBytes,
+                muteHttpExceptions: true
+              });
+              const retryCode = retryResp.getResponseCode();
+              if (retryCode === 308) {
+                const pct = Math.min(99, Math.round(((inclusiveEnd + 1) / total) * 100));
+                updateUploadLog_(uploadId, 'Uploading chunk 1/' + totalChunks, pct, '', 'In Progress', '');
+                return {
+                  success: true,
+                  complete: false,
+                  completed: false,
+                  chunkIndex: 0,
+                  percent: pct,
+                  received: inclusiveEnd + 1
+                };
+              } else if (retryCode === 200 || retryCode === 201) {
+                let fid = '';
+                try { fid = String(JSON.parse(retryResp.getContentText()).id || ''); } catch(_) {}
+                return finalizeCompletedUpload_(s, uploadId, fid, user);
+              }
+            }
+          }
+          return {
+            success: false,
+            sessionExpired: true,
+            needRestart: true,
+            error: 'Google Drive upload session expired. System will auto-resume upload from beginning.'
+          };
         }
         throw new Error('Google Drive returned error ' + code + ': ' + (errText || 'Upload chunk rejected'));
       }
     } catch(uErr) {
       console.warn('Drive resumable chunk upload notice:', uErr);
-      if (String(uErr).indexOf('expired') !== -1 || String(uErr).indexOf('Google Drive') !== -1) {
-        throw uErr;
+      const errStr = String(uErr || '');
+      if (errStr.indexOf('expired') !== -1 || errStr.indexOf('Google Drive') !== -1 || errStr.indexOf('404') !== -1 || errStr.indexOf('410') !== -1) {
+        return {
+          success: false,
+          sessionExpired: true,
+          needRestart: true,
+          error: 'Drive upload session expired or interrupted: ' + errStr
+        };
       }
     }
   }
