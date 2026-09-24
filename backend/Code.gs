@@ -808,6 +808,37 @@ function withScriptLock_(fn, timeoutMs) {
 }
 
 /**
+ * Safely parse a timestamp from Google Sheet whether Date, ISO, or DD/MM/YYYY HH:mm:ss
+ */
+function parseSheetTimestamp_(raw) {
+  if (!raw) return 0;
+  if (raw instanceof Date) {
+    const t = raw.getTime();
+    return isNaN(t) ? 0 : t;
+  }
+  const str = String(raw).trim();
+  if (!str) return 0;
+
+  // Try standard JS Date parsing first
+  const t = new Date(str).getTime();
+  if (!isNaN(t) && t > 0) return t;
+
+  // Try DD/MM/YYYY HH:mm:ss or DD-MM-YYYY HH:mm:ss
+  const m = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+  if (m) {
+    const day = parseInt(m[1], 10);
+    const month = parseInt(m[2], 10) - 1;
+    const year = parseInt(m[3], 10);
+    const hour = parseInt(m[4] || '0', 10);
+    const min = parseInt(m[5] || '0', 10);
+    const sec = parseInt(m[6] || '0', 10);
+    const parsed = new Date(year, month, day, hour, min, sec).getTime();
+    if (!isNaN(parsed) && parsed > 0) return parsed;
+  }
+  return 0;
+}
+
+/**
  * Clean up all orphaned/stuck 'In Progress' sessions in Google Sheet and script properties
  */
 function cleanupStuckUploads_(p){
@@ -824,9 +855,16 @@ function cleanupStuckUploads_(p){
     for (let i = data.length - 1; i >= 1; i--) {
       const rawStatus = normalize_(data[i][10] || '');
       const fileId = String(data[i][9] || '').trim();
-      const rawDate = data[i][0];
-      const rowTime = rawDate instanceof Date ? rawDate.getTime() : new Date(rawDate).getTime();
-      const isOld = isNaN(rowTime) || (now - rowTime > 5 * 60 * 1000); // older than 5 minutes
+      const rowTime = parseSheetTimestamp_(data[i][0]);
+
+      // Abandoned in-progress sessions must be older than 30 minutes to prevent interfering with active uploads
+      const isAbandonedInProgress = (
+        rawStatus === 'in progress' ||
+        rawStatus === 'started' ||
+        rawStatus === 'initiated' ||
+        rawStatus === 'uploading' ||
+        rawStatus === 'session created'
+      ) && !fileId && (rowTime > 0 && (now - rowTime > 30 * 60 * 1000));
 
       const isFailedOrInterrupted = (
         rawStatus === 'failed' ||
@@ -838,14 +876,6 @@ function cleanupStuckUploads_(p){
         rawStatus.indexOf('stale') !== -1 ||
         rawStatus.indexOf('expired') !== -1
       ) && !fileId;
-
-      const isAbandonedInProgress = (
-        rawStatus === 'in progress' ||
-        rawStatus === 'started' ||
-        rawStatus === 'initiated' ||
-        rawStatus === 'uploading' ||
-        rawStatus === 'session created'
-      ) && !fileId && isOld;
 
       if (purgeInterrupted) {
         if (isFailedOrInterrupted || isAbandonedInProgress) {
@@ -1346,7 +1376,7 @@ function migrateDriveFoldersToMonthly_(customFolderId) {
   };
 }
 
-function safeName_(s){return String(s||'').replace(/[\\/:*?"<>|#%{}\[\]]/g,'_').trim()}
+function safeName_(s){return String(s||'').replace(/^#+/, '').replace(/[\\/:*?"<>|#%{}\[\]]/g,'_').trim()}
 
 function logUpload_(row){
   try {
@@ -2774,8 +2804,8 @@ function cleanupOldStartedUploads_(order, currentUploadId) {
     for (let i = uploadData.length - 1; i >= 1; i--) {
       const rOrder = String(uploadData[i][1] || '').trim();
       const rUploadId = String(uploadData[i][6] || '').trim();
-      const rStatus = String(uploadData[i][10] || '').trim();
-      if (normalize_(rOrder) === normalize_(order) && rUploadId !== currentUploadId && (rStatus === 'Started' || rStatus === 'Pending' || rStatus === 'In Progress')) {
+      const rStatus = normalize_(String(uploadData[i][10] || ''));
+      if (normalize_(rOrder) === normalize_(order) && rUploadId !== currentUploadId && (rStatus === 'started' || rStatus === 'pending' || rStatus === 'in progress' || rStatus === 'failed' || rStatus.indexOf('fail') !== -1 || rStatus.indexOf('interrupt') !== -1 || rStatus.indexOf('stale') !== -1 || rStatus.indexOf('expired') !== -1)) {
         uploadSh.deleteRow(i + 1);
       }
     }

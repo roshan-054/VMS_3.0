@@ -171,7 +171,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
   const handleFixStuckQueue = async () => {
     setIsCleaningStuck(true);
     try {
-      const result = await fixAndCleanAllStuckUploads();
+      const result = await fixAndCleanAllStuckUploads({ purgeInterrupted: true });
       loadQueue();
       onQueueChanged();
       onShowToast(`🧹 ${result.message || 'Reset queue and cleared stuck upload locks.'}`, 'success');
