@@ -203,7 +203,7 @@ function sheet_(name) {
 }
 
 /**
- * Applies Refined Conditional Formatting to Sheets (UploadLog, OrderLog, ReturnLog):
+ * Applies Refined Conditional Formatting to Sheets (UploadLog, OrderLog, ReturnLog, DownloadLog, etc.):
  * Automatically highlights duplicate records in Column B ONLY when BOTH the Order ID AND the Recording Type match.
  * Forward and Return recordings for the same Order ID are NOT considered duplicates and will not be highlighted.
  */
@@ -211,6 +211,11 @@ function applyDuplicateConditionalFormatting_(sh) {
   if (!sh) return;
   try {
     const sheetName = sh.getName();
+    // Exclude system tabs
+    if (sheetName === CONFIG.USERS_SHEET || sheetName === CONFIG.BRANDING_SHEET || 
+        sheetName === CONFIG.SECURITY_LOG_SHEET || sheetName === CONFIG.TRASH_LOG_SHEET) {
+      return;
+    }
     const lastRow = Math.max(sh.getMaxRows(), 1000);
     const orderIdRange = sh.getRange('B2:B' + lastRow);
 
@@ -227,11 +232,14 @@ function applyDuplicateConditionalFormatting_(sh) {
     // Formulate strict COUNTIFS formula:
     // In UploadLog: Column B is Order ID, Column M (13) is Recording Type
     // In OrderLog & ReturnLog: Column B is Order ID, Column I (9) is Recording Type
+    // In DownloadLog: Column B is Order ID, Column H (8) is Recording Type
     let formula = '';
     if (sheetName === CONFIG.UPLOAD_LOG_SHEET) {
       formula = '=AND(LEN($B2)>0, COUNTIFS($B$2:$B, $B2, $M$2:$M, $M2)>1)';
     } else if (sheetName === CONFIG.ORDER_LOG_SHEET || sheetName === CONFIG.RETURN_LOG_SHEET) {
       formula = '=AND(LEN($B2)>0, COUNTIFS($B$2:$B, $B2, $I$2:$I, $I2)>1)';
+    } else if (sheetName === CONFIG.DOWNLOAD_LOG_SHEET) {
+      formula = '=AND(LEN($B2)>0, COUNTIFS($B$2:$B, $B2, $H$2:$H, $H2)>1)';
     } else {
       formula = '=AND(LEN($B2)>0, COUNTIF($B$2:$B, $B2)>1)';
     }
@@ -419,6 +427,10 @@ function setupSystem() {
   const uploadSh = ss.getSheetByName(CONFIG.UPLOAD_LOG_SHEET);
   if (uploadSh) {
     applyDuplicateConditionalFormatting_(uploadSh);
+  }
+  const downloadSh = ss.getSheetByName(CONFIG.DOWNLOAD_LOG_SHEET);
+  if (downloadSh) {
+    applyDuplicateConditionalFormatting_(downloadSh);
   }
 
   // Run repair for any existing rows where Column F has plain filename instead of clickable URL
@@ -2570,211 +2582,226 @@ function deleteLogEntry_(p){
 }
 
 /**
- * Scans Google Sheets (OrderLog, ReturnLog, UploadLog) and Google Drive for duplicate order recordings.
+ * Scans ALL Google Sheets tabs (OrderLog, ReturnLog, UploadLog, DownloadLog, and any custom tabs)
+ * as well as Google Drive for duplicate order recordings.
  * Groups by normalized Order ID + Recording Type (Forward vs Return are distinct).
+ * Guarantees that every tab retains its 1 unique keeper record, and only surplus duplicates are cleaned.
  */
 function scanDuplicateRecords_(p) {
   const user = session_(p.token);
   const targetOrderId = p.orderId ? normalizeOrderId_(p.orderId) : '';
   const keepPolicy = String(p.keepPolicy || 'latest').toLowerCase(); // 'latest' or 'first'
   const orderGroups = {}; // key: normOrder + '|||' + normType
+  const scannedTabs = [];
+  const tabDuplicateCounts = {};
 
-  // 1. Scan OrderLog and ReturnLog (Primary Sheets)
-  const primarySheets = [
-    { name: CONFIG.ORDER_LOG_SHEET, defType: 'Forward' },
-    { name: CONFIG.RETURN_LOG_SHEET, defType: 'Return' }
+  const ss = ss_();
+  const allSheets = ss.getSheets();
+  const systemSheets = [
+    CONFIG.USERS_SHEET,
+    CONFIG.BRANDING_SHEET,
+    CONFIG.SECURITY_LOG_SHEET,
+    CONFIG.TRASH_LOG_SHEET
   ];
 
-  primarySheets.forEach(function(sObj) {
+  allSheets.forEach(function(sh) {
+    const sName = sh.getName();
+    if (systemSheets.indexOf(sName) !== -1) return;
+
     try {
-      const sh = ss_().getSheetByName(sObj.name);
-      if (!sh) return;
       const v = sh.getDataRange().getValues();
+      if (!v || v.length <= 1) return;
+
+      // Inspect Header row (row 0)
+      const headers = v[0].map(function(h) { return String(h || '').trim().toLowerCase(); });
+
+      // 1. Locate Order ID Column
+      let orderCol = headers.findIndex(function(h) {
+        return /order\s*(id|no|num|#)?$/i.test(h) || h === 'orderid' || h === 'order_id' || h === 'order id';
+      });
+      // Fallback for standard known sheets where Order ID is column B (index 1)
+      if (orderCol === -1 && (sName === CONFIG.ORDER_LOG_SHEET || sName === CONFIG.RETURN_LOG_SHEET || 
+          sName === CONFIG.UPLOAD_LOG_SHEET || sName === CONFIG.DOWNLOAD_LOG_SHEET)) {
+        orderCol = 1;
+      }
+      if (orderCol === -1) return; // Skip sheets that have no Order ID column
+
+      scannedTabs.push(sName);
+
+      // 2. Locate Recording Type Column
+      let typeCol = headers.findIndex(function(h) {
+        return /recording\s*type|video\s*type|^type$/i.test(h);
+      });
+      let defaultType = (sName.toLowerCase().indexOf('return') !== -1) ? 'Return' : 'Forward';
+
+      // 3. Locate Platform Column
+      let platformCol = headers.findIndex(function(h) { return /platform/i.test(h); });
+
+      // 4. Locate User/Packer Email Column
+      let emailCol = headers.findIndex(function(h) { return /packer|user|email/i.test(h); });
+
+      // 5. Locate Drive File ID Column
+      let fileIdCol = headers.findIndex(function(h) {
+        return /drive\s*(file\s*)?id|file\s*id|fileid|video\s*drive\s*id/i.test(h);
+      });
+      if (fileIdCol === -1) {
+        if (sName === CONFIG.ORDER_LOG_SHEET || sName === CONFIG.RETURN_LOG_SHEET) fileIdCol = 4;
+        else if (sName === CONFIG.UPLOAD_LOG_SHEET) fileIdCol = 9;
+      }
+
+      // 6. Locate File Name Column
+      let fileNameCol = headers.findIndex(function(h) { return /file\s*name|filename/i.test(h); });
+
+      // 7. Locate Playback URL Column
+      let playbackCol = headers.findIndex(function(h) { return /playback|preview|url/i.test(h); });
+      if (playbackCol === -1 && (sName === CONFIG.ORDER_LOG_SHEET || sName === CONFIG.RETURN_LOG_SHEET)) {
+        playbackCol = 5;
+      }
+
+      // 8. Locate Status Column
+      let statusCol = headers.findIndex(function(h) { return /status/i.test(h); });
+
+      // 9. Locate Timestamp Column
+      let timeCol = headers.findIndex(function(h) { return /timestamp|date|time/i.test(h); });
+      if (timeCol === -1) timeCol = 0;
+
       for (let i = 1; i < v.length; i++) {
-        const rawOrder = String(v[i][1] || '').trim();
+        const rawOrder = String(v[i][orderCol] || '').trim();
         const normOrder = normalizeOrderId_(rawOrder);
         if (!normOrder) continue;
         if (targetOrderId && normOrder !== targetOrderId) continue;
 
-        const rawType = String(v[i][8] || sObj.defType).trim();
-        const normType = normalize_(rawType || sObj.defType);
+        let rawType = typeCol >= 0 ? String(v[i][typeCol] || '').trim() : '';
+        if (!rawType) rawType = defaultType;
+        const normType = normalize_(rawType || defaultType);
         const groupKey = normOrder + '|||' + normType;
 
-        const fid = String(v[i][4] || '').trim();
-        const playback = String(v[i][5] || '').trim();
-        const rawTs = v[i][0];
+        const fid = fileIdCol >= 0 ? String(v[i][fileIdCol] || '').trim() : '';
+        const playback = playbackCol >= 0 ? String(v[i][playbackCol] || '').trim() : '';
+        const rawTs = timeCol >= 0 ? v[i][timeCol] : '';
         const tsDate = rawTs instanceof Date ? rawTs : new Date(rawTs);
         const tsIso = !isNaN(tsDate.getTime()) ? tsDate.toISOString() : String(rawTs || '');
+        const platformVal = platformCol >= 0 ? String(v[i][platformCol] || 'Amazon').trim() : 'Amazon';
+        const emailVal = emailCol >= 0 ? String(v[i][emailCol] || '').trim() : '';
+        const statusVal = statusCol >= 0 ? String(v[i][statusCol] || 'Completed').trim() : 'Completed';
+        const fileNameVal = fileNameCol >= 0 ? String(v[i][fileNameCol] || '').trim() : '';
 
         if (!orderGroups[groupKey]) {
           orderGroups[groupKey] = {
             orderId: rawOrder,
-            platform: String(v[i][2] || 'Amazon').trim(),
-            recordingType: rawType || sObj.defType,
+            platform: platformVal,
+            recordingType: rawType || defaultType,
             normOrder: normOrder,
             normType: normType,
-            primaryEntries: [],
-            uploadEntries: []
+            entriesBySheet: {}
           };
         }
 
-        orderGroups[groupKey].primaryEntries.push({
-          sheet: sObj.name,
+        if (!orderGroups[groupKey].entriesBySheet[sName]) {
+          orderGroups[groupKey].entriesBySheet[sName] = [];
+        }
+
+        orderGroups[groupKey].entriesBySheet[sName].push({
+          sheet: sName,
           row: i + 1,
           timestamp: tsIso,
           timeMs: !isNaN(tsDate.getTime()) ? tsDate.getTime() : 0,
-          packerEmail: String(v[i][3] || '').trim(),
+          packerEmail: emailVal,
           fileId: fid,
+          fileName: fileNameVal,
           playbackUrl: playback || (fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : ''),
-          status: String(v[i][7] || 'Completed').trim(),
-          source: 'primary_log'
+          status: statusVal
         });
       }
-    } catch(err) {
-      console.warn('scanDuplicateRecords_ error scanning ' + sObj.name + ':', err);
+    } catch(sheetErr) {
+      console.warn('scanDuplicateRecords_ error scanning tab ' + sName + ':', sheetErr);
     }
   });
 
-  // 2. Scan UploadLog for redundant rows
-  try {
-    const uploadSh = ss_().getSheetByName(CONFIG.UPLOAD_LOG_SHEET);
-    if (uploadSh) {
-      const uv = uploadSh.getDataRange().getValues();
-      for (let i = 1; i < uv.length; i++) {
-        const rawOrder = String(uv[i][1] || '').trim();
-        const normOrder = normalizeOrderId_(rawOrder);
-        if (!normOrder) continue;
-        if (targetOrderId && normOrder !== targetOrderId) continue;
-
-        const rawType = String(uv[i][12] || 'Forward').trim();
-        const normType = normalize_(rawType || 'Forward');
-        const groupKey = normOrder + '|||' + normType;
-
-        const fid = String(uv[i][9] || '').trim();
-        const rawTs = uv[i][0];
-        const tsDate = rawTs instanceof Date ? rawTs : new Date(rawTs);
-        const tsIso = !isNaN(tsDate.getTime()) ? tsDate.toISOString() : String(rawTs || '');
-        const st = String(uv[i][10] || '').trim();
-
-        if (!orderGroups[groupKey]) {
-          orderGroups[groupKey] = {
-            orderId: rawOrder,
-            platform: String(uv[i][2] || 'Amazon').trim(),
-            recordingType: rawType || 'Forward',
-            normOrder: normOrder,
-            normType: normType,
-            primaryEntries: [],
-            uploadEntries: []
-          };
-        }
-
-        orderGroups[groupKey].uploadEntries.push({
-          sheet: CONFIG.UPLOAD_LOG_SHEET,
-          row: i + 1,
-          timestamp: tsIso,
-          timeMs: !isNaN(tsDate.getTime()) ? tsDate.getTime() : 0,
-          packerEmail: String(uv[i][3] || '').trim(),
-          fileId: fid,
-          fileName: String(uv[i][4] || '').trim(),
-          playbackUrl: fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : '',
-          status: st || 'Completed',
-          source: 'upload_log'
-        });
-      }
-    }
-  } catch(err) {
-    console.warn('scanDuplicateRecords_ error scanning UploadLog:', err);
-  }
-
-  // 3. Evaluate duplicates with strict unique-preservation guarantee:
-  // An order is ONLY a duplicate if it has MORE THAN ONE entry in primary logs,
-  // or MORE THAN ONE entry in UploadLog, or distinct duplicate video files in Drive.
-  // Exactly ONE unique entry is ALWAYS designated as the KEEPER in each sheet and will NEVER be deleted or moved!
+  // Evaluate duplicates across all tabs
   const duplicateGroups = [];
   let totalDuplicateSheetRows = 0;
   let totalDriveFilesToMove = 0;
 
   Object.keys(orderGroups).forEach(function(k) {
     const grp = orderGroups[k];
-    const pEntries = grp.primaryEntries || [];
-    const uEntries = grp.uploadEntries || [];
+    const sheetNames = Object.keys(grp.entriesBySheet);
 
-    // Check if there are redundant rows in primary sheet or in upload sheet
-    const hasPrimaryDupes = pEntries.length > 1;
-    const hasUploadDupes = uEntries.length > 1;
-
-    // Check distinct file IDs
+    let hasAnySheetDuplicates = false;
+    const allKeepers = [];
+    const allDuplicates = [];
     const allFileIds = [];
-    pEntries.forEach(function(e) { if (e.fileId && e.fileId.length > 5) allFileIds.push(e.fileId); });
-    uEntries.forEach(function(e) { if (e.fileId && e.fileId.length > 5) allFileIds.push(e.fileId); });
-    const uniqueFileIds = Array.from(new Set(allFileIds));
-    const hasDriveFileDupes = uniqueFileIds.length > 1;
 
-    // IF NO REDUNDANCY EXISTS AT ALL (1 entry in primary and/or 1 in upload, 1 file): SKIP!
-    // This guarantees that single, unique recordings are NEVER flagged or touched!
-    if (!hasPrimaryDupes && !hasUploadDupes && !hasDriveFileDupes) {
+    sheetNames.forEach(function(sName) {
+      const entries = grp.entriesBySheet[sName];
+      entries.forEach(function(e) {
+        if (e.fileId && e.fileId.length > 5) allFileIds.push(e.fileId);
+      });
+
+      // Sort entries in this tab based on keepPolicy
+      if (keepPolicy === 'first') {
+        entries.sort(function(a, b) { return a.timeMs - b.timeMs; });
+      } else {
+        entries.sort(function(a, b) { return b.timeMs - a.timeMs; });
+      }
+
+      if (entries.length > 1) {
+        hasAnySheetDuplicates = true;
+        // Pick sheet keeper (prefer entry with valid fileId)
+        let kIdx = entries.findIndex(function(e) { return e.fileId && e.fileId.length > 5; });
+        if (kIdx === -1) kIdx = 0;
+        const sheetKeeper = entries[kIdx];
+        allKeepers.push(sheetKeeper);
+
+        const dupes = entries.filter(function(_, idx) { return idx !== kIdx; });
+        dupes.forEach(function(d) {
+          allDuplicates.push(d);
+          tabDuplicateCounts[sName] = (tabDuplicateCounts[sName] || 0) + 1;
+        });
+      } else if (entries.length === 1) {
+        allKeepers.push(entries[0]);
+      }
+    });
+
+    const uniqueFileIds = Array.from(new Set(allFileIds));
+    const hasDriveDuplicates = uniqueFileIds.length > 1;
+
+    // IF NO REDUNDANCY IN ANY SHEET AND NO MULTIPLE DRIVE FILES: SKIP!
+    if (!hasAnySheetDuplicates && !hasDriveDuplicates) {
       return;
     }
 
-    // Sort order according to policy:
-    // 'latest': Newest first (index 0 is newest)
-    // 'first': Oldest first (index 0 is earliest)
-    if (keepPolicy === 'first') {
-      pEntries.sort(function(a, b) { return a.timeMs - b.timeMs; });
-      uEntries.sort(function(a, b) { return a.timeMs - b.timeMs; });
-    } else {
-      pEntries.sort(function(a, b) { return b.timeMs - a.timeMs; });
-      uEntries.sort(function(a, b) { return b.timeMs - a.timeMs; });
+    // Pick Master Keeper for UI representation:
+    // Priority: OrderLog / ReturnLog > UploadLog > DownloadLog > other
+    let masterKeeper = allKeepers.find(function(k) {
+      return k.sheet === CONFIG.ORDER_LOG_SHEET || k.sheet === CONFIG.RETURN_LOG_SHEET;
+    });
+    if (!masterKeeper) {
+      masterKeeper = allKeepers.find(function(k) { return k.sheet === CONFIG.UPLOAD_LOG_SHEET; });
     }
-
-    // Pick unique primary keeper (prefer entry with valid fileId)
-    let pKeeper = null;
-    let pDuplicates = [];
-    if (pEntries.length > 0) {
-      let pKIdx = pEntries.findIndex(function(e) { return e.fileId && e.fileId.length > 5; });
-      if (pKIdx === -1) pKIdx = 0;
-      pKeeper = pEntries[pKIdx];
-      pDuplicates = pEntries.filter(function(_, idx) { return idx !== pKIdx; });
+    if (!masterKeeper) {
+      masterKeeper = allKeepers.find(function(k) { return k.sheet === CONFIG.DOWNLOAD_LOG_SHEET; });
     }
-
-    // Pick unique upload keeper (prefer entry matching keeper fileId, or valid fileId)
-    let uKeeper = null;
-    let uDuplicates = [];
-    if (uEntries.length > 0) {
-      let uKIdx = -1;
-      if (pKeeper && pKeeper.fileId) {
-        uKIdx = uEntries.findIndex(function(e) { return e.fileId === pKeeper.fileId; });
-      }
-      if (uKIdx === -1) {
-        uKIdx = uEntries.findIndex(function(e) { return e.fileId && e.fileId.length > 5; });
-      }
-      if (uKIdx === -1) uKIdx = 0;
-      uKeeper = uEntries[uKIdx];
-      uDuplicates = uEntries.filter(function(_, idx) { return idx !== uKIdx; });
+    if (!masterKeeper && allKeepers.length > 0) {
+      masterKeeper = allKeepers[0];
     }
-
-    // Master Unique Keeper (the single authoritative recording that is permanently retained)
-    const masterKeeper = pKeeper || uKeeper;
     if (!masterKeeper) return;
 
-    // Preserved File IDs: neither the primary keeper's video nor upload keeper's video can ever be moved!
+    // Protected File IDs: NO kept entry's file can ever be moved to Trash!
     const protectedFileIds = {};
-    if (pKeeper && pKeeper.fileId) protectedFileIds[pKeeper.fileId] = true;
-    if (uKeeper && uKeeper.fileId) protectedFileIds[uKeeper.fileId] = true;
-
-    // Collect all duplicate entries to be removed
-    const allDupes = pDuplicates.concat(uDuplicates);
-    if (allDupes.length === 0 && !hasDriveFileDupes) {
-      return;
-    }
+    allKeepers.forEach(function(k) {
+      if (k.fileId && k.fileId.length > 5) {
+        protectedFileIds[k.fileId] = true;
+      }
+    });
 
     const seenFidsToMove = {};
     Object.keys(protectedFileIds).forEach(function(fid) {
-      seenFidsToMove[fid] = true; // Protected keeper videos are NEVER moved to trash!
+      seenFidsToMove[fid] = true; // Never move protected keeper video!
     });
 
     const duplicatesOut = [];
-    allDupes.forEach(function(dup) {
+    allDuplicates.forEach(function(dup) {
       totalDuplicateSheetRows++;
       const isSurplusVideoFile = dup.fileId && dup.fileId.length > 5 && !seenFidsToMove[dup.fileId];
       if (isSurplusVideoFile) {
@@ -2795,11 +2822,14 @@ function scanDuplicateRecords_(p) {
       });
     });
 
+    let totalEntries = 0;
+    sheetNames.forEach(function(s) { totalEntries += grp.entriesBySheet[s].length; });
+
     duplicateGroups.push({
       orderId: grp.orderId,
       platform: grp.platform,
       recordingType: grp.recordingType,
-      totalEntries: (pEntries.length + uEntries.length),
+      totalEntries: totalEntries,
       keeper: {
         sheet: masterKeeper.sheet,
         row: masterKeeper.row,
@@ -2817,16 +2847,18 @@ function scanDuplicateRecords_(p) {
     totalDuplicateOrders: duplicateGroups.length,
     totalDuplicateSheetRows: totalDuplicateSheetRows,
     totalDuplicateDriveVideos: totalDriveFilesToMove,
+    scannedTabs: scannedTabs,
+    tabSummary: tabDuplicateCounts,
     groups: duplicateGroups,
     message: duplicateGroups.length > 0
-      ? `Found ${duplicateGroups.length} duplicate order recordings (${totalDuplicateSheetRows} surplus sheet rows and ${totalDriveFilesToMove} duplicate videos in Google Drive). Exactly 1 unique original recording per order will be preserved.`
-      : 'No duplicate recordings found in Google Sheets or Google Drive. All order recordings are unique.'
+      ? `Found ${duplicateGroups.length} duplicate order recordings across all tabs (${totalDuplicateSheetRows} surplus sheet rows and ${totalDriveFilesToMove} duplicate videos in Google Drive). Exactly 1 unique original recording per order will be preserved in each tab.`
+      : 'No duplicate recordings found across any sheet tabs or Google Drive. All order recordings are unique.'
   };
 }
 
 /**
- * Removes duplicate records from Google Sheets and safely moves duplicate video files
- * in Google Drive into a dedicated "Trash" subfolder in the EXACT same date series folder hierarchy.
+ * Removes duplicate records from ALL Google Sheets tabs (OrderLog, ReturnLog, UploadLog, DownloadLog, and rest)
+ * and safely moves duplicate video files in Google Drive into a dedicated "Trash" subfolder in the EXACT same date series folder hierarchy.
  * Never calls file.setTrashed(true) or permanently deletes the videos.
  *
  * Strict Safety Guarantee:
@@ -2841,7 +2873,7 @@ function removeDuplicateRecords_(p) {
   const removeSheetEntries = p.removeSheetEntries !== false;
 
   return withScriptLock_(function() {
-    // 1. Rescan current state under lock using the exact requested keepPolicy
+    // 1. Rescan current state under lock across all tabs using requested keepPolicy
     const scan = scanDuplicateRecords_({
       token: p.token,
       orderId: p.orderId,
@@ -2854,7 +2886,8 @@ function removeDuplicateRecords_(p) {
         cleanedOrdersCount: 0,
         removedSheetRowsCount: 0,
         movedDriveVideosCount: 0,
-        message: 'No duplicate records found to remove.'
+        removedBySheet: {},
+        message: 'No duplicate records found to remove across any tabs.'
       };
     }
 
@@ -2863,6 +2896,7 @@ function removeDuplicateRecords_(p) {
     let archivedCount = 0;
     const movedFilesLog = [];
     const rowsToDeleteBySheet = {}; // sheetName -> array of row numbers
+    const removedBySheet = {};
 
     // Prepare TrashLog sheet for non-destructive audit archive
     let trashSh = null;
@@ -2900,7 +2934,6 @@ function removeDuplicateRecords_(p) {
         });
       }
 
-      // If no surplus duplicates remain, nothing to delete for this group
       if (duplicates.length === 0) return;
 
       // 2. Move duplicate video files in Google Drive into "Trash" folder inside the same date series folder
@@ -3003,10 +3036,9 @@ function removeDuplicateRecords_(p) {
         });
       }
 
-      // 3. Mark duplicate sheet rows for deletion (Keeper row is GUARANTEED excluded)
+      // 3. Mark duplicate sheet rows for deletion across ALL tabs (Keeper row is GUARANTEED excluded)
       if (removeSheetEntries) {
         duplicates.forEach(function(dup) {
-          // Double safeguard: Never delete the keeper row
           if (keeper && dup.sheet === keeper.sheet && Number(dup.row) === Number(keeper.row)) {
             return;
           }
@@ -3029,36 +3061,50 @@ function removeDuplicateRecords_(p) {
       } catch(_) {}
     });
 
-    // 5. Delete marked rows from each sheet in descending order so indices remain exact
+    // 5. Delete marked rows from each sheet in descending order
     if (removeSheetEntries) {
       Object.keys(rowsToDeleteBySheet).forEach(function(sheetName) {
         try {
           const sh = ss_().getSheetByName(sheetName);
           if (!sh) return;
           const rowList = rowsToDeleteBySheet[sheetName];
-          // Remove duplicates in rowList and sort descending
           const uniqueRows = Array.from(new Set(rowList)).sort(function(a, b) { return b - a; });
+          let sheetRemovedCount = 0;
           uniqueRows.forEach(function(rIdx) {
             if (rIdx >= 2 && rIdx <= sh.getMaxRows()) {
               try {
                 sh.deleteRow(rIdx);
                 removedSheetRowsCount++;
+                sheetRemovedCount++;
               } catch(delErr) {
                 console.warn('Error deleting row ' + rIdx + ' from ' + sheetName + ':', delErr);
               }
             }
           });
+          if (sheetRemovedCount > 0) {
+            removedBySheet[sheetName] = sheetRemovedCount;
+          }
         } catch(shErr) {
           console.warn('Error processing deletions in ' + sheetName + ':', shErr);
         }
       });
     }
 
-    // 6. Refresh conditional formatting highlights across OrderLog, ReturnLog, and UploadLog
+    // 6. Refresh conditional formatting highlights across ALL affected and scanned sheets!
     try {
-      applyDuplicateConditionalFormatting_(ss_().getSheetByName(CONFIG.ORDER_LOG_SHEET));
-      applyDuplicateConditionalFormatting_(ss_().getSheetByName(CONFIG.RETURN_LOG_SHEET));
-      applyDuplicateConditionalFormatting_(ss_().getSheetByName(CONFIG.UPLOAD_LOG_SHEET));
+      const sheetsToRefresh = Array.from(new Set([
+        CONFIG.ORDER_LOG_SHEET,
+        CONFIG.RETURN_LOG_SHEET,
+        CONFIG.UPLOAD_LOG_SHEET,
+        CONFIG.DOWNLOAD_LOG_SHEET
+      ].concat(scan.scannedTabs || [])));
+
+      sheetsToRefresh.forEach(function(sName) {
+        try {
+          const sh = ss_().getSheetByName(sName);
+          if (sh) applyDuplicateConditionalFormatting_(sh);
+        } catch(_) {}
+      });
     } catch(fmtErr) {
       console.warn('Formatting update error:', fmtErr);
     }
@@ -3067,12 +3113,15 @@ function removeDuplicateRecords_(p) {
 
     // 7. Security audit log
     try {
+      const sheetDetails = Object.keys(removedBySheet).map(function(s) {
+        return s + ': ' + removedBySheet[s];
+      }).join(', ');
       sheet_(CONFIG.SECURITY_LOG_SHEET).appendRow([
         new Date(),
         user.email,
-        'DEDUPLICATE_CLEANUP',
+        'DEDUPLICATE_CLEANUP_ALL_TABS',
         'SUCCESS',
-        `Cleaned ${scan.groups.length} duplicate orders. Preserved unique original recordings. Removed ${removedSheetRowsCount} surplus sheet rows, moved ${movedDriveVideosCount} duplicate videos to date-series Trash folders, archived ${archivedCount} entries in TrashLog.`
+        `Cleaned ${scan.groups.length} duplicate orders across all tabs (${sheetDetails || '0 rows'}). Moved ${movedDriveVideosCount} duplicate videos to date-series Trash folders, archived ${archivedCount} entries in TrashLog.`
       ]);
       SpreadsheetApp.flush();
     } catch(_) {}
@@ -3083,8 +3132,10 @@ function removeDuplicateRecords_(p) {
       removedSheetRowsCount: removedSheetRowsCount,
       movedDriveVideosCount: movedDriveVideosCount,
       archivedCount: archivedCount,
+      removedBySheet: removedBySheet,
+      scannedTabs: scan.scannedTabs || [],
       movedFiles: movedFilesLog,
-      message: `Cleaned ${scan.groups.length} duplicate order(s). Preserved all unique original recordings. Removed ${removedSheetRowsCount} redundant sheet row(s) and moved ${movedDriveVideosCount} duplicate video(s) to date-series Trash folders.`
+      message: `Cleaned ${scan.groups.length} duplicate order(s) across all tabs. Preserved all unique original recordings. Removed ${removedSheetRowsCount} redundant sheet row(s) and moved ${movedDriveVideosCount} duplicate video(s) to date-series Trash folders.`
     };
   }, 30000);
 }

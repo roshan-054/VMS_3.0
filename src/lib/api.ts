@@ -437,6 +437,8 @@ export interface ScanDuplicatesResult {
   totalDuplicateSheetRows: number;
   totalDuplicateDriveVideos: number;
   groups: DuplicateGroupItem[];
+  scannedTabs?: string[];
+  tabSummary?: Record<string, number>;
   message?: string;
   error?: string;
 }
@@ -447,6 +449,8 @@ export interface RemoveDuplicatesResult {
   removedSheetRowsCount: number;
   movedDriveVideosCount: number;
   archivedCount: number;
+  removedBySheet?: Record<string, number>;
+  scannedTabs?: string[];
   movedFiles?: Array<{
     fileId: string;
     fileName: string;
@@ -471,6 +475,8 @@ export async function scanDuplicateRecords(params?: {
     totalDuplicateSheetRows: res.totalDuplicateSheetRows || 0,
     totalDuplicateDriveVideos: res.totalDuplicateDriveVideos || 0,
     groups: res.groups || [],
+    scannedTabs: res.scannedTabs || [],
+    tabSummary: res.tabSummary || {},
     message: res.message,
   };
 }
@@ -496,6 +502,8 @@ export async function removeDuplicateRecords(params: {
     removedSheetRowsCount: res.removedSheetRowsCount || 0,
     movedDriveVideosCount: res.movedDriveVideosCount || 0,
     archivedCount: res.archivedCount || 0,
+    removedBySheet: res.removedBySheet || {},
+    scannedTabs: res.scannedTabs || [],
     movedFiles: res.movedFiles || [],
     message: res.message,
   };

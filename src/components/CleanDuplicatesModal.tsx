@@ -116,8 +116,9 @@ export const CleanDuplicatesModal: React.FC<CleanDuplicatesModalProps> = ({
     }
 
     const confirmMsg =
-      `CONFIRM SAFE DEDUPLICATION (${scanResult.totalDuplicateOrders} Orders with Duplicates):\n\n` +
-      `✓ UNIQUE ORIGINAL GUARANTEE: Exactly 1 unique original recording per order will be 100% PRESERVED in its original sheet and date folder.\n` +
+      `CONFIRM SAFE DEDUPLICATION ACROSS ALL TABS (${scanResult.totalDuplicateOrders} Orders with Duplicates):\n\n` +
+      `✓ UNIQUE ORIGINAL GUARANTEE: Exactly 1 unique original recording per order will be 100% PRESERVED in each sheet and date folder.\n` +
+      `✓ ALL TABS COVERAGE: Surplus duplicate rows will be cleaned from ALL tabs (UploadLog, ReturnLog, OrderLog, DownloadLog, and rest).\n` +
       `✓ SAFE TRASH FOLDER: ${scanResult.totalDuplicateDriveVideos} surplus duplicate video(s) will be moved into a "Trash" subfolder in the same date series folder (NEVER deleted to Drive system bin).\n` +
       `✓ LOG AUDIT: ${scanResult.totalDuplicateSheetRows} surplus duplicate row(s) will be removed from active sheets and permanently archived in "TrashLog".\n\n` +
       `Are you sure you want to proceed?`;
@@ -300,6 +301,19 @@ export const CleanDuplicatesModal: React.FC<CleanDuplicatesModalProps> = ({
                 </div>
               </div>
 
+              {cleanResult.removedBySheet && Object.keys(cleanResult.removedBySheet).length > 0 && (
+                <div className="pt-2 border-t border-emerald-200">
+                  <span className="text-[11px] font-bold text-emerald-900 block mb-1">Rows Deleted by Tab:</span>
+                  <div className="flex flex-wrap gap-1.5 font-mono text-[11px]">
+                    {Object.entries(cleanResult.removedBySheet).map(([sheet, cnt]) => (
+                      <span key={sheet} className="bg-white px-2 py-0.5 rounded border border-emerald-300 text-emerald-800 font-semibold">
+                        {sheet}: {cnt} rows
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {cleanResult.movedFiles && cleanResult.movedFiles.length > 0 && (
                 <div className="mt-2 text-[11px] text-slate-600 bg-white p-3 rounded-lg border border-emerald-200">
                   <span className="font-bold text-slate-800 block mb-1.5">Videos Moved into Date-Series "Trash" Folders:</span>
@@ -327,44 +341,77 @@ export const CleanDuplicatesModal: React.FC<CleanDuplicatesModalProps> = ({
 
           {/* Stats Cards */}
           {scanResult && (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center font-bold text-lg">
-                  <Layers className="w-5 h-5" />
+            <div className="space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center font-bold text-lg">
+                    <Layers className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <span className="text-xs text-slate-500 font-medium">Duplicate Orders</span>
+                    <div className="text-xl font-bold text-slate-900">
+                      {scanResult.totalDuplicateOrders}{' '}
+                      <span className="text-xs font-normal text-slate-500">order(s)</span>
+                    </div>
+                  </div>
                 </div>
-                <div>
-                  <span className="text-xs text-slate-500 font-medium">Duplicate Orders</span>
-                  <div className="text-xl font-bold text-slate-900">
-                    {scanResult.totalDuplicateOrders}{' '}
-                    <span className="text-xs font-normal text-slate-500">order(s)</span>
+
+                <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center font-bold text-lg">
+                    <FileSpreadsheet className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <span className="text-xs text-slate-500 font-medium">Duplicate Sheet Rows</span>
+                    <div className="text-xl font-bold text-amber-700">
+                      {scanResult.totalDuplicateSheetRows}{' '}
+                      <span className="text-xs font-normal text-slate-500">rows</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-red-50 text-red-600 flex items-center justify-center font-bold text-lg">
+                    <Film className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <span className="text-xs text-slate-500 font-medium">Drive Videos to Move</span>
+                    <div className="text-xl font-bold text-red-700">
+                      {scanResult.totalDuplicateDriveVideos}{' '}
+                      <span className="text-xs font-normal text-slate-500">video(s)</span>
+                    </div>
                   </div>
                 </div>
               </div>
 
-              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center font-bold text-lg">
-                  <FileSpreadsheet className="w-5 h-5" />
-                </div>
-                <div>
-                  <span className="text-xs text-slate-500 font-medium">Duplicate Sheet Rows</span>
-                  <div className="text-xl font-bold text-amber-700">
-                    {scanResult.totalDuplicateSheetRows}{' '}
-                    <span className="text-xs font-normal text-slate-500">rows</span>
+              {/* All Tabs Scanned Info Bar */}
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-bold text-slate-700 flex items-center gap-1.5">
+                    <FileSpreadsheet className="w-3.5 h-3.5 text-slate-500" />
+                    All Tabs Scanned:
+                  </span>
+                  <div className="flex flex-wrap gap-1">
+                    {(scanResult.scannedTabs && scanResult.scannedTabs.length > 0
+                      ? scanResult.scannedTabs
+                      : ['OrderLog', 'ReturnLog', 'UploadLog', 'DownloadLog']
+                    ).map((tab) => (
+                      <span key={tab} className="font-mono text-[11px] px-2 py-0.5 bg-white border border-slate-200 rounded text-slate-700 font-medium">
+                        {tab}
+                      </span>
+                    ))}
                   </div>
                 </div>
-              </div>
 
-              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-red-50 text-red-600 flex items-center justify-center font-bold text-lg">
-                  <Film className="w-5 h-5" />
-                </div>
-                <div>
-                  <span className="text-xs text-slate-500 font-medium">Drive Videos to Move</span>
-                  <div className="text-xl font-bold text-red-700">
-                    {scanResult.totalDuplicateDriveVideos}{' '}
-                    <span className="text-xs font-normal text-slate-500">video(s)</span>
+                {scanResult.tabSummary && Object.keys(scanResult.tabSummary).length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                    <span className="text-slate-500 font-medium">Duplicates per tab:</span>
+                    {Object.entries(scanResult.tabSummary).map(([sheet, count]) => (
+                      <span key={sheet} className="font-mono px-1.5 py-0.5 bg-amber-50 text-amber-800 border border-amber-200 rounded font-semibold">
+                        {sheet}: {count}
+                      </span>
+                    ))}
                   </div>
-                </div>
+                )}
               </div>
             </div>
           )}
