@@ -38,6 +38,7 @@ import {
   FileCode
 } from 'lucide-react';
 import { User, UserRole, UserStatus, AdminPermissions } from '../types';
+import { CleanDuplicatesModal } from './CleanDuplicatesModal';
 import { requestApi, checkBackendHealth, uploadBrandingImage, repairSheetPlaybackUrls, runSystemSetup, migrateDriveMonthlyFolders, applySheetConditionalFormatting } from '../lib/api';
 import { getLocalUsers, deleteLocalUserByEmail, getDeletedUserEmails } from '../lib/localAuth';
 import {
@@ -158,6 +159,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
   const [testingHealth, setTestingHealth] = useState(false);
   const [repairingUrls, setRepairingUrls] = useState(false);
   const [refiningFormatting, setRefiningFormatting] = useState(false);
+  const [showCleanDuplicatesModal, setShowCleanDuplicatesModal] = useState(false);
   const [runningSetup, setRunningSetup] = useState(false);
   const [migratingFolders, setMigratingFolders] = useState(false);
   const [showCodeModal, setShowCodeModal] = useState(false);
@@ -1402,11 +1404,53 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                 </div>
               </div>
 
-              {/* 7. Cache & Storage Management */}
+              {/* 7. Dedicated Duplicate Videos & Sheet Entries Cleaner */}
+              <div className="bg-gradient-to-r from-purple-50/70 via-indigo-50/50 to-white rounded-2xl border border-purple-200 p-5 shadow-xs space-y-4">
+                <div className="flex items-center justify-between border-b border-purple-100 pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center font-bold text-xs shadow-xs">
+                      <Trash2 className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-xs font-bold text-slate-900">Remove Duplicate Videos & Sheet Entries</h4>
+                        <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 border border-purple-200">
+                          Non-Destructive Trash Mover
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        Scans OrderLog, ReturnLog, UploadLog, and Google Drive for duplicate order recordings
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-3 bg-white rounded-xl border border-purple-100">
+                  <div className="space-y-1">
+                    <span className="text-xs font-semibold text-slate-800 block">
+                      Dedicated Deduplication & Safe Date-Series Trash Manager
+                    </span>
+                    <span className="text-[11px] text-slate-500 block leading-relaxed">
+                      Safely moves duplicate video files into a dedicated <code className="bg-purple-50 text-purple-700 px-1 py-0.5 rounded font-mono font-bold">Trash</code> folder directly inside the exact same date-series folder hierarchy (<span className="font-mono text-[10px]">.../&lt;Platform&gt;/&lt;Type&gt;/&lt;Month&gt;/&lt;Date&gt;/Trash/</span>). Duplicate rows in Google Sheets are removed and archived into <span className="font-mono font-bold">TrashLog</span>. Videos are never permanently deleted or sent to system trash.
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowCleanDuplicatesModal(true)}
+                    className="px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-sm shrink-0"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Clean Duplicate Videos & Entries
+                  </button>
+                </div>
+              </div>
+
+              {/* 8. Cache & Storage Management */}
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
                 <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
                   <div className="w-7 h-7 rounded-lg bg-red-50 text-red-600 flex items-center justify-center font-bold text-xs">
-                    7
+                    8
                   </div>
                   <div>
                     <h4 className="text-xs font-bold text-slate-900">Cache & Storage Management</h4>
@@ -2592,6 +2636,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
           </div>
         </div>
       )}
+
+      {/* Clean Duplicates Modal */}
+      <CleanDuplicatesModal
+        isOpen={showCleanDuplicatesModal}
+        onClose={() => setShowCleanDuplicatesModal(false)}
+        onShowToast={onShowToast}
+      />
     </div>
   );
 };

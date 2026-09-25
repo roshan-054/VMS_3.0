@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import { HighQualityVideoPlayer } from './HighQualityVideoPlayer';
 import { VideoRecord, User } from '../types';
+import { CleanDuplicatesModal } from './CleanDuplicatesModal';
 import { requestApi, formatFileSize, deleteLogEntry, fetchDriveFileSize } from '../lib/api';
 import { canUserDeleteData } from '../lib/permissions';
 
@@ -97,6 +98,8 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast, current
   const [deleteFromDriveOption, setDeleteFromDriveOption] = useState(true);
   const [deleteFromSheetsOption, setDeleteFromSheetsOption] = useState(true);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [showCleanDuplicatesModal, setShowCleanDuplicatesModal] = useState(false);
+  const [cleanTargetOrder, setCleanTargetOrder] = useState('');
 
   const canDelete = currentUser ? canUserDeleteData(currentUser) : false;
 
@@ -311,6 +314,20 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast, current
             >
               <RotateCcw className="w-3.5 h-3.5" />
               Reset ({activeFilterCount})
+            </button>
+          )}
+          {canDelete && (
+            <button
+              type="button"
+              onClick={() => {
+                setCleanTargetOrder(orderQuery.trim());
+                setShowCleanDuplicatesModal(true);
+              }}
+              className="px-3.5 py-2 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-lg text-xs font-semibold shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+              title="Remove duplicate videos from Drive (safe date-series Trash folder) and duplicate entries from Sheet"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-purple-600" />
+              Clean Duplicates
             </button>
           )}
           <button
@@ -1022,6 +1039,15 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast, current
           </div>
         </div>
       )}
+
+      {/* Clean Duplicates Modal */}
+      <CleanDuplicatesModal
+        isOpen={showCleanDuplicatesModal}
+        onClose={() => setShowCleanDuplicatesModal(false)}
+        onShowToast={onShowToast}
+        initialOrderId={cleanTargetOrder}
+        onCleanSuccess={fetchRecords}
+      />
     </div>
   );
 };

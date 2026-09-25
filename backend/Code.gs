@@ -33,6 +33,7 @@ const CONFIG = {
   UPLOAD_LOG_SHEET: 'UploadLog',
   SECURITY_LOG_SHEET: 'SecurityLog',
   BRANDING_SHEET: 'Branding',
+  TRASH_LOG_SHEET: 'TrashLog',
 
   // Limits
   MAX_VIDEO_BYTES: 1024 * 1024 * 1024 * 5, // 5 GB
@@ -95,6 +96,11 @@ function doPost(e) {
       case 'deleteLogEntry': return output_(deleteLogEntry_(p));
       case 'removeUploadLog': return output_(deleteLogEntry_(p));
       case 'deleteOrderLog': return output_(deleteLogEntry_(p));
+      case 'scanDuplicates':
+      case 'scanDuplicateRecords': return output_(scanDuplicateRecords_(p));
+      case 'cleanDuplicates':
+      case 'removeDuplicates':
+      case 'removeDuplicateRecords': return output_(removeDuplicateRecords_(p));
       case 'applyConditionalFormatting': return output_(applyFormattingEndpoint_());
       case 'getBranding': return output_(getBrandingConfig_());
       case 'saveBranding': return output_(saveBrandingConfig_(p));
@@ -2485,17 +2491,32 @@ function deleteLogEntry_(p){
         SpreadsheetApp.flush();
       }
 
-      // 5. Delete / trash only the specific video files in Google Drive if requested
+      // 5. Move video files in Google Drive into "Trash" folder inside the same date series folder (never permanently delete or system trash)
       let driveTrashedCount = 0;
       if (deleteFromDrive && discoveredDriveIds.length > 0) {
         discoveredDriveIds.forEach(function(dId) {
           if (dId && dId.length > 5) {
             try {
               const file = DriveApp.getFileById(dId);
-              file.setTrashed(true);
+              const parents = file.getParents();
+              const pFolder = parents.hasNext() ? parents.next() : null;
+              if (pFolder) {
+                const trIt = pFolder.getFoldersByName('Trash');
+                const trFolder = trIt.hasNext() ? trIt.next() : pFolder.createFolder('Trash');
+                try {
+                  file.moveTo(trFolder);
+                } catch(_) {
+                  trFolder.addFile(file);
+                  pFolder.removeFile(file);
+                }
+              } else {
+                const root = parentFolder_(p.driveFolderId);
+                const trFolder = getOrCreateFolder_(root, 'Trash');
+                file.moveTo(trFolder);
+              }
               driveTrashedCount++;
             } catch(e) {
-              console.warn('Could not trash drive file ' + dId + ':', e);
+              console.warn('Could not move drive file ' + dId + ' to Trash folder:', e);
             }
           }
         });
@@ -2525,7 +2546,7 @@ function deleteLogEntry_(p){
           user.email,
           'DELETE_LOG_ENTRY',
           'SUCCESS',
-          `Removed logs for Order: ${orderId || 'N/A'}, UploadId: ${uploadId || 'N/A'}, DriveIds: [${discoveredDriveIds.join(', ')}]. Removed ${orderLogsRemoved} OrderLog rows, ${uploadLogsRemoved} UploadLog rows, trashed ${driveTrashedCount} Drive files.`
+          `Removed logs for Order: ${orderId || 'N/A'}, UploadId: ${uploadId || 'N/A'}, DriveIds: [${discoveredDriveIds.join(', ')}]. Removed ${orderLogsRemoved} OrderLog rows, ${uploadLogsRemoved} UploadLog rows, moved ${driveTrashedCount} Drive files to Trash folder.`
         ]);
         SpreadsheetApp.flush();
       } catch(e){}
@@ -2535,7 +2556,7 @@ function deleteLogEntry_(p){
         message: (deleteFromSheets
           ? `Entry removed from Google Sheet logs (${orderLogsRemoved} OrderLog, ${uploadLogsRemoved} UploadLog rows deleted).`
           : 'Logs retained in Google Sheets.') +
-          (driveTrashedCount > 0 ? ` ${driveTrashedCount} video file(s) moved to Google Drive Trash.` : ''),
+          (driveTrashedCount > 0 ? ` ${driveTrashedCount} video file(s) safely moved to date-series "Trash" folder.` : ''),
         orderLogsRemoved: orderLogsRemoved,
         uploadLogsRemoved: uploadLogsRemoved,
         downloadLogsRemoved: downloadLogsRemoved,
@@ -2546,6 +2567,440 @@ function deleteLogEntry_(p){
       return { success: false, error: err.message || String(err) };
     }
   }, 12000);
+}
+
+/**
+ * Scans Google Sheets (OrderLog, ReturnLog, UploadLog) and Google Drive for duplicate order recordings.
+ * Groups by normalized Order ID + Recording Type (Forward vs Return are distinct).
+ */
+function scanDuplicateRecords_(p) {
+  const user = session_(p.token);
+  const targetOrderId = p.orderId ? normalizeOrderId_(p.orderId) : '';
+  const orderGroups = {}; // key: normOrder + '|||' + normType
+
+  // 1. Scan OrderLog and ReturnLog
+  const primarySheets = [
+    { name: CONFIG.ORDER_LOG_SHEET, defType: 'Forward' },
+    { name: CONFIG.RETURN_LOG_SHEET, defType: 'Return' }
+  ];
+
+  primarySheets.forEach(function(sObj) {
+    try {
+      const sh = ss_().getSheetByName(sObj.name);
+      if (!sh) return;
+      const v = sh.getDataRange().getValues();
+      for (let i = 1; i < v.length; i++) {
+        const rawOrder = String(v[i][1] || '').trim();
+        const normOrder = normalizeOrderId_(rawOrder);
+        if (!normOrder) continue;
+        if (targetOrderId && normOrder !== targetOrderId) continue;
+
+        const rawType = String(v[i][8] || sObj.defType).trim();
+        const normType = normalize_(rawType || sObj.defType);
+        const groupKey = normOrder + '|||' + normType;
+
+        const fid = String(v[i][4] || '').trim();
+        const playback = String(v[i][5] || '').trim();
+        const rawTs = v[i][0];
+        const tsDate = rawTs instanceof Date ? rawTs : new Date(rawTs);
+        const tsIso = !isNaN(tsDate.getTime()) ? tsDate.toISOString() : String(rawTs || '');
+
+        if (!orderGroups[groupKey]) {
+          orderGroups[groupKey] = {
+            orderId: rawOrder,
+            platform: String(v[i][2] || 'Amazon').trim(),
+            recordingType: rawType || sObj.defType,
+            normOrder: normOrder,
+            normType: normType,
+            entries: []
+          };
+        }
+
+        orderGroups[groupKey].entries.push({
+          sheet: sObj.name,
+          row: i + 1,
+          timestamp: tsIso,
+          timeMs: !isNaN(tsDate.getTime()) ? tsDate.getTime() : 0,
+          packerEmail: String(v[i][3] || '').trim(),
+          fileId: fid,
+          playbackUrl: playback || (fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : ''),
+          status: String(v[i][7] || 'Completed').trim(),
+          source: 'primary_log'
+        });
+      }
+    } catch(err) {
+      console.warn('scanDuplicateRecords_ error scanning ' + sObj.name + ':', err);
+    }
+  });
+
+  // 2. Scan UploadLog for redundant rows
+  try {
+    const uploadSh = ss_().getSheetByName(CONFIG.UPLOAD_LOG_SHEET);
+    if (uploadSh) {
+      const uv = uploadSh.getDataRange().getValues();
+      for (let i = 1; i < uv.length; i++) {
+        const rawOrder = String(uv[i][1] || '').trim();
+        const normOrder = normalizeOrderId_(rawOrder);
+        if (!normOrder) continue;
+        if (targetOrderId && normOrder !== targetOrderId) continue;
+
+        const rawType = String(uv[i][12] || 'Forward').trim();
+        const normType = normalize_(rawType || 'Forward');
+        const groupKey = normOrder + '|||' + normType;
+
+        const fid = String(uv[i][9] || '').trim();
+        const rawTs = uv[i][0];
+        const tsDate = rawTs instanceof Date ? rawTs : new Date(rawTs);
+        const tsIso = !isNaN(tsDate.getTime()) ? tsDate.toISOString() : String(rawTs || '');
+        const st = String(uv[i][10] || '').trim();
+
+        if (orderGroups[groupKey]) {
+          orderGroups[groupKey].entries.push({
+            sheet: CONFIG.UPLOAD_LOG_SHEET,
+            row: i + 1,
+            timestamp: tsIso,
+            timeMs: !isNaN(tsDate.getTime()) ? tsDate.getTime() : 0,
+            packerEmail: String(uv[i][3] || '').trim(),
+            fileId: fid,
+            fileName: String(uv[i][4] || '').trim(),
+            playbackUrl: fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : '',
+            status: st || 'Completed',
+            source: 'upload_log'
+          });
+        }
+      }
+    }
+  } catch(err) {
+    console.warn('scanDuplicateRecords_ error scanning UploadLog:', err);
+  }
+
+  // 3. Filter only groups that have duplicates (more than 1 entry in primary logs, or multiple entries with distinct fileIds)
+  const duplicateGroups = [];
+  let totalDuplicateSheetRows = 0;
+  let totalDriveFilesToMove = 0;
+
+  Object.keys(orderGroups).forEach(function(k) {
+    const grp = orderGroups[k];
+    const primaryEntries = grp.entries.filter(function(e) { return e.source === 'primary_log'; });
+    
+    // Group qualifies as duplicate if > 1 primary entries exist, or multiple completed uploads with fileIds
+    if (primaryEntries.length > 1 || (grp.entries.length > 1 && grp.entries.some(function(e) { return e.fileId && e.fileId.length > 5; }))) {
+      // Sort newest first
+      grp.entries.sort(function(a, b) {
+        return b.timeMs - a.timeMs;
+      });
+
+      // Best entry is keeper (prefer one with a verified, valid fileId)
+      let keeperIdx = grp.entries.findIndex(function(e) { return e.fileId && e.fileId.length > 5; });
+      if (keeperIdx === -1) keeperIdx = 0;
+      const keeper = grp.entries[keeperIdx];
+
+      const duplicates = [];
+      const seenFids = {};
+      if (keeper.fileId) seenFids[keeper.fileId] = true;
+
+      for (let i = 0; i < grp.entries.length; i++) {
+        if (i === keeperIdx) continue;
+        const entry = grp.entries[i];
+        const isDifferentFile = entry.fileId && entry.fileId.length > 5 && !seenFids[entry.fileId];
+        if (isDifferentFile) {
+          seenFids[entry.fileId] = true;
+          totalDriveFilesToMove++;
+        }
+        totalDuplicateSheetRows++;
+        duplicates.push({
+          sheet: entry.sheet,
+          row: entry.row,
+          timestamp: entry.timestamp,
+          packerEmail: entry.packerEmail,
+          fileId: entry.fileId,
+          fileName: entry.fileName || '',
+          playbackUrl: entry.playbackUrl,
+          status: entry.status,
+          willMoveFileToTrash: isDifferentFile
+        });
+      }
+
+      if (duplicates.length > 0) {
+        duplicateGroups.push({
+          orderId: grp.orderId,
+          platform: grp.platform,
+          recordingType: grp.recordingType,
+          totalEntries: grp.entries.length,
+          keeper: {
+            sheet: keeper.sheet,
+            row: keeper.row,
+            timestamp: keeper.timestamp,
+            packerEmail: keeper.packerEmail,
+            fileId: keeper.fileId,
+            playbackUrl: keeper.playbackUrl
+          },
+          duplicates: duplicates
+        });
+      }
+    }
+  });
+
+  return {
+    success: true,
+    totalDuplicateOrders: duplicateGroups.length,
+    totalDuplicateSheetRows: totalDuplicateSheetRows,
+    totalDuplicateDriveVideos: totalDriveFilesToMove,
+    groups: duplicateGroups,
+    message: duplicateGroups.length > 0
+      ? `Found ${duplicateGroups.length} duplicate order recordings (${totalDuplicateSheetRows} duplicate sheet rows and ${totalDriveFilesToMove} duplicate videos in Google Drive).`
+      : 'No duplicate recordings found in Google Sheets or Google Drive.'
+  };
+}
+
+/**
+ * Removes duplicate records from Google Sheets and safely moves duplicate video files
+ * in Google Drive into a dedicated "Trash" subfolder in the EXACT same date series folder hierarchy.
+ * Never calls file.setTrashed(true) or permanently deletes the videos.
+ */
+function removeDuplicateRecords_(p) {
+  const user = session_(p.token);
+  const keepPolicy = String(p.keepPolicy || 'latest').toLowerCase(); // 'latest' or 'first'
+  const moveDriveVideosToTrash = p.moveDriveVideosToTrash !== false && p.moveDriveVideosToTrashFolder !== false;
+  const removeSheetEntries = p.removeSheetEntries !== false;
+
+  return withScriptLock_(function() {
+    // 1. Rescan current state under lock
+    const scan = scanDuplicateRecords_({ token: p.token, orderId: p.orderId, driveFolderId: p.driveFolderId });
+    if (!scan.success || !scan.groups || scan.groups.length === 0) {
+      return {
+        success: true,
+        cleanedOrdersCount: 0,
+        removedSheetRowsCount: 0,
+        movedDriveVideosCount: 0,
+        message: 'No duplicate records found to remove.'
+      };
+    }
+
+    let movedDriveVideosCount = 0;
+    let removedSheetRowsCount = 0;
+    let archivedCount = 0;
+    const movedFilesLog = [];
+    const rowsToDeleteBySheet = {}; // sheetName -> array of row numbers
+
+    // Prepare TrashLog sheet for non-destructive audit archive
+    let trashSh = null;
+    try {
+      trashSh = ss_().getSheetByName('TrashLog');
+      if (!trashSh) {
+        trashSh = ss_().insertSheet('TrashLog');
+        trashSh.appendRow([
+          'Archived Timestamp',
+          'Original Sheet',
+          'Order ID',
+          'Platform',
+          'Recording Type',
+          'Packer Email',
+          'Drive File ID',
+          'Status',
+          'Action Taken',
+          'Trash Folder Location'
+        ]);
+        trashSh.getRange('A1:J1').setBackground('#f1f5f9').setFontWeight('bold');
+        SpreadsheetApp.flush();
+      }
+    } catch(e) {
+      console.warn('Could not setup TrashLog tab:', e);
+    }
+
+    scan.groups.forEach(function(grp) {
+      let keeper = grp.keeper;
+      let duplicates = grp.duplicates;
+
+      if (keepPolicy === 'first') {
+        const all = [grp.keeper].concat(grp.duplicates);
+        all.sort(function(a, b) {
+          return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+        });
+        keeper = all[0];
+        duplicates = all.slice(1);
+      }
+
+      // 2. Move duplicate video files in Google Drive into "Trash" folder inside the same date series folder
+      if (moveDriveVideosToTrash) {
+        duplicates.forEach(function(dup) {
+          const dId = dup.fileId;
+          // Only move if there is a real file ID and it is not the keeper's file ID
+          if (dId && dId.length > 5 && dId !== keeper.fileId) {
+            try {
+              const file = DriveApp.getFileById(dId);
+              if (file) {
+                // Find file's parent folder (e.g. date folder "2026-09-25")
+                const parents = file.getParents();
+                const pFolder = parents.hasNext() ? parents.next() : null;
+                let targetTrashFolder = null;
+
+                if (pFolder) {
+                  // Create or get "Trash" folder inside the exact same date series folder
+                  const trIt = pFolder.getFoldersByName('Trash');
+                  targetTrashFolder = trIt.hasNext() ? trIt.next() : pFolder.createFolder('Trash');
+                } else {
+                  // Fallback: root parent folder
+                  const root = parentFolder_(p.driveFolderId);
+                  targetTrashFolder = getOrCreateFolder_(root, 'Trash');
+                }
+
+                if (targetTrashFolder) {
+                  // Handle potential duplicate filename in the Trash folder
+                  const existingName = file.getName();
+                  const inTrashIt = targetTrashFolder.getFilesByName(existingName);
+                  if (inTrashIt.hasNext()) {
+                    const extMatch = existingName.match(/(\.[^.]+)$/);
+                    const ext = extMatch ? extMatch[1] : '.mp4';
+                    const base = existingName.replace(/(\.[^.]+)$/, '');
+                    const timeStampStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), '_yyyyMMdd_HHmmss');
+                    file.setName(base + timeStampStr + ext);
+                  }
+
+                  // Move the file into the Trash folder
+                  try {
+                    file.moveTo(targetTrashFolder);
+                  } catch(moveErr) {
+                    targetTrashFolder.addFile(file);
+                    if (pFolder) {
+                      try { pFolder.removeFile(file); } catch(_) {}
+                    }
+                  }
+
+                  movedDriveVideosCount++;
+                  const trashPath = (pFolder ? pFolder.getName() + ' / ' : '') + targetTrashFolder.getName();
+                  movedFilesLog.push({
+                    fileId: dId,
+                    fileName: file.getName(),
+                    orderId: grp.orderId,
+                    trashFolderName: targetTrashFolder.getName(),
+                    parentFolderName: pFolder ? pFolder.getName() : 'Root',
+                    trashFolderUrl: targetTrashFolder.getUrl()
+                  });
+
+                  if (trashSh) {
+                    try {
+                      trashSh.appendRow([
+                        new Date(),
+                        dup.sheet,
+                        grp.orderId,
+                        grp.platform,
+                        grp.recordingType,
+                        dup.packerEmail || user.email,
+                        dId,
+                        dup.status || 'Duplicate',
+                        'Moved video to date-series Trash folder; Removed duplicate sheet row',
+                        trashPath
+                      ]);
+                      archivedCount++;
+                    } catch(_) {}
+                  }
+                }
+              }
+            } catch(fileErr) {
+              console.warn('Could not move duplicate file ' + dId + ' to Trash folder:', fileErr);
+            }
+          } else if (trashSh && removeSheetEntries) {
+            // Video file was same as keeper or no separate fileId, archive sheet row removal
+            try {
+              trashSh.appendRow([
+                new Date(),
+                dup.sheet,
+                grp.orderId,
+                grp.platform,
+                grp.recordingType,
+                dup.packerEmail || user.email,
+                dId || 'N/A',
+                dup.status || 'Duplicate',
+                'Removed redundant duplicate sheet row (Keeper video retained)',
+                'N/A (Same File ID as keeper)'
+              ]);
+              archivedCount++;
+            } catch(_) {}
+          }
+        });
+      }
+
+      // 3. Mark duplicate sheet rows for deletion
+      if (removeSheetEntries) {
+        duplicates.forEach(function(dup) {
+          if (!rowsToDeleteBySheet[dup.sheet]) {
+            rowsToDeleteBySheet[dup.sheet] = [];
+          }
+          if (dup.row && dup.row >= 2) {
+            rowsToDeleteBySheet[dup.sheet].push(dup.row);
+          }
+        });
+      }
+
+      // 4. Release lingering reservation locks for this order
+      try {
+        ['Amazon', 'D2C', 'JioMart', 'Custom'].forEach(function(pf) {
+          ['Forward', 'Return'].forEach(function(tp) {
+            releaseReservation_(reservationKey_(grp.orderId, pf, tp));
+          });
+        });
+      } catch(_) {}
+    });
+
+    // 5. Delete marked rows from each sheet in descending order so indices remain exact
+    if (removeSheetEntries) {
+      Object.keys(rowsToDeleteBySheet).forEach(function(sheetName) {
+        try {
+          const sh = ss_().getSheetByName(sheetName);
+          if (!sh) return;
+          const rowList = rowsToDeleteBySheet[sheetName];
+          // Remove duplicates in rowList and sort descending
+          const uniqueRows = Array.from(new Set(rowList)).sort(function(a, b) { return b - a; });
+          uniqueRows.forEach(function(rIdx) {
+            if (rIdx >= 2 && rIdx <= sh.getMaxRows()) {
+              try {
+                sh.deleteRow(rIdx);
+                removedSheetRowsCount++;
+              } catch(delErr) {
+                console.warn('Error deleting row ' + rIdx + ' from ' + sheetName + ':', delErr);
+              }
+            }
+          });
+        } catch(shErr) {
+          console.warn('Error processing deletions in ' + sheetName + ':', shErr);
+        }
+      });
+    }
+
+    // 6. Refresh conditional formatting highlights across OrderLog, ReturnLog, and UploadLog
+    try {
+      applyDuplicateConditionalFormatting_(ss_().getSheetByName(CONFIG.ORDER_LOG_SHEET));
+      applyDuplicateConditionalFormatting_(ss_().getSheetByName(CONFIG.RETURN_LOG_SHEET));
+      applyDuplicateConditionalFormatting_(ss_().getSheetByName(CONFIG.UPLOAD_LOG_SHEET));
+    } catch(fmtErr) {
+      console.warn('Formatting update error:', fmtErr);
+    }
+
+    SpreadsheetApp.flush();
+
+    // 7. Security audit log
+    try {
+      sheet_(CONFIG.SECURITY_LOG_SHEET).appendRow([
+        new Date(),
+        user.email,
+        'DEDUPLICATE_CLEANUP',
+        'SUCCESS',
+        `Cleaned ${scan.groups.length} duplicate orders. Removed ${removedSheetRowsCount} sheet rows, moved ${movedDriveVideosCount} duplicate videos to date-series Trash folders, archived ${archivedCount} entries in TrashLog.`
+      ]);
+      SpreadsheetApp.flush();
+    } catch(_) {}
+
+    return {
+      success: true,
+      cleanedOrdersCount: scan.groups.length,
+      removedSheetRowsCount: removedSheetRowsCount,
+      movedDriveVideosCount: movedDriveVideosCount,
+      archivedCount: archivedCount,
+      movedFiles: movedFilesLog,
+      message: `Successfully cleaned ${scan.groups.length} duplicate orders! Removed ${removedSheetRowsCount} duplicate rows from Google Sheets, and safely moved ${movedDriveVideosCount} duplicate videos into date-series "Trash" folders.`
+    };
+  }, 25000);
 }
 
 /* ---------- Reports & Analytics ---------- */
