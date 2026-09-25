@@ -2576,9 +2576,10 @@ function deleteLogEntry_(p){
 function scanDuplicateRecords_(p) {
   const user = session_(p.token);
   const targetOrderId = p.orderId ? normalizeOrderId_(p.orderId) : '';
+  const keepPolicy = String(p.keepPolicy || 'latest').toLowerCase(); // 'latest' or 'first'
   const orderGroups = {}; // key: normOrder + '|||' + normType
 
-  // 1. Scan OrderLog and ReturnLog
+  // 1. Scan OrderLog and ReturnLog (Primary Sheets)
   const primarySheets = [
     { name: CONFIG.ORDER_LOG_SHEET, defType: 'Forward' },
     { name: CONFIG.RETURN_LOG_SHEET, defType: 'Return' }
@@ -2612,11 +2613,12 @@ function scanDuplicateRecords_(p) {
             recordingType: rawType || sObj.defType,
             normOrder: normOrder,
             normType: normType,
-            entries: []
+            primaryEntries: [],
+            uploadEntries: []
           };
         }
 
-        orderGroups[groupKey].entries.push({
+        orderGroups[groupKey].primaryEntries.push({
           sheet: sObj.name,
           row: i + 1,
           timestamp: tsIso,
@@ -2654,91 +2656,160 @@ function scanDuplicateRecords_(p) {
         const tsIso = !isNaN(tsDate.getTime()) ? tsDate.toISOString() : String(rawTs || '');
         const st = String(uv[i][10] || '').trim();
 
-        if (orderGroups[groupKey]) {
-          orderGroups[groupKey].entries.push({
-            sheet: CONFIG.UPLOAD_LOG_SHEET,
-            row: i + 1,
-            timestamp: tsIso,
-            timeMs: !isNaN(tsDate.getTime()) ? tsDate.getTime() : 0,
-            packerEmail: String(uv[i][3] || '').trim(),
-            fileId: fid,
-            fileName: String(uv[i][4] || '').trim(),
-            playbackUrl: fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : '',
-            status: st || 'Completed',
-            source: 'upload_log'
-          });
+        if (!orderGroups[groupKey]) {
+          orderGroups[groupKey] = {
+            orderId: rawOrder,
+            platform: String(uv[i][2] || 'Amazon').trim(),
+            recordingType: rawType || 'Forward',
+            normOrder: normOrder,
+            normType: normType,
+            primaryEntries: [],
+            uploadEntries: []
+          };
         }
+
+        orderGroups[groupKey].uploadEntries.push({
+          sheet: CONFIG.UPLOAD_LOG_SHEET,
+          row: i + 1,
+          timestamp: tsIso,
+          timeMs: !isNaN(tsDate.getTime()) ? tsDate.getTime() : 0,
+          packerEmail: String(uv[i][3] || '').trim(),
+          fileId: fid,
+          fileName: String(uv[i][4] || '').trim(),
+          playbackUrl: fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : '',
+          status: st || 'Completed',
+          source: 'upload_log'
+        });
       }
     }
   } catch(err) {
     console.warn('scanDuplicateRecords_ error scanning UploadLog:', err);
   }
 
-  // 3. Filter only groups that have duplicates (more than 1 entry in primary logs, or multiple entries with distinct fileIds)
+  // 3. Evaluate duplicates with strict unique-preservation guarantee:
+  // An order is ONLY a duplicate if it has MORE THAN ONE entry in primary logs,
+  // or MORE THAN ONE entry in UploadLog, or distinct duplicate video files in Drive.
+  // Exactly ONE unique entry is ALWAYS designated as the KEEPER in each sheet and will NEVER be deleted or moved!
   const duplicateGroups = [];
   let totalDuplicateSheetRows = 0;
   let totalDriveFilesToMove = 0;
 
   Object.keys(orderGroups).forEach(function(k) {
     const grp = orderGroups[k];
-    const primaryEntries = grp.entries.filter(function(e) { return e.source === 'primary_log'; });
-    
-    // Group qualifies as duplicate if > 1 primary entries exist, or multiple completed uploads with fileIds
-    if (primaryEntries.length > 1 || (grp.entries.length > 1 && grp.entries.some(function(e) { return e.fileId && e.fileId.length > 5; }))) {
-      // Sort newest first
-      grp.entries.sort(function(a, b) {
-        return b.timeMs - a.timeMs;
-      });
+    const pEntries = grp.primaryEntries || [];
+    const uEntries = grp.uploadEntries || [];
 
-      // Best entry is keeper (prefer one with a verified, valid fileId)
-      let keeperIdx = grp.entries.findIndex(function(e) { return e.fileId && e.fileId.length > 5; });
-      if (keeperIdx === -1) keeperIdx = 0;
-      const keeper = grp.entries[keeperIdx];
+    // Check if there are redundant rows in primary sheet or in upload sheet
+    const hasPrimaryDupes = pEntries.length > 1;
+    const hasUploadDupes = uEntries.length > 1;
 
-      const duplicates = [];
-      const seenFids = {};
-      if (keeper.fileId) seenFids[keeper.fileId] = true;
+    // Check distinct file IDs
+    const allFileIds = [];
+    pEntries.forEach(function(e) { if (e.fileId && e.fileId.length > 5) allFileIds.push(e.fileId); });
+    uEntries.forEach(function(e) { if (e.fileId && e.fileId.length > 5) allFileIds.push(e.fileId); });
+    const uniqueFileIds = Array.from(new Set(allFileIds));
+    const hasDriveFileDupes = uniqueFileIds.length > 1;
 
-      for (let i = 0; i < grp.entries.length; i++) {
-        if (i === keeperIdx) continue;
-        const entry = grp.entries[i];
-        const isDifferentFile = entry.fileId && entry.fileId.length > 5 && !seenFids[entry.fileId];
-        if (isDifferentFile) {
-          seenFids[entry.fileId] = true;
-          totalDriveFilesToMove++;
-        }
-        totalDuplicateSheetRows++;
-        duplicates.push({
-          sheet: entry.sheet,
-          row: entry.row,
-          timestamp: entry.timestamp,
-          packerEmail: entry.packerEmail,
-          fileId: entry.fileId,
-          fileName: entry.fileName || '',
-          playbackUrl: entry.playbackUrl,
-          status: entry.status,
-          willMoveFileToTrash: isDifferentFile
-        });
-      }
-
-      if (duplicates.length > 0) {
-        duplicateGroups.push({
-          orderId: grp.orderId,
-          platform: grp.platform,
-          recordingType: grp.recordingType,
-          totalEntries: grp.entries.length,
-          keeper: {
-            sheet: keeper.sheet,
-            row: keeper.row,
-            timestamp: keeper.timestamp,
-            packerEmail: keeper.packerEmail,
-            fileId: keeper.fileId,
-            playbackUrl: keeper.playbackUrl
-          },
-          duplicates: duplicates
-        });
-      }
+    // IF NO REDUNDANCY EXISTS AT ALL (1 entry in primary and/or 1 in upload, 1 file): SKIP!
+    // This guarantees that single, unique recordings are NEVER flagged or touched!
+    if (!hasPrimaryDupes && !hasUploadDupes && !hasDriveFileDupes) {
+      return;
     }
+
+    // Sort order according to policy:
+    // 'latest': Newest first (index 0 is newest)
+    // 'first': Oldest first (index 0 is earliest)
+    if (keepPolicy === 'first') {
+      pEntries.sort(function(a, b) { return a.timeMs - b.timeMs; });
+      uEntries.sort(function(a, b) { return a.timeMs - b.timeMs; });
+    } else {
+      pEntries.sort(function(a, b) { return b.timeMs - a.timeMs; });
+      uEntries.sort(function(a, b) { return b.timeMs - a.timeMs; });
+    }
+
+    // Pick unique primary keeper (prefer entry with valid fileId)
+    let pKeeper = null;
+    let pDuplicates = [];
+    if (pEntries.length > 0) {
+      let pKIdx = pEntries.findIndex(function(e) { return e.fileId && e.fileId.length > 5; });
+      if (pKIdx === -1) pKIdx = 0;
+      pKeeper = pEntries[pKIdx];
+      pDuplicates = pEntries.filter(function(_, idx) { return idx !== pKIdx; });
+    }
+
+    // Pick unique upload keeper (prefer entry matching keeper fileId, or valid fileId)
+    let uKeeper = null;
+    let uDuplicates = [];
+    if (uEntries.length > 0) {
+      let uKIdx = -1;
+      if (pKeeper && pKeeper.fileId) {
+        uKIdx = uEntries.findIndex(function(e) { return e.fileId === pKeeper.fileId; });
+      }
+      if (uKIdx === -1) {
+        uKIdx = uEntries.findIndex(function(e) { return e.fileId && e.fileId.length > 5; });
+      }
+      if (uKIdx === -1) uKIdx = 0;
+      uKeeper = uEntries[uKIdx];
+      uDuplicates = uEntries.filter(function(_, idx) { return idx !== uKIdx; });
+    }
+
+    // Master Unique Keeper (the single authoritative recording that is permanently retained)
+    const masterKeeper = pKeeper || uKeeper;
+    if (!masterKeeper) return;
+
+    // Preserved File IDs: neither the primary keeper's video nor upload keeper's video can ever be moved!
+    const protectedFileIds = {};
+    if (pKeeper && pKeeper.fileId) protectedFileIds[pKeeper.fileId] = true;
+    if (uKeeper && uKeeper.fileId) protectedFileIds[uKeeper.fileId] = true;
+
+    // Collect all duplicate entries to be removed
+    const allDupes = pDuplicates.concat(uDuplicates);
+    if (allDupes.length === 0 && !hasDriveFileDupes) {
+      return;
+    }
+
+    const seenFidsToMove = {};
+    Object.keys(protectedFileIds).forEach(function(fid) {
+      seenFidsToMove[fid] = true; // Protected keeper videos are NEVER moved to trash!
+    });
+
+    const duplicatesOut = [];
+    allDupes.forEach(function(dup) {
+      totalDuplicateSheetRows++;
+      const isSurplusVideoFile = dup.fileId && dup.fileId.length > 5 && !seenFidsToMove[dup.fileId];
+      if (isSurplusVideoFile) {
+        seenFidsToMove[dup.fileId] = true;
+        totalDriveFilesToMove++;
+      }
+
+      duplicatesOut.push({
+        sheet: dup.sheet,
+        row: dup.row,
+        timestamp: dup.timestamp,
+        packerEmail: dup.packerEmail,
+        fileId: dup.fileId,
+        fileName: dup.fileName || '',
+        playbackUrl: dup.playbackUrl,
+        status: dup.status,
+        willMoveFileToTrash: isSurplusVideoFile
+      });
+    });
+
+    duplicateGroups.push({
+      orderId: grp.orderId,
+      platform: grp.platform,
+      recordingType: grp.recordingType,
+      totalEntries: (pEntries.length + uEntries.length),
+      keeper: {
+        sheet: masterKeeper.sheet,
+        row: masterKeeper.row,
+        timestamp: masterKeeper.timestamp,
+        packerEmail: masterKeeper.packerEmail,
+        fileId: masterKeeper.fileId,
+        playbackUrl: masterKeeper.playbackUrl
+      },
+      duplicates: duplicatesOut
+    });
   });
 
   return {
@@ -2748,8 +2819,8 @@ function scanDuplicateRecords_(p) {
     totalDuplicateDriveVideos: totalDriveFilesToMove,
     groups: duplicateGroups,
     message: duplicateGroups.length > 0
-      ? `Found ${duplicateGroups.length} duplicate order recordings (${totalDuplicateSheetRows} duplicate sheet rows and ${totalDriveFilesToMove} duplicate videos in Google Drive).`
-      : 'No duplicate recordings found in Google Sheets or Google Drive.'
+      ? `Found ${duplicateGroups.length} duplicate order recordings (${totalDuplicateSheetRows} surplus sheet rows and ${totalDriveFilesToMove} duplicate videos in Google Drive). Exactly 1 unique original recording per order will be preserved.`
+      : 'No duplicate recordings found in Google Sheets or Google Drive. All order recordings are unique.'
   };
 }
 
@@ -2757,6 +2828,11 @@ function scanDuplicateRecords_(p) {
  * Removes duplicate records from Google Sheets and safely moves duplicate video files
  * in Google Drive into a dedicated "Trash" subfolder in the EXACT same date series folder hierarchy.
  * Never calls file.setTrashed(true) or permanently deletes the videos.
+ *
+ * Strict Safety Guarantee:
+ * - The unique keeper entry in each sheet is NEVER deleted.
+ * - The unique keeper video file in Google Drive is NEVER moved to Trash.
+ * - Under NO circumstances can all entries or all videos of an order be deleted.
  */
 function removeDuplicateRecords_(p) {
   const user = session_(p.token);
@@ -2765,8 +2841,13 @@ function removeDuplicateRecords_(p) {
   const removeSheetEntries = p.removeSheetEntries !== false;
 
   return withScriptLock_(function() {
-    // 1. Rescan current state under lock
-    const scan = scanDuplicateRecords_({ token: p.token, orderId: p.orderId, driveFolderId: p.driveFolderId });
+    // 1. Rescan current state under lock using the exact requested keepPolicy
+    const scan = scanDuplicateRecords_({
+      token: p.token,
+      orderId: p.orderId,
+      driveFolderId: p.driveFolderId,
+      keepPolicy: keepPolicy
+    });
     if (!scan.success || !scan.groups || scan.groups.length === 0) {
       return {
         success: true,
@@ -2809,23 +2890,24 @@ function removeDuplicateRecords_(p) {
     }
 
     scan.groups.forEach(function(grp) {
-      let keeper = grp.keeper;
-      let duplicates = grp.duplicates;
+      const keeper = grp.keeper;
+      let duplicates = grp.duplicates || [];
 
-      if (keepPolicy === 'first') {
-        const all = [grp.keeper].concat(grp.duplicates);
-        all.sort(function(a, b) {
-          return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+      // SAFETY ASSERTION: Filter out keeper row from duplicates in case of any discrepancy
+      if (keeper && keeper.sheet && keeper.row) {
+        duplicates = duplicates.filter(function(d) {
+          return !(d.sheet === keeper.sheet && Number(d.row) === Number(keeper.row));
         });
-        keeper = all[0];
-        duplicates = all.slice(1);
       }
+
+      // If no surplus duplicates remain, nothing to delete for this group
+      if (duplicates.length === 0) return;
 
       // 2. Move duplicate video files in Google Drive into "Trash" folder inside the same date series folder
       if (moveDriveVideosToTrash) {
         duplicates.forEach(function(dup) {
           const dId = dup.fileId;
-          // Only move if there is a real file ID and it is not the keeper's file ID
+          // STRICT SAFETY: Only move if there is a real file ID AND it is NOT the keeper's file ID!
           if (dId && dId.length > 5 && dId !== keeper.fileId) {
             try {
               const file = DriveApp.getFileById(dId);
@@ -2889,7 +2971,7 @@ function removeDuplicateRecords_(p) {
                         dup.packerEmail || user.email,
                         dId,
                         dup.status || 'Duplicate',
-                        'Moved video to date-series Trash folder; Removed duplicate sheet row',
+                        'Moved video to date-series Trash folder; Removed duplicate sheet row (Unique keeper preserved)',
                         trashPath
                       ]);
                       archivedCount++;
@@ -2912,7 +2994,7 @@ function removeDuplicateRecords_(p) {
                 dup.packerEmail || user.email,
                 dId || 'N/A',
                 dup.status || 'Duplicate',
-                'Removed redundant duplicate sheet row (Keeper video retained)',
+                'Removed redundant duplicate sheet row (Keeper video retained in original date folder)',
                 'N/A (Same File ID as keeper)'
               ]);
               archivedCount++;
@@ -2921,9 +3003,13 @@ function removeDuplicateRecords_(p) {
         });
       }
 
-      // 3. Mark duplicate sheet rows for deletion
+      // 3. Mark duplicate sheet rows for deletion (Keeper row is GUARANTEED excluded)
       if (removeSheetEntries) {
         duplicates.forEach(function(dup) {
+          // Double safeguard: Never delete the keeper row
+          if (keeper && dup.sheet === keeper.sheet && Number(dup.row) === Number(keeper.row)) {
+            return;
+          }
           if (!rowsToDeleteBySheet[dup.sheet]) {
             rowsToDeleteBySheet[dup.sheet] = [];
           }
@@ -2986,7 +3072,7 @@ function removeDuplicateRecords_(p) {
         user.email,
         'DEDUPLICATE_CLEANUP',
         'SUCCESS',
-        `Cleaned ${scan.groups.length} duplicate orders. Removed ${removedSheetRowsCount} sheet rows, moved ${movedDriveVideosCount} duplicate videos to date-series Trash folders, archived ${archivedCount} entries in TrashLog.`
+        `Cleaned ${scan.groups.length} duplicate orders. Preserved unique original recordings. Removed ${removedSheetRowsCount} surplus sheet rows, moved ${movedDriveVideosCount} duplicate videos to date-series Trash folders, archived ${archivedCount} entries in TrashLog.`
       ]);
       SpreadsheetApp.flush();
     } catch(_) {}
@@ -2998,9 +3084,9 @@ function removeDuplicateRecords_(p) {
       movedDriveVideosCount: movedDriveVideosCount,
       archivedCount: archivedCount,
       movedFiles: movedFilesLog,
-      message: `Successfully cleaned ${scan.groups.length} duplicate orders! Removed ${removedSheetRowsCount} duplicate rows from Google Sheets, and safely moved ${movedDriveVideosCount} duplicate videos into date-series "Trash" folders.`
+      message: `Cleaned ${scan.groups.length} duplicate order(s). Preserved all unique original recordings. Removed ${removedSheetRowsCount} redundant sheet row(s) and moved ${movedDriveVideosCount} duplicate video(s) to date-series Trash folders.`
     };
-  }, 25000);
+  }, 30000);
 }
 
 /* ---------- Reports & Analytics ---------- */

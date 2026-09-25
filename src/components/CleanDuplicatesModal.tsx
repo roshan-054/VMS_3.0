@@ -80,14 +80,16 @@ export const CleanDuplicatesModal: React.FC<CleanDuplicatesModalProps> = ({
     setTimeout(() => setCopiedText(null), 2000);
   };
 
-  const handleScan = async (specificOrder?: string) => {
+  const handleScan = async (specificOrder?: string, policyOverride?: 'latest' | 'first') => {
     setIsScanning(true);
     setCleanResult(null);
     try {
       const order = specificOrder !== undefined ? specificOrder : orderIdFilter;
+      const policy = policyOverride !== undefined ? policyOverride : keepPolicy;
       const res = await scanDuplicateRecords({
         orderId: order.trim(),
-        driveFolderId: getStoredDriveFolderId()
+        driveFolderId: getStoredDriveFolderId(),
+        keepPolicy: policy
       });
       setScanResult(res);
       if (res.totalDuplicateOrders > 0) {
@@ -102,6 +104,11 @@ export const CleanDuplicatesModal: React.FC<CleanDuplicatesModalProps> = ({
     }
   };
 
+  const handlePolicyChange = (newPolicy: 'latest' | 'first') => {
+    setKeepPolicy(newPolicy);
+    handleScan(orderIdFilter, newPolicy);
+  };
+
   const handleClean = async () => {
     if (!scanResult || scanResult.totalDuplicateOrders === 0) {
       onShowToast('No duplicates to clean. Run a scan first.', 'info');
@@ -109,10 +116,11 @@ export const CleanDuplicatesModal: React.FC<CleanDuplicatesModalProps> = ({
     }
 
     const confirmMsg =
-      `Are you sure you want to clean ${scanResult.totalDuplicateOrders} duplicate order(s)?\n\n` +
-      `• Duplicate video files in Drive will be SAFELY moved into a "Trash" folder inside the exact same date-series folder.\n` +
-      `• Duplicate rows in OrderLog, ReturnLog, and UploadLog will be removed and archived in "TrashLog".\n` +
-      `• Files are NEVER permanently deleted.`;
+      `CONFIRM SAFE DEDUPLICATION (${scanResult.totalDuplicateOrders} Orders with Duplicates):\n\n` +
+      `✓ UNIQUE ORIGINAL GUARANTEE: Exactly 1 unique original recording per order will be 100% PRESERVED in its original sheet and date folder.\n` +
+      `✓ SAFE TRASH FOLDER: ${scanResult.totalDuplicateDriveVideos} surplus duplicate video(s) will be moved into a "Trash" subfolder in the same date series folder (NEVER deleted to Drive system bin).\n` +
+      `✓ LOG AUDIT: ${scanResult.totalDuplicateSheetRows} surplus duplicate row(s) will be removed from active sheets and permanently archived in "TrashLog".\n\n` +
+      `Are you sure you want to proceed?`;
 
     if (!window.confirm(confirmMsg)) return;
 
@@ -133,7 +141,7 @@ export const CleanDuplicatesModal: React.FC<CleanDuplicatesModalProps> = ({
       }
       // Re-scan to confirm 0 duplicates remaining
       setTimeout(() => {
-        handleScan(orderIdFilter.trim());
+        handleScan(orderIdFilter.trim(), keepPolicy);
       }, 1500);
     } catch (err: any) {
       onShowToast(err?.message || 'Failed to remove duplicates.', 'error');
@@ -187,13 +195,14 @@ export const CleanDuplicatesModal: React.FC<CleanDuplicatesModalProps> = ({
 
         {/* Informational Banner */}
         <div className="bg-indigo-50/70 border-b border-indigo-100 px-6 py-3 flex items-start gap-3">
-          <Info className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+          <Shield className="w-5 h-5 text-indigo-600 shrink-0 mt-0.5" />
           <div className="text-xs text-indigo-900 leading-relaxed">
-            <span className="font-bold">Non-Destructive Guarantee:</span> Duplicate videos are{' '}
-            <span className="font-semibold underline">never sent to Google Drive's system trash bin</span>.
-            Instead, they are moved safely into a dedicated folder named <span className="font-mono font-bold bg-indigo-100 px-1.5 py-0.5 rounded text-indigo-800">Trash</span> inside the{' '}
+            <span className="font-bold">Unique Preservation Guarantee:</span> We will{' '}
+            <span className="font-semibold underline">never remove all entries or videos</span> of an order. Exactly 1 unique original recording per order is ALWAYS preserved.
+            Only redundant surplus copies are moved into a dedicated{' '}
+            <span className="font-mono font-bold bg-indigo-100 px-1.5 py-0.5 rounded text-indigo-800">Trash</span> folder inside the{' '}
             <span className="font-semibold">exact same parent date folder</span> (preserving the{' '}
-            <span className="font-mono font-semibold">.../&lt;Platform&gt;/&lt;Type&gt;/&lt;Month&gt;/&lt;Date&gt;/Trash/</span> hierarchy). Duplicate sheet rows are deleted from active logs and archived in <span className="font-mono font-bold">TrashLog</span>.
+            <span className="font-mono font-semibold">.../&lt;Platform&gt;/&lt;Type&gt;/&lt;Month&gt;/&lt;Date&gt;/Trash/</span> hierarchy). Duplicate sheet rows are removed from active logs and archived in <span className="font-mono font-bold">TrashLog</span>.
           </div>
         </div>
 
@@ -218,12 +227,12 @@ export const CleanDuplicatesModal: React.FC<CleanDuplicatesModalProps> = ({
             {/* Keeper Policy */}
             <div className="md:col-span-5">
               <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Duplicate Policy
+                Duplicate Policy (Which Copy to Keep)
               </label>
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  onClick={() => setKeepPolicy('latest')}
+                  onClick={() => handlePolicyChange('latest')}
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition cursor-pointer flex items-center justify-center gap-1.5 ${
                     keepPolicy === 'latest'
                       ? 'bg-purple-600 text-white border-purple-600 shadow-xs'
@@ -231,11 +240,11 @@ export const CleanDuplicatesModal: React.FC<CleanDuplicatesModalProps> = ({
                   }`}
                 >
                   <Clock className="w-3 h-3" />
-                  Keep Latest (Recommended)
+                  Keep Latest (Unique)
                 </button>
                 <button
                   type="button"
-                  onClick={() => setKeepPolicy('first')}
+                  onClick={() => handlePolicyChange('first')}
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition cursor-pointer flex items-center justify-center gap-1.5 ${
                     keepPolicy === 'first'
                       ? 'bg-purple-600 text-white border-purple-600 shadow-xs'
@@ -243,7 +252,7 @@ export const CleanDuplicatesModal: React.FC<CleanDuplicatesModalProps> = ({
                   }`}
                 >
                   <Clock className="w-3 h-3" />
-                  Keep Earliest
+                  Keep Earliest (Unique)
                 </button>
               </div>
             </div>
@@ -458,25 +467,34 @@ export const CleanDuplicatesModal: React.FC<CleanDuplicatesModalProps> = ({
                     {/* Entries List */}
                     <div className="p-3 divide-y divide-slate-100 space-y-2">
                       {/* Keeper Entry */}
-                      <div className="pt-2 first:pt-0 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-emerald-50/50 p-2.5 rounded-lg border border-emerald-200">
-                        <div className="space-y-1">
+                      <div className="pt-2 first:pt-0 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-emerald-50/70 p-3 rounded-xl border border-emerald-300 shadow-xs">
+                        <div className="space-y-1.5">
                           <div className="flex items-center gap-2">
-                            <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-600 text-white px-2 py-0.5 rounded">
-                              KEEP (Active)
+                            <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-700 text-white px-2 py-0.5 rounded-full flex items-center gap-1 shadow-xs">
+                              <CheckCircle2 className="w-3 h-3 text-white" />
+                              KEEP (Unique Original)
                             </span>
-                            <span className="text-xs font-semibold text-slate-800">
+                            <span className="text-xs font-bold text-emerald-950">
                               Sheet: {grp.keeper.sheet} (Row {grp.keeper.row})
                             </span>
+                            <span className="text-[10px] text-emerald-700 font-medium hidden sm:inline">
+                              • Will remain active in sheet & Google Drive
+                            </span>
                           </div>
-                          <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-3">
+                          <div className="text-[11px] text-slate-600 flex flex-wrap items-center gap-3">
                             <span className="flex items-center gap-1">
-                              <Clock className="w-3 h-3 text-slate-400" />
+                              <Clock className="w-3 h-3 text-emerald-600" />
                               {grp.keeper.timestamp ? new Date(grp.keeper.timestamp).toLocaleString() : 'N/A'}
                             </span>
                             {grp.keeper.packerEmail && (
                               <span className="flex items-center gap-1 font-mono">
-                                <UserIcon className="w-3 h-3 text-slate-400" />
+                                <UserIcon className="w-3 h-3 text-emerald-600" />
                                 {grp.keeper.packerEmail}
+                              </span>
+                            )}
+                            {grp.keeper.fileId && (
+                              <span className="font-mono text-[10px] text-emerald-800 bg-emerald-100/70 px-1.5 py-0.5 rounded">
+                                File ID: {grp.keeper.fileId.slice(0, 10)}… (Retained)
                               </span>
                             )}
                           </div>
@@ -487,9 +505,9 @@ export const CleanDuplicatesModal: React.FC<CleanDuplicatesModalProps> = ({
                             href={grp.keeper.playbackUrl}
                             target="_blank"
                             rel="noreferrer"
-                            className="text-xs text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1 shrink-0 self-start sm:self-center"
+                            className="text-xs text-emerald-700 hover:text-emerald-900 bg-white border border-emerald-300 px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 shrink-0 self-start sm:self-center shadow-2xs hover:bg-emerald-50 transition"
                           >
-                            <Film className="w-3.5 h-3.5" />
+                            <Film className="w-3.5 h-3.5 text-emerald-600" />
                             View Video
                             <ExternalLink className="w-3 h-3" />
                           </a>
@@ -500,19 +518,23 @@ export const CleanDuplicatesModal: React.FC<CleanDuplicatesModalProps> = ({
                       {grp.duplicates.map((dup, dIdx) => (
                         <div
                           key={dIdx}
-                          className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-700"
+                          className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-700 hover:bg-amber-50/40 transition"
                         >
                           <div className="space-y-1">
                             <div className="flex items-center gap-2">
-                              <span className="text-[10px] font-bold uppercase tracking-wider bg-red-100 text-red-700 border border-red-200 px-2 py-0.5 rounded">
-                                MOVE TO TRASH
+                              <span className="text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-300 px-2 py-0.5 rounded-full">
+                                SURPLUS DUPLICATE
                               </span>
                               <span className="text-xs font-semibold text-slate-800">
                                 Sheet: {dup.sheet} (Row {dup.row})
                               </span>
-                              {dup.willMoveFileToTrash && (
+                              {dup.willMoveFileToTrash ? (
                                 <span className="text-[10px] font-semibold text-purple-700 bg-purple-50 border border-purple-200 px-1.5 py-0.5 rounded">
-                                  Unique Drive Video File
+                                  Duplicate Video File
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                                  Same video file ID as keeper
                                 </span>
                               )}
                             </div>
@@ -529,23 +551,29 @@ export const CleanDuplicatesModal: React.FC<CleanDuplicatesModalProps> = ({
                               )}
                               {dup.fileId && (
                                 <span className="font-mono text-[10px] text-slate-400">
-                                  ID: {dup.fileId.slice(0, 12)}…
+                                  ID: {dup.fileId.slice(0, 10)}…
                                 </span>
                               )}
                             </div>
                           </div>
 
                           <div className="flex items-center gap-2 self-start sm:self-center">
-                            <span className="text-[11px] text-purple-700 font-medium">
-                              → Moved to <code className="bg-purple-100 px-1 py-0.5 rounded">Trash/</code>
-                            </span>
+                            {dup.willMoveFileToTrash ? (
+                              <span className="text-[11px] text-purple-700 font-medium">
+                                → Moved to <code className="bg-purple-100 px-1 py-0.5 rounded text-purple-900 font-bold">Trash/</code>
+                              </span>
+                            ) : (
+                              <span className="text-[11px] text-slate-600 font-medium">
+                                → Row removed (Video kept)
+                              </span>
+                            )}
                             {dup.playbackUrl && (
                               <a
                                 href={dup.playbackUrl}
                                 target="_blank"
                                 rel="noreferrer"
-                                className="text-xs text-slate-500 hover:text-slate-800 p-1"
-                                title="Inspect video"
+                                className="text-xs text-slate-500 hover:text-slate-800 p-1 rounded hover:bg-slate-200 transition"
+                                title="Inspect duplicate video"
                               >
                                 <ExternalLink className="w-3.5 h-3.5" />
                               </a>

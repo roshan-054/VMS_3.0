@@ -462,6 +462,7 @@ export interface RemoveDuplicatesResult {
 export async function scanDuplicateRecords(params?: {
   orderId?: string;
   driveFolderId?: string;
+  keepPolicy?: 'latest' | 'first';
 }): Promise<ScanDuplicatesResult> {
   const res = await requestApi<ScanDuplicatesResult>('scanDuplicates', params || {});
   return {
