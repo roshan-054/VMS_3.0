@@ -319,7 +319,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
     try {
       const res = await runSystemSetup();
       if (res.success) {
-        onShowToast(res.message || 'Google Sheet setup completed & ReturnLog tab synchronized!', 'success');
+        onShowToast(
+          res.message || `Google Sheet setup completed for "${res.spreadsheetName || 'Sheet'}"! All tabs including "Branding" are synchronized.`,
+          'success'
+        );
       } else {
         onShowToast(res.error || 'Setup failed', 'error');
       }
@@ -1385,10 +1388,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                   <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
                     <div>
                       <span className="text-xs font-semibold text-slate-800 block">
-                        Run Sheet Setup & Create ReturnLog Tab
+                        Run Sheet Setup & Sync All Tabs (Branding, ReturnLog, OrderLog)
                       </span>
                       <span className="text-[11px] text-slate-500">
-                        Initializes or updates Google Sheet headers, adds ReturnLog tab, reorganizes Drive folders, and applies duplicate highlights
+                        Initializes Google Sheet headers, ensures Branding & ReturnLog tabs are visible, reorganizes Drive folders, and configures duplicate highlights
                       </span>
                     </div>
                     <button

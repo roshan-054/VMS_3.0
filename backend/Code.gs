@@ -128,16 +128,39 @@ function scriptProps_(){ return PropertiesService.getScriptProperties(); }
 
 function ss_() {
   const props = scriptProps_();
-  let id = props.getProperty('SPREADSHEET_ID') || CONFIG.HARDWIRED_SPREADSHEET_ID;
-  if(id){
-    try { return SpreadsheetApp.openById(id); } catch(e){ console.warn('Could not open spreadsheet by ID: '+id); }
+  // 1. CRITICAL: If script is running container-bound to a Google Sheet (Extensions > Apps Script),
+  // always prioritize the active spreadsheet that the user is currently working on!
+  try {
+    const active = SpreadsheetApp.getActiveSpreadsheet();
+    if (active) {
+      props.setProperty('SPREADSHEET_ID', active.getId());
+      return active;
+    }
+  } catch (e) {
+    // getActiveSpreadsheet() is unavailable in standalone Apps Script context
   }
-  const active = SpreadsheetApp.getActiveSpreadsheet();
-  if(active){
-    props.setProperty('SPREADSHEET_ID', active.getId());
-    return active;
+
+  // 2. Check explicitly stored SPREADSHEET_ID in Script Properties
+  const propId = props.getProperty('SPREADSHEET_ID');
+  if (propId) {
+    try {
+      return SpreadsheetApp.openById(propId);
+    } catch (e) {
+      console.warn('Could not open spreadsheet by stored SPREADSHEET_ID: ' + propId);
+    }
   }
-  throw new Error('Google Sheet is not configured. Please verify Sheet ID permissions or run setupSystem().');
+
+  // 3. Fall back to hardwired ID
+  const fallbackId = CONFIG.HARDWIRED_SPREADSHEET_ID;
+  if (fallbackId) {
+    try {
+      return SpreadsheetApp.openById(fallbackId);
+    } catch (e) {
+      console.warn('Could not open hardwired spreadsheet: ' + fallbackId);
+    }
+  }
+
+  throw new Error('Google Sheet is not configured. Please open your Google Sheet -> Extensions -> Apps Script and run setupSystem(), or set SPREADSHEET_ID in Project Settings -> Script Properties.');
 }
 
 function parentFolder_(customFolderId) {
@@ -382,6 +405,62 @@ function repairPlaybackUrls() {
   };
 }
 
+function createBrandingTabOnly() {
+  const ss = ss_();
+  let sh = ss.getSheetByName(CONFIG.BRANDING_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(CONFIG.BRANDING_SHEET);
+  }
+  try {
+    sh.showSheet();
+    sh.setTabColor('#4f46e5');
+  } catch (_) {}
+
+  const headers = ['Setting Key', 'Setting Value', 'Last Updated', 'Description'];
+  const existing = sh.getLastColumn() ? sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String) : [];
+  headers.forEach(h => {
+    if (existing.indexOf(h) === -1) sh.getRange(1, sh.getLastColumn() + 1).setValue(h);
+  });
+  if (sh.getFrozenRows() === 0) sh.setFrozenRows(1);
+  try {
+    sh.getRange(1, 1, 1, Math.max(headers.length, sh.getLastColumn())).setFontWeight('bold');
+  } catch(_) {}
+
+  sh.setColumnWidth(1, 180);
+  sh.setColumnWidth(2, 360);
+  sh.setColumnWidth(3, 180);
+  sh.setColumnWidth(4, 300);
+
+  const bVals = sh.getDataRange().getValues();
+  const existingKeys = new Set(bVals.map(r => String(r[0] || '').trim()));
+  const now = new Date();
+  if (!existingKeys.has('AppName')) sh.appendRow(['AppName', 'VMS 3.0', now, 'Application Display Name']);
+  if (!existingKeys.has('AppSubtitle')) sh.appendRow(['AppSubtitle', 'Order Packing System', now, 'Workstation Subtitle']);
+  if (!existingKeys.has('LogoUrl')) sh.appendRow(['LogoUrl', '', now, 'Logo Image URL or Drive Direct Link']);
+  if (!existingKeys.has('FaviconUrl')) sh.appendRow(['FaviconUrl', '', now, 'Browser Favicon URL or Drive Direct Link']);
+  if (!existingKeys.has('BrandingFolderId')) sh.appendRow(['BrandingFolderId', '', now, 'Google Drive Folder for Brand Assets']);
+  if (!existingKeys.has('VideoDriveFolderId') && !existingKeys.has('DriveFolderId')) {
+    sh.appendRow(['VideoDriveFolderId', CONFIG.HARDWIRED_PARENT_FOLDER_ID || '', now, 'Google Drive Root Folder ID for Video Uploads']);
+  }
+  if (!existingKeys.has('LastBrandingSync')) sh.appendRow(['LastBrandingSync', now.toISOString(), now, 'Last Synchronization Timestamp']);
+
+  SpreadsheetApp.flush();
+  Logger.log('==================================================');
+  Logger.log('BRANDING TAB CREATED / VERIFIED SUCCESSFULLY!');
+  Logger.log('Spreadsheet Name: ' + ss.getName());
+  Logger.log('Spreadsheet ID:   ' + ss.getId());
+  Logger.log('Spreadsheet URL:  ' + ss.getUrl());
+  Logger.log('==================================================');
+
+  return {
+    success: true,
+    message: 'Branding tab successfully configured in ' + ss.getName(),
+    spreadsheetId: ss.getId(),
+    spreadsheetName: ss.getName(),
+    spreadsheetUrl: ss.getUrl()
+  };
+}
+
 function setupSystem() {
   const ss = ss_();
   const folder = parentFolder_();
@@ -398,6 +477,9 @@ function setupSystem() {
   specs.forEach(([name,headers])=>{
     let sh=ss.getSheetByName(name);
     if(!sh)sh=ss.insertSheet(name);
+    try {
+      sh.showSheet(); // Guarantee tab is unhidden in the sheet tab bar
+    } catch(_) {}
     const existing=sh.getLastColumn()?sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0].map(String):[];
     headers.forEach(h=>{if(existing.indexOf(h)===-1)sh.getRange(1,sh.getLastColumn()+1).setValue(h)});
     if(sh.getFrozenRows()===0)sh.setFrozenRows(1);
@@ -411,21 +493,24 @@ function setupSystem() {
   const brandSh = ss.getSheetByName(CONFIG.BRANDING_SHEET);
   if (brandSh) {
     try {
+      brandSh.showSheet();
+      brandSh.setTabColor('#4f46e5');
       brandSh.setColumnWidth(1, 180);
       brandSh.setColumnWidth(2, 360);
       brandSh.setColumnWidth(3, 180);
       brandSh.setColumnWidth(4, 300);
       const bVals = brandSh.getDataRange().getValues();
       const existingKeys = new Set(bVals.map(r => String(r[0] || '').trim()));
-      if (!existingKeys.has('AppName')) brandSh.appendRow(['AppName', 'VMS 3.0', new Date(), 'Application Display Name']);
-      if (!existingKeys.has('AppSubtitle')) brandSh.appendRow(['AppSubtitle', 'Order Packing System', new Date(), 'Workstation Subtitle']);
-      if (!existingKeys.has('LogoUrl')) brandSh.appendRow(['LogoUrl', '', new Date(), 'Logo Image URL or Drive Direct Link']);
-      if (!existingKeys.has('FaviconUrl')) brandSh.appendRow(['FaviconUrl', '', new Date(), 'Browser Favicon URL or Drive Direct Link']);
-      if (!existingKeys.has('BrandingFolderId')) brandSh.appendRow(['BrandingFolderId', '', new Date(), 'Google Drive Folder for Brand Assets']);
+      const now = new Date();
+      if (!existingKeys.has('AppName')) brandSh.appendRow(['AppName', 'VMS 3.0', now, 'Application Display Name']);
+      if (!existingKeys.has('AppSubtitle')) brandSh.appendRow(['AppSubtitle', 'Order Packing System', now, 'Workstation Subtitle']);
+      if (!existingKeys.has('LogoUrl')) brandSh.appendRow(['LogoUrl', '', now, 'Logo Image URL or Drive Direct Link']);
+      if (!existingKeys.has('FaviconUrl')) brandSh.appendRow(['FaviconUrl', '', now, 'Browser Favicon URL or Drive Direct Link']);
+      if (!existingKeys.has('BrandingFolderId')) brandSh.appendRow(['BrandingFolderId', '', now, 'Google Drive Folder for Brand Assets']);
       if (!existingKeys.has('VideoDriveFolderId') && !existingKeys.has('DriveFolderId')) {
-        brandSh.appendRow(['VideoDriveFolderId', CONFIG.HARDWIRED_PARENT_FOLDER_ID || '', new Date(), 'Google Drive Root Folder ID for Video Uploads']);
+        brandSh.appendRow(['VideoDriveFolderId', CONFIG.HARDWIRED_PARENT_FOLDER_ID || '', now, 'Google Drive Root Folder ID for Video Uploads']);
       }
-      if (!existingKeys.has('LastBrandingSync')) brandSh.appendRow(['LastBrandingSync', new Date().toISOString(), new Date(), 'Last Synchronization Timestamp']);
+      if (!existingKeys.has('LastBrandingSync')) brandSh.appendRow(['LastBrandingSync', now.toISOString(), now, 'Last Synchronization Timestamp']);
     } catch(bErr) {
       console.warn('Branding setup format notice:', bErr);
     }
@@ -465,11 +550,26 @@ function setupSystem() {
     userSh.appendRow([new Date(), 'Super Admin', 'admin@ops.local', hash_('Admin@123'), 'Admin', 'Approved']);
   }
 
+  SpreadsheetApp.flush();
+
+  Logger.log('==================================================');
+  Logger.log('SYSTEM SETUP COMPLETED SUCCESSFULLY!');
+  Logger.log('Spreadsheet Name: ' + ss.getName());
+  Logger.log('Spreadsheet ID:   ' + ss.getId());
+  Logger.log('Spreadsheet URL:  ' + ss.getUrl());
+  Logger.log('Drive Parent Folder: ' + folder.getName() + ' (' + folder.getId() + ')');
+  Logger.log('Tabs in Spreadsheet:');
+  ss.getSheets().forEach(function(s) {
+    Logger.log('  - ' + s.getName() + (s.isSheetHidden() ? ' [HIDDEN]' : ' [VISIBLE]'));
+  });
+  Logger.log('==================================================');
+
   return {
     success: true,
     message: 'System setup completed & duplicate formatting configured.',
     spreadsheetId: ss.getId(),
     spreadsheetName: ss.getName(),
+    spreadsheetUrl: ss.getUrl(),
     parentFolder: folder.getName(),
     parentFolderId: folder.getId()
   };
