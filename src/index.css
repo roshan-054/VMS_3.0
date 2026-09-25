@@ -19,6 +19,30 @@ html.dark [class~="bg-white"] {
   background-color: #151d30 !important;
 }
 
+/* QR Code optical scan card exception - must ALWAYS remain pure white background and dark text for camera detection */
+.qr-code-white-card,
+html.dark .qr-code-white-card,
+html.dark [class~="qr-code-white-card"],
+html.dark [class*="qr-code-white-card"] {
+  background-color: #ffffff !important;
+  background-image: none !important;
+  color: #0f172a !important;
+  border-color: #cbd5e1 !important;
+}
+
+html.dark .qr-code-white-card *,
+.qr-code-white-card * {
+  color: #0f172a !important;
+}
+
+html.dark .qr-code-white-card .text-blue-600,
+.qr-code-white-card .text-blue-600,
+html.dark .qr-code-white-card svg.lucide-qr-code,
+.qr-code-white-card svg.lucide-qr-code {
+  color: #2563eb !important;
+  stroke: #2563eb !important;
+}
+
 html.dark .bg-slate-50,
 html.dark [class~="bg-slate-50"],
 html.dark [class*="bg-slate-50/"],

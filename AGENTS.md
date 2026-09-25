@@ -41,3 +41,32 @@
 - **Drive Image Asset Storage**: Uploaded logos and favicons are automatically stored inside a dedicated `VMS_Branding` folder in Google Drive and their permanent web URLs are recorded into the Google Sheet.
 - **Favicon Synchronization**: Dynamically updates the document `<link rel="icon">` element and browser tab title.
 - **Permanent Retention**: Configured branding remains permanently active across all screens (Sidebar, Mobile header, Login screen, and Browser tabs).
+
+### 8. AI Dynamic Auto-Focus & Vision Intelligence (Area Targeting & Drive Video Analysis)
+- **Pure Auto-Focusing (Zero Auto-Zooming)**:
+  - Preserves the full, uncropped 1.0x wide-angle packing station camera view at all times (no digital zooming or cropping).
+  - Automatically identifies the active focusing area in real-time:
+    - **Shipping Label / Barcode (AWB)**: Detects barcode stripes & label boundaries and commands the optical camera lens (`pointsOfInterest`, `focusMode: 'continuous'`) to pull sharp focus on the label, with edge clarity enhancement for crisp barcodes & addresses.
+    - **Invoice / Bill of Supply**: Detects document sheets & tabular line items, locking optical focus on the paperwork so item descriptions, pricing, and tax details are clearly legible.
+    - **Product Packing Action**: Locks optical focus onto product handling, polybag insertion, box taping, and tamper-evident sealing.
+    - **Station Overview**: Returns to default station focus across the wide packing table.
+  - Video recording pipeline captures the full uncropped frame (`0, 0, vWidth, vHeight`) while physically focusing on the active target area.
+- **Gemini AI Drive Video Analysis & Calibration**:
+  - Uses Gemini 3.8 Flash (`/api/ai/analyze-packing-video`) to inspect already-uploaded packing videos in Google Drive.
+  - Pinpoints exact focus moments, rates label scanability and invoice legibility, and calibrates auto-focus parameters for the station's live camera engine.
+
+### 9. Real-Time Wireless Phone Barcode Scanner Engine
+- **Turn Smartphone into Laser Barcode Reader**:
+  - Operators can use their iPhone or Android mobile device as a wireless handheld barcode reader without installing any app.
+  - Zero-delay instant pairing via QR code or 4-digit Station PIN (`/?scanner=mobile&pin=XXXX`).
+- **Real-Time WebSocket Sync Pipeline**:
+  - Ultra-low latency (<15ms) bidirectional WebSocket connection (`/ws-scanner`) with automatic reconnect and HTTP fallback buffer (`/api/scanner/broadcast`).
+  - Barcodes scanned on the phone immediately appear in the desktop workstation Order ID field, auto-detect platform (Amazon, D2C, JioMart, Custom), and trigger auto-recording if enabled.
+- **Hardware-Accelerated Dual Vision Decoder**:
+  - Uses native GPU-accelerated `BarcodeDetector` API at 60 FPS for instant detection of 1D (Code 128, Code 39, EAN 13, UPC) and 2D (QR, DataMatrix) codes.
+  - Automatic fallback to `@zxing/library` for universal browser compatibility.
+  - Integrated mobile flashlight torch toggle, camera switcher, vibration haptics, and handheld scanner chirp audio tones.
+- **Remote Workstation Controls from Phone**:
+  - Operators can trigger **Start Recording**, **Stop & Save Video**, and **Camera Refocus** directly from the phone's touch controls while moving around the packing station.
+
+

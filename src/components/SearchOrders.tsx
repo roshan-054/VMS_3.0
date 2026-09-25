@@ -33,6 +33,7 @@ import {
 import { HighQualityVideoPlayer } from './HighQualityVideoPlayer';
 import { VideoRecord, User } from '../types';
 import { CleanDuplicatesModal } from './CleanDuplicatesModal';
+import { AiVideoFocusModal } from './AiVideoFocusModal';
 import { requestApi, formatFileSize, deleteLogEntry, fetchDriveFileSize } from '../lib/api';
 import { canUserDeleteData } from '../lib/permissions';
 
@@ -56,6 +57,7 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast, current
   const [results, setResults] = useState<VideoRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<VideoRecord | null>(null);
+  const [aiFocusRecord, setAiFocusRecord] = useState<VideoRecord | null>(null);
   const [isResolvingSize, setIsResolvingSize] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
@@ -670,6 +672,15 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast, current
                     Play & View Details
                   </button>
 
+                  <button
+                    onClick={() => setAiFocusRecord(r)}
+                    className="px-3 py-2 bg-gradient-to-r from-emerald-50 to-teal-50 hover:from-emerald-100 hover:to-teal-100 text-emerald-800 rounded-xl text-xs font-bold border border-emerald-200 transition flex items-center gap-1.5 cursor-pointer"
+                    title="Run Gemini AI focus analysis to inspect label, invoice, and product packing clarity"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                    AI Focus
+                  </button>
+
                   {r.driveLink && (
                     <button
                       onClick={() => handleDownloadLog(r)}
@@ -1047,6 +1058,16 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast, current
         onShowToast={onShowToast}
         initialOrderId={cleanTargetOrder}
         onCleanSuccess={fetchRecords}
+      />
+
+      {/* AI Video Focus Analysis Modal */}
+      <AiVideoFocusModal
+        isOpen={Boolean(aiFocusRecord)}
+        onClose={() => setAiFocusRecord(null)}
+        orderId={aiFocusRecord?.orderId}
+        fileId={aiFocusRecord?.fileId}
+        driveLink={aiFocusRecord?.driveLink}
+        onShowToast={onShowToast}
       />
     </div>
   );

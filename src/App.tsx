@@ -22,7 +22,9 @@ import {
   Moon,
   Trash2,
   RefreshCw,
-  Sparkles
+  Sparkles,
+  Smartphone,
+  QrCode
 } from 'lucide-react';
 import { User, QueueItem } from './types';
 import { getStoredToken, setStoredToken, dbGetAllQueue, getStoredAutoRefreshInterval, getStoredNightMode, setStoredNightMode, clearUserCache } from './lib/storage';
@@ -37,6 +39,7 @@ import { Analytics } from './components/Analytics';
 import { SystemHealth } from './components/SystemHealth';
 import { AdminPanel } from './components/AdminPanel';
 import { AuthView } from './components/AuthView';
+import { MobilePhoneScanner } from './components/MobilePhoneScanner';
 
 import {
   isMasterAdmin,
@@ -219,6 +222,29 @@ export function App() {
     updateCurrentUser(null);
     showToast('Logged out of workstation', 'info');
   };
+
+  // Check if opened directly in Wireless Phone Barcode Scanner Mode (e.g. from QR code scan or URL query)
+  const isMobileScannerMode = (() => {
+    const params = new URLSearchParams(window.location.search);
+    return (
+      params.get('scanner') === 'mobile' ||
+      params.get('mode') === 'scanner' ||
+      params.get('scanner') === 'phone' ||
+      params.get('role') === 'phone'
+    );
+  })();
+
+  if (isMobileScannerMode) {
+    const params = new URLSearchParams(window.location.search);
+    return (
+      <MobilePhoneScanner
+        initialPin={params.get('pin') || params.get('station') || ''}
+        onExit={() => {
+          window.location.href = window.location.pathname;
+        }}
+      />
+    );
+  }
 
   if (!currentUser) {
     return (

@@ -34,12 +34,18 @@ import {
   Radio,
   Lock,
   Shield,
-  XCircle
+  XCircle,
+  Sliders,
+  Zap
 } from 'lucide-react';
 import { PlatformType, RecordingType, QueueItem } from '../types';
 import { dbPutQueue, getStoredMaxVideoSizeMb } from '../lib/storage';
 import { requestApi, normalizeOrderId, checkDuplicate } from '../lib/api';
 import { triggerUploadWorker } from '../lib/uploadWorker';
+import { sharedAiFocusEngine, FocusMode, FocusState } from '../lib/aiFocusEngine';
+import { AiVideoFocusModal } from './AiVideoFocusModal';
+import { PhoneScannerModal } from './PhoneScannerModal';
+import { sharedScannerSync } from '../lib/phoneScannerSync';
 
 interface ScanRecordProps {
   onQueueUpdated: () => void;
@@ -59,6 +65,13 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   
   const effectivePlatform = platform === 'Custom' ? customPlatform.trim() || 'Custom' : platform;
 
+  // Wireless Phone Barcode Scanner Sync
+  const [isPhoneScannerModalOpen, setIsPhoneScannerModalOpen] = useState(false);
+  const [isPhoneConnected, setIsPhoneConnected] = useState(false);
+  const [connectedPhonesCount, setConnectedPhonesCount] = useState(0);
+  const [phoneDeviceName, setPhoneDeviceName] = useState('');
+  const [autoRecordOnPhoneScan, setAutoRecordOnPhoneScan] = useState(() => localStorage.getItem('vms_phone_auto_record') !== 'false');
+
   // Camera & Stream State
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -74,13 +87,13 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   const [isFocusing, setIsFocusing] = useState(false);
   const [cameraResolution, setCameraResolution] = useState<{ width: number; height: number }>({ width: 1920, height: 1080 });
 
-  // AI Virtual Packing Framing & Focus Zone
-  const [showAiPackingZone, setShowAiPackingZone] = useState<boolean>(() => {
-    return localStorage.getItem('vms_ai_packing_zone') !== 'false';
+  // Real-Time Dynamic AI Auto-Focus & Smart Viewport Framing (PTZ) Engine
+  const [aiFocusEnabled, setAiFocusEnabled] = useState<boolean>(() => {
+    return localStorage.getItem('vms_ai_focus_active') !== 'false';
   });
-  const [packingZonePreset, setPackingZonePreset] = useState<'standard' | 'flyer' | 'carton' | 'grid'>(() => {
-    return (localStorage.getItem('vms_ai_zone_preset') as any) || 'standard';
-  });
+  const [aiFocusMode, setAiFocusMode] = useState<FocusMode>('AUTO');
+  const [aiFocusState, setAiFocusState] = useState<FocusState | null>(null);
+  const [isAiFocusModalOpen, setIsAiFocusModalOpen] = useState(false);
   const [focusClickPoint, setFocusClickPoint] = useState<{ x: number; y: number } | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -204,6 +217,17 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     return () => clearInterval(interval);
   }, []);
 
+  // Continuous vision detector ticker: samples video frame to detect Label, Invoice, or Product
+  useEffect(() => {
+    if (!isCameraActive || !aiFocusEnabled) return;
+    const interval = setInterval(() => {
+      if (videoRef.current && videoRef.current.readyState >= 2) {
+        sharedAiFocusEngine.analyzeFrame(videoRef.current);
+      }
+    }, 120);
+    return () => clearInterval(interval);
+  }, [isCameraActive, aiFocusEnabled]);
+
   // Continuous Canvas Frame & Timestamp Watermark Renderer (Authentic Camera OSD)
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -226,10 +250,21 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
           canvas.height = vHeight;
         }
 
-        // 1. Draw raw video frame with high quality smoothing
+        // 1. Draw video frame with AI Auto-Focus & Dynamic Viewport PTZ
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(video, 0, 0, vWidth, vHeight);
+
+        if (aiFocusEnabled) {
+          const fState = sharedAiFocusEngine.renderFrameToCanvas(video, canvas, ctx);
+          setAiFocusState(fState);
+          // Periodically calibrate optical hardware point-of-interest if supported
+          if (Math.random() < 0.08 && streamRef.current) {
+            const track = streamRef.current.getVideoTracks()[0];
+            sharedAiFocusEngine.applyHardwarePoi(track);
+          }
+        } else {
+          ctx.drawImage(video, 0, 0, vWidth, vHeight);
+        }
 
         // 2. Proportional scale based on resolution
         const scale = Math.max(0.8, vWidth / 1280);
@@ -738,20 +773,33 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     }
   };
 
-  const toggleAiPackingZone = () => {
-    const nextState = !showAiPackingZone;
-    setShowAiPackingZone(nextState);
-    localStorage.setItem('vms_ai_packing_zone', String(nextState));
-    onShowToast(nextState ? 'AI Virtual Packing Guide enabled' : 'AI Packing Guide hidden', 'info');
+  const handleToggleAiFocus = () => {
+    const nextState = !aiFocusEnabled;
+    setAiFocusEnabled(nextState);
+    localStorage.setItem('vms_ai_focus_active', String(nextState));
+    onShowToast(
+      nextState
+        ? 'AI Dynamic Auto-Focus activated (Auto-focusing on Label, Invoice, & Product)'
+        : 'AI Auto-Focus disabled',
+      'info'
+    );
   };
 
-  const handleSelectZonePreset = (preset: 'standard' | 'flyer' | 'carton' | 'grid') => {
-    setPackingZonePreset(preset);
-    localStorage.setItem('vms_ai_zone_preset', preset);
-    if (!showAiPackingZone) {
-      setShowAiPackingZone(true);
-      localStorage.setItem('vms_ai_packing_zone', 'true');
+  const handleSelectFocusMode = (mode: FocusMode) => {
+    setAiFocusMode(mode);
+    sharedAiFocusEngine.setMode(mode);
+    if (!aiFocusEnabled) {
+      setAiFocusEnabled(true);
+      localStorage.setItem('vms_ai_focus_active', 'true');
     }
+    const modeLabels: Record<FocusMode, string> = {
+      AUTO: 'AI Auto-Focus: Intelligent automatic area targeting',
+      LABEL: 'Focus Locked: Shipping Label & Barcodes',
+      INVOICE: 'Focus Locked: Invoice & Paperwork',
+      PRODUCT: 'Focus Locked: Product Packing Zone',
+      OVERVIEW: 'Focus Reset: General Packing Station',
+    };
+    onShowToast(modeLabels[mode] || `Focus set to ${mode}`, 'info');
   };
 
   const handleToggleCamera = async () => {
@@ -990,6 +1038,55 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     }
   };
 
+  const isRecordingRef = useRef(isRecording);
+  isRecordingRef.current = isRecording;
+  const startRecordingRef = useRef(startRecording);
+  startRecordingRef.current = startRecording;
+  const stopRecordingRef = useRef(stopRecording);
+  stopRecordingRef.current = stopRecording;
+
+  // Real-time synchronization with Wireless Phone Barcode Scanner
+  useEffect(() => {
+    sharedScannerSync.connectAsStation(
+      (barcode, _format, _platform, device) => {
+        const cleaned = cleanBarcode(barcode);
+        if (cleaned) {
+          setOrderId(cleaned);
+          detectPlatformAndType(cleaned);
+          onShowToast(`📱 Phone Scanned: ${cleaned} (${device || 'Mobile Phone'})`, 'success');
+        }
+      },
+      (connected, count, device) => {
+        setIsPhoneConnected(connected);
+        setConnectedPhonesCount(count);
+        if (device) setPhoneDeviceName(device);
+      }
+    );
+
+    const unsubCmd = sharedScannerSync.onRemoteCommand((action, device) => {
+      if (action === 'START_RECORDING') {
+        if (!isRecordingRef.current) {
+          startRecordingRef.current();
+          onShowToast(`📱 Remote START from ${device || 'Phone'}`, 'info');
+        }
+      } else if (action === 'STOP_RECORDING') {
+        if (isRecordingRef.current) {
+          stopRecordingRef.current();
+          onShowToast(`📱 Remote STOP from ${device || 'Phone'}`, 'info');
+        }
+      } else if (action === 'TRIGGER_FOCUS') {
+        triggerAutoFocus();
+        onShowToast(`📱 Remote Auto-Focus Triggered`, 'info');
+      } else if (action === 'TOGGLE_CAMERA') {
+        handleToggleCamera();
+      }
+    });
+
+    return () => {
+      unsubCmd();
+    };
+  }, []);
+
   const formatTimer = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -1009,23 +1106,50 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
             Live video capture with automatic local backup and Google Drive sync.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Wireless Phone Barcode Scanner Status & Pair Button */}
+          <button
+            id="open-phone-scanner-modal-btn"
+            type="button"
+            onClick={() => setIsPhoneScannerModalOpen(true)}
+            className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold border transition cursor-pointer shadow-xs whitespace-nowrap shrink-0 ${
+              isPhoneConnected
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100 dark:bg-emerald-950/80 dark:text-emerald-300 dark:border-emerald-700/80 hover:dark:bg-emerald-900/60'
+                : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 dark:bg-blue-950/80 dark:text-blue-200 dark:border-blue-700/80 hover:dark:bg-blue-900/60'
+            }`}
+            title="Connect your phone as a wireless barcode scanner in real-time"
+          >
+            <Smartphone className={`w-3.5 h-3.5 shrink-0 ${isPhoneConnected ? 'text-emerald-600 dark:text-emerald-400' : 'text-blue-600 dark:text-blue-400'}`} />
+            <span className="whitespace-nowrap">
+              {isPhoneConnected
+                ? `Phone Scanner: Active (${connectedPhonesCount})`
+                : 'Phone Barcode Scanner'}
+            </span>
+            {isPhoneConnected ? (
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+            ) : (
+              <span className="text-[10px] font-mono bg-blue-200/90 dark:bg-blue-900 text-blue-900 dark:text-blue-100 border border-blue-300/60 dark:border-blue-600/50 px-2 py-0.5 rounded-full font-bold whitespace-nowrap shrink-0 leading-none">
+                Pair (QR)
+              </span>
+            )}
+          </button>
+
           <span
             id="camera-status-chip"
-            className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border whitespace-nowrap shrink-0 transition ${
               isRecording
-                ? 'bg-red-50 text-red-700 border border-red-200 animate-pulse'
+                ? 'bg-red-50 text-red-700 border-red-200 animate-pulse dark:bg-red-950/80 dark:text-red-300 dark:border-red-800'
                 : isCameraActive
-                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                : 'bg-slate-100 text-slate-600 border border-slate-200'
+                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/80 dark:text-emerald-300 dark:border-emerald-800'
+                : 'bg-slate-100 text-slate-600 border border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'
             }`}
           >
             <span
-              className={`w-2 h-2 rounded-full ${
-                isRecording ? 'bg-red-600' : isCameraActive ? 'bg-emerald-600' : 'bg-slate-400'
+              className={`w-2 h-2 rounded-full shrink-0 ${
+                isRecording ? 'bg-red-600 animate-ping' : isCameraActive ? 'bg-emerald-600' : 'bg-slate-400'
               }`}
             />
-            {isRecording ? `Recording (${formatTimer(recSeconds)})` : isCameraActive ? 'Camera Ready' : 'Camera Off'}
+            <span>{isRecording ? `Recording (${formatTimer(recSeconds)})` : isCameraActive ? 'Camera Ready' : 'Camera Off'}</span>
           </span>
         </div>
       </div>
@@ -1178,65 +1302,37 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
               </div>
             )}
 
-            {/* AI Smart Packing Framing & Virtual Focus Zone Overlay */}
-            {isCameraActive && showAiPackingZone && (
-              <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-10 p-4">
+            {/* Dynamic AI Auto-Focus Reticle (Tracks Label, Invoice, or Product) */}
+            {isCameraActive && aiFocusEnabled && aiFocusState && aiFocusState.detectedType !== 'OVERVIEW' && (
+              <div
+                className="absolute pointer-events-none transition-all duration-300 z-10"
+                style={{
+                  left: `${aiFocusState.boundingBox.x * 100}%`,
+                  top: `${aiFocusState.boundingBox.y * 100}%`,
+                  width: `${aiFocusState.boundingBox.width * 100}%`,
+                  height: `${aiFocusState.boundingBox.height * 100}%`,
+                }}
+              >
+                {/* Floating Animated Brackets */}
                 <div
-                  className={`relative transition-all duration-300 border border-dashed border-emerald-400/50 bg-emerald-400/[0.03] rounded-xl flex items-center justify-center shadow-[0_0_20px_rgba(16,185,129,0.12)] ${
-                    packingZonePreset === 'flyer'
-                      ? 'w-[54%] h-[54%]'
-                      : packingZonePreset === 'carton'
-                      ? 'w-[88%] h-[84%]'
-                      : packingZonePreset === 'grid'
-                      ? 'w-[92%] h-[88%]'
-                      : 'w-[72%] h-[72%]'
+                  className={`w-full h-full relative rounded-xl border border-dashed shadow-lg transition-colors ${
+                    aiFocusState.detectedType === 'LABEL'
+                      ? 'border-emerald-400 bg-emerald-500/5 shadow-emerald-500/10'
+                      : aiFocusState.detectedType === 'INVOICE'
+                      ? 'border-cyan-400 bg-cyan-500/5 shadow-cyan-500/10'
+                      : 'border-amber-400 bg-amber-500/5 shadow-amber-500/10'
                   }`}
                 >
-                  {/* High Precision Corner Brackets */}
-                  <div className="absolute -top-1 -left-1 w-6 h-6 border-t-3 border-l-3 border-emerald-400 rounded-tl-sm shadow-xs" />
-                  <div className="absolute -top-1 -right-1 w-6 h-6 border-t-3 border-r-3 border-emerald-400 rounded-tr-sm shadow-xs" />
-                  <div className="absolute -bottom-1 -left-1 w-6 h-6 border-b-3 border-l-3 border-emerald-400 rounded-bl-sm shadow-xs" />
-                  <div className="absolute -bottom-1 -right-1 w-6 h-6 border-b-3 border-r-3 border-emerald-400 rounded-br-sm shadow-xs" />
+                  {/* Precision corner ticks */}
+                  <div className="absolute -top-1 -left-1 w-5 h-5 border-t-2 border-l-2 border-current rounded-tl-xs" />
+                  <div className="absolute -top-1 -right-1 w-5 h-5 border-t-2 border-r-2 border-current rounded-tr-xs" />
+                  <div className="absolute -bottom-1 -left-1 w-5 h-5 border-b-2 border-l-2 border-current rounded-bl-xs" />
+                  <div className="absolute -bottom-1 -right-1 w-5 h-5 border-b-2 border-r-2 border-current rounded-br-xs" />
 
-                  {/* Top Guide Pill Badge */}
-                  <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 bg-slate-950/90 text-emerald-400 text-[10px] font-mono font-semibold px-2.5 py-0.5 rounded-full border border-emerald-500/50 shadow-md flex items-center gap-1.5 whitespace-nowrap">
-                    <Sparkles className="w-3 h-3 text-emerald-400 animate-pulse" />
-                    AI OPTIMAL PACKING ZONE
-                  </div>
-
-                  {/* Camera Barcode Active Red Scanning Laser when Camera Scanner is ON */}
-                  {isBarcodeMode && !isRecording && (
-                    <div className="absolute inset-x-6 h-0.5 bg-gradient-to-r from-transparent via-red-500 to-transparent shadow-[0_0_12px_rgba(239,68,68,0.8)] animate-bounce" />
-                  )}
-
-                  {/* Center Target Reticle Crosshair */}
-                  <div className="relative flex items-center justify-center pointer-events-none opacity-60">
-                    <div className="w-8 h-8 rounded-full border border-emerald-400/60 flex items-center justify-center">
-                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                    </div>
-                    <div className="absolute w-12 h-px bg-emerald-400/60" />
-                    <div className="absolute h-12 w-px bg-emerald-400/60" />
-                  </div>
-
-                  {/* Rule-of-Thirds Grid Overlay (when Grid preset selected) */}
-                  {packingZonePreset === 'grid' && (
-                    <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 pointer-events-none">
-                      <div className="border-r border-b border-dashed border-cyan-400/30" />
-                      <div className="border-r border-b border-dashed border-cyan-400/30" />
-                      <div className="border-b border-dashed border-cyan-400/30" />
-                      <div className="border-r border-b border-dashed border-cyan-400/30" />
-                      <div className="border-r border-b border-dashed border-cyan-400/30" />
-                      <div className="border-b border-dashed border-cyan-400/30" />
-                      <div className="border-r border-dashed border-cyan-400/30" />
-                      <div className="border-r border-dashed border-cyan-400/30" />
-                      <div />
-                    </div>
-                  )}
-
-                  {/* Bottom Guidance Note */}
-                  <div className="absolute -bottom-3.5 left-1/2 -translate-x-1/2 bg-black/85 backdrop-blur-xs text-slate-200 text-[9px] font-mono px-2.5 py-0.5 rounded-full border border-white/15 shadow-md whitespace-nowrap flex items-center gap-1.5">
-                    <Target className="w-3 h-3 text-amber-400" />
-                    <span>Place Parcel & Barcodes Here • Tap to Focus</span>
+                  {/* Target Pill */}
+                  <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 bg-slate-950/95 px-2.5 py-0.5 rounded-full text-[9px] font-mono font-bold whitespace-nowrap shadow-md border border-white/20 flex items-center gap-1 text-white">
+                    <Sparkles className="w-2.5 h-2.5 text-emerald-400 animate-spin" />
+                    <span>{aiFocusState.label} • AUTO-FOCUSED</span>
                   </div>
                 </div>
               </div>
@@ -1253,9 +1349,21 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                   </div>
 
                   <div className="flex items-center gap-1.5">
-                    <span className="bg-black/70 backdrop-blur-xs text-emerald-400 text-[10px] font-mono px-2 py-0.5 rounded border border-emerald-500/30 flex items-center gap-1">
+                    <span
+                      className={`backdrop-blur-xs text-[10px] font-mono px-2 py-0.5 rounded border flex items-center gap-1 shadow-sm transition-colors ${
+                        aiFocusEnabled && aiFocusState?.detectedType === 'LABEL'
+                          ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500/60 animate-pulse'
+                          : aiFocusEnabled && aiFocusState?.detectedType === 'INVOICE'
+                          ? 'bg-cyan-950/90 text-cyan-300 border-cyan-500/60 animate-pulse'
+                          : aiFocusEnabled && aiFocusState?.detectedType === 'PRODUCT'
+                          ? 'bg-amber-950/90 text-amber-300 border-amber-500/60'
+                          : 'bg-black/70 text-emerald-400 border-emerald-500/30'
+                      }`}
+                    >
                       <Focus className="w-3 h-3 text-emerald-400" />
-                      AUTO-FOCUS
+                      {aiFocusEnabled && aiFocusState
+                        ? `FOCUS: ${aiFocusState.detectedType}`
+                        : 'AUTO-FOCUS'}
                     </span>
 
                     <span className="bg-black/70 backdrop-blur-xs text-blue-300 text-[10px] font-mono px-2 py-0.5 rounded border border-blue-500/30">
@@ -1350,18 +1458,40 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
 
 
                   <button
-                    id="toggle-ai-zone-btn"
+                    id="toggle-ai-focus-btn"
                     type="button"
-                    onClick={toggleAiPackingZone}
-                    className={`px-3.5 py-2.5 border text-sm rounded-lg font-semibold transition inline-flex items-center gap-1.5 shadow-xs ${
-                      showAiPackingZone
+                    onClick={handleToggleAiFocus}
+                    className={`px-3.5 py-2.5 border text-sm rounded-lg font-semibold transition inline-flex items-center gap-1.5 shadow-xs cursor-pointer ${
+                      aiFocusEnabled
                         ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-900'
                         : 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700'
                     }`}
-                    title="Toggle AI Smart Packing Framing & Guide Box"
+                    title="Automatically focuses camera lens onto Shipping Labels, Invoices, and Product Packaging"
                   >
-                    <Sparkles className={`w-4 h-4 ${showAiPackingZone ? 'text-emerald-600' : 'text-slate-500'}`} />
-                    {showAiPackingZone ? 'AI Guide: Active' : 'Enable AI Guide'}
+                    <Sparkles className={`w-4 h-4 ${aiFocusEnabled ? 'text-emerald-600' : 'text-slate-500'}`} />
+                    {aiFocusEnabled ? 'AI Focus: Active' : 'Enable AI Focus'}
+                  </button>
+
+                  <button
+                    id="open-drive-analysis-btn"
+                    type="button"
+                    onClick={() => setIsAiFocusModalOpen(true)}
+                    className="px-3.5 py-2.5 bg-gradient-to-r from-indigo-50 to-purple-50 hover:from-indigo-100 hover:to-purple-100 border border-indigo-200 text-indigo-900 text-sm rounded-lg font-semibold transition inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+                    title="Analyze uploaded packing videos in Google Drive to identify focusing areas with Gemini AI"
+                  >
+                    <Sliders className="w-4 h-4 text-indigo-600" />
+                    Analyze Drive Videos
+                  </button>
+
+                  <button
+                    id="open-phone-scanner-toolbar-btn"
+                    type="button"
+                    onClick={() => setIsPhoneScannerModalOpen(true)}
+                    className="px-3.5 py-2.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-900 dark:bg-blue-950/70 dark:border-blue-700/80 dark:text-blue-200 text-sm rounded-lg font-semibold transition inline-flex items-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap"
+                    title="Connect your phone as a wireless barcode reader in real-time"
+                  >
+                    <Smartphone className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                    <span>{isPhoneConnected ? `Phone Linked (${connectedPhonesCount})` : 'Phone Scanner (QR)'}</span>
                   </button>
                 </>
               )}
@@ -1411,15 +1541,25 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
             </div>
           )}
 
-          {/* AI Virtual Packing Guide Controls - Available Below Buttons */}
-          <div id="ai-guide-options-bar" className="bg-slate-900 border-t border-slate-800 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+          {/* Real-Time AI Auto-Focus Controls & Shift Overrides */}
+          <div id="ai-focus-controls-bar" className="bg-slate-900 border-t border-slate-800 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
             <div className="flex items-center gap-2">
               <div className="flex items-center gap-1.5 text-slate-200 font-semibold">
                 <Sparkles className="w-4 h-4 text-emerald-400" />
-                <span>AI Packing Zone Guide:</span>
+                <span>AI Auto-Focus:</span>
               </div>
-              <span className="text-[11px] text-slate-400 font-sans">
-                (Visual assistant only — not recorded in output video)
+              <span className={`text-[11px] font-mono px-2 py-0.5 rounded border ${
+                aiFocusEnabled && aiFocusState?.detectedType === 'LABEL'
+                  ? 'bg-emerald-950 text-emerald-300 border-emerald-500/50'
+                  : aiFocusEnabled && aiFocusState?.detectedType === 'INVOICE'
+                  ? 'bg-cyan-950 text-cyan-300 border-cyan-500/50'
+                  : aiFocusEnabled && aiFocusState?.detectedType === 'PRODUCT'
+                  ? 'bg-amber-950 text-amber-300 border-amber-500/50'
+                  : 'bg-slate-950 text-slate-400 border-slate-800'
+              }`}>
+                {aiFocusEnabled && aiFocusState
+                  ? `${aiFocusState.label}`
+                  : 'Disabled'}
               </span>
             </div>
 
@@ -1427,73 +1567,74 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
               <div className="inline-flex rounded-lg bg-slate-950 p-1 border border-slate-800 shadow-inner">
                 <button
                   type="button"
-                  onClick={() => handleSelectZonePreset('standard')}
+                  onClick={() => handleSelectFocusMode('AUTO')}
                   className={`px-3 py-1 text-xs rounded-md transition font-medium cursor-pointer ${
-                    showAiPackingZone && packingZonePreset === 'standard'
+                    aiFocusEnabled && aiFocusMode === 'AUTO'
                       ? 'bg-emerald-500 text-slate-950 font-bold shadow-xs'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
                   }`}
-                  title="Standard Box / Medium Parcel (72%)"
+                  title="Automatically identifies focusing area (Label, Invoice, Product)"
                 >
-                  Standard (72%)
+                  Auto (Smart AI)
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleSelectZonePreset('flyer')}
+                  onClick={() => handleSelectFocusMode('LABEL')}
                   className={`px-3 py-1 text-xs rounded-md transition font-medium cursor-pointer ${
-                    showAiPackingZone && packingZonePreset === 'flyer'
+                    aiFocusEnabled && aiFocusMode === 'LABEL'
                       ? 'bg-emerald-500 text-slate-950 font-bold shadow-xs'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
                   }`}
-                  title="Flyer / Polybag / Small Items (54%)"
+                  title="Lock camera focus on Shipping Label / Barcode"
                 >
-                  Flyer (54%)
+                  Focus Label
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleSelectZonePreset('carton')}
+                  onClick={() => handleSelectFocusMode('INVOICE')}
                   className={`px-3 py-1 text-xs rounded-md transition font-medium cursor-pointer ${
-                    showAiPackingZone && packingZonePreset === 'carton'
-                      ? 'bg-emerald-500 text-slate-950 font-bold shadow-xs'
+                    aiFocusEnabled && aiFocusMode === 'INVOICE'
+                      ? 'bg-cyan-500 text-slate-950 font-bold shadow-xs'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
                   }`}
-                  title="Large Carton / Bulk Shipment (88%)"
+                  title="Lock camera focus on Invoice / Bill of Supply"
                 >
-                  Carton (88%)
+                  Focus Invoice
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleSelectZonePreset('grid')}
+                  onClick={() => handleSelectFocusMode('PRODUCT')}
                   className={`px-3 py-1 text-xs rounded-md transition font-medium cursor-pointer ${
-                    showAiPackingZone && packingZonePreset === 'grid'
-                      ? 'bg-emerald-500 text-slate-950 font-bold shadow-xs'
+                    aiFocusEnabled && aiFocusMode === 'PRODUCT'
+                      ? 'bg-amber-500 text-slate-950 font-bold shadow-xs'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
                   }`}
-                  title="3x3 Alignment Grid"
+                  title="Lock camera focus on Product Packing Zone"
                 >
-                  3×3 Grid
+                  Focus Product
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSelectFocusMode('OVERVIEW')}
+                  className={`px-3 py-1 text-xs rounded-md transition font-medium cursor-pointer ${
+                    aiFocusMode === 'OVERVIEW'
+                      ? 'bg-slate-700 text-white font-bold'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                  }`}
+                  title="Reset to Full Packing Station Focus"
+                >
+                  Overview
                 </button>
               </div>
 
-
               <button
                 type="button"
-                onClick={toggleAiPackingZone}
-                className={`px-3 py-1 text-xs font-semibold rounded-md border transition cursor-pointer inline-flex items-center gap-1.5 ${
-                  showAiPackingZone
-                    ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/25'
-                    : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200 hover:bg-slate-700'
-                }`}
-                title={showAiPackingZone ? 'Hide Guide Frame' : 'Show Guide Frame'}
+                onClick={() => setIsAiFocusModalOpen(true)}
+                className="px-3 py-1 text-xs font-semibold rounded-md border border-indigo-500/50 bg-indigo-500/15 text-indigo-300 hover:bg-indigo-500/25 transition cursor-pointer inline-flex items-center gap-1.5"
+                title="Use uploaded packing videos in Google Drive for AI focus analysis and calibration"
               >
-                {showAiPackingZone ? (
-                  <>
-                    <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                    Hide Frame
-                  </>
-                ) : (
-                  'Show Frame'
-                )}
+                <Sliders className="w-3 h-3 text-indigo-400" />
+                <span>Calibrate with Drive Videos</span>
               </button>
             </div>
           </div>
@@ -1513,10 +1654,22 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <label htmlFor="orderIdInput" className="text-xs font-semibold text-slate-700">Order ID / Tracking Number</label>
-                <span className="text-[11px] text-slate-500 flex items-center gap-1">
-                  <Barcode className="w-3.5 h-3.5 text-blue-600" />
-                  USB Scanner
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-slate-500 flex items-center gap-1">
+                    <Barcode className="w-3.5 h-3.5 text-blue-600" />
+                    USB Scanner
+                  </span>
+                  <span className="text-slate-300 dark:text-slate-600">|</span>
+                  <button
+                    type="button"
+                    onClick={() => setIsPhoneScannerModalOpen(true)}
+                    className="text-[11px] text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-semibold flex items-center gap-1 hover:underline cursor-pointer whitespace-nowrap"
+                    title="Connect phone as wireless barcode reader"
+                  >
+                    <Smartphone className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                    <span>{isPhoneConnected ? 'Phone: Linked' : 'Phone Scanner'}</span>
+                  </button>
+                </div>
               </div>
               <div className="relative">
                 <input
@@ -1713,6 +1866,37 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
           </div>
         </div>
       </div>
+
+      {/* AI Video Focus & Area Identification Modal */}
+      <AiVideoFocusModal
+        isOpen={isAiFocusModalOpen}
+        onClose={() => setIsAiFocusModalOpen(false)}
+        orderId={orderId.trim()}
+        onShowToast={onShowToast}
+        onAppliedCalibration={() => {
+          setAiFocusEnabled(true);
+          setAiFocusMode('AUTO');
+        }}
+      />
+
+      {/* Wireless Phone Barcode Scanner Setup & Real-Time Sync Modal */}
+      <PhoneScannerModal
+        isOpen={isPhoneScannerModalOpen}
+        onClose={() => setIsPhoneScannerModalOpen(false)}
+        onShowToast={onShowToast}
+        autoRecordOnScan={autoRecordOnPhoneScan}
+        onToggleAutoRecord={(enabled) => {
+          setAutoRecordOnPhoneScan(enabled);
+          localStorage.setItem('vms_phone_auto_record', String(enabled));
+        }}
+        onSimulateBarcode={(code) => {
+          const cleaned = cleanBarcode(code);
+          if (cleaned) {
+            setOrderId(cleaned);
+            detectPlatformAndType(cleaned);
+          }
+        }}
+      />
     </div>
   );
 };

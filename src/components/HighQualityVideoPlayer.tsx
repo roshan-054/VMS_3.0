@@ -21,6 +21,7 @@ import {
   RotateCw,
   Move
 } from 'lucide-react';
+import { AiVideoFocusModal } from './AiVideoFocusModal';
 
 interface HighQualityVideoPlayerProps {
   fileId?: string;
@@ -59,6 +60,7 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
   const [isCapturing, setIsCapturing] = useState(false);
   const [snapshotSuccess, setSnapshotSuccess] = useState(false);
   const [snapshotMessage, setSnapshotMessage] = useState<string>('Snapshot Saved as PNG!');
+  const [isAiFocusModalOpen, setIsAiFocusModalOpen] = useState(false);
 
   // High-Precision Inspection Zoom & Pan State
   const [zoom, setZoom] = useState<number>(1);
@@ -669,11 +671,21 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
               </a>
             )}
 
+            {/* AI Focus Area Analysis with Gemini */}
+            <button
+              onClick={() => setIsAiFocusModalOpen(true)}
+              className="px-3.5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-95 text-white font-bold rounded-xl shadow-md transition flex items-center gap-2 cursor-pointer"
+              title="Use Gemini AI to analyze focus shifts for shipping labels, invoices, and product packing"
+            >
+              <Sparkles className="w-4 h-4 text-emerald-200" />
+              <span>AI Focus Analysis</span>
+            </button>
+
             {/* Snapshot Button */}
             <button
               onClick={handleCaptureSnapshot}
               disabled={isCapturing}
-              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-bold rounded-xl shadow-md transition flex items-center gap-2 disabled:opacity-50 cursor-pointer"
+              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 hover:text-white font-semibold rounded-xl border border-slate-700 transition flex items-center gap-2 disabled:opacity-50 cursor-pointer"
               title="Capture high-resolution PNG proof screenshot of the current frame"
             >
               {isCapturing ? (
@@ -681,7 +693,7 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
               ) : (
                 <Camera className="w-4 h-4" />
               )}
-              <span>{isCapturing ? 'Capturing...' : 'Capture Snapshot (PNG)'}</span>
+              <span>{isCapturing ? 'Capturing...' : 'Capture Snapshot'}</span>
             </button>
 
             {/* Fullscreen Button */}
@@ -695,6 +707,20 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
           </div>
         </div>
       </div>
+
+      {/* AI Video Focus Analysis Modal */}
+      <AiVideoFocusModal
+        isOpen={isAiFocusModalOpen}
+        onClose={() => setIsAiFocusModalOpen(false)}
+        orderId={orderId}
+        fileId={fileId}
+        driveLink={driveLink}
+        onShowToast={(msg, type) => {
+          setSnapshotMessage(msg);
+          setSnapshotSuccess(true);
+          setTimeout(() => setSnapshotSuccess(false), 3000);
+        }}
+      />
     </div>
   );
 };
