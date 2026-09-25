@@ -233,7 +233,13 @@ export async function checkBackendHealth(customUrl?: string): Promise<{
 
 export function normalizeOrderId(id: string | null | undefined): string {
   if (!id) return '';
-  return String(id).trim().toLowerCase().replace(/\s+/g, '');
+  let s = String(id).trim().toLowerCase();
+  // Strip leading '#', 'no.', 'order#', 'order ', etc.
+  s = s.replace(/^(?:order\s*#?|#|no\.?\s*)/i, '');
+  // Strip trailing .0 or .00 from numeric cell exports
+  s = s.replace(/\.0+$/, '');
+  // Remove all whitespace
+  return s.replace(/\s+/g, '');
 }
 
 export async function checkDuplicate(meta: {

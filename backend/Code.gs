@@ -635,7 +635,13 @@ function adminDeleteUser_(p){
 function normalize_(v){return String(v||'').trim().toLowerCase()}
 function normalizeOrderId_(v){
   if(v===null||v===undefined)return '';
-  return String(v).trim().toLowerCase().replace(/\s+/g, '');
+  let s = String(v).trim().toLowerCase();
+  // Strip leading '#', 'no.', 'order#', 'order ', etc.
+  s = s.replace(/^(?:order\s*#?|#|no\.?\s*)/i, '');
+  // Strip trailing .0 or .00 from numeric cell exports
+  s = s.replace(/\.0+$/, '');
+  // Remove all whitespace
+  return s.replace(/\s+/g, '');
 }
 function key_(order,platform,type){return [normalizeOrderId_(order),normalize_(platform),normalize_(type||'Forward')].join('||')}
 
@@ -773,6 +779,7 @@ function checkDuplicateOrder_(p){
   const type = String(p.recordingType || 'Forward').trim();
   if (!order) return { success: true, isDuplicate: false };
 
+  // 1. Check completed Google Drive / Sheet recordings
   const dup = completedDuplicate_(order, platform, type);
   if (dup) {
     return {
@@ -782,28 +789,56 @@ function checkDuplicateOrder_(p){
       message: `Order ${order} has an existing ${type} recording in Google Drive.`
     };
   }
+
+  // 2. Check active in-progress uploads/reservations (prevents collision between 2 packers)
+  const k = reservationKey_(order, platform, type);
+  const activeRes = activeReservation_(k);
+  if (activeRes) {
+    return {
+      success: true,
+      isDuplicate: true,
+      isInProgress: true,
+      existing: {
+        orderId: order,
+        platform: platform,
+        recordingType: type,
+        packerEmail: activeRes.email,
+        timestamp: new Date(activeRes.time).toISOString(),
+        status: 'In Progress (Active Upload)'
+      },
+      message: `Order ${order} is currently being packed/uploaded by ${activeRes.email}.`
+    };
+  }
+
   return { success: true, isDuplicate: false };
 }
 
 /**
- * Safe concurrency lock helper that uses tryLock with fallback
- * to prevent 'Lock timeout: another process was holding the lock for too long' errors.
+ * Robust concurrency lock helper with retry backoff.
+ * Ensures exclusive execution to prevent duplicate row creation and sheet contention.
  */
 function withScriptLock_(fn, timeoutMs) {
   const lock = LockService.getScriptLock();
-  const waitMs = timeoutMs || 8000;
+  const waitMs = timeoutMs || 15000;
   let hasLock = false;
   try {
     hasLock = lock.tryLock(waitMs);
   } catch(e) {
     console.warn('Script lock acquisition note:', e);
   }
+  if (!hasLock) {
+    Utilities.sleep(400);
+    try {
+      hasLock = lock.tryLock(8000);
+    } catch(e) {}
+  }
+  if (!hasLock) {
+    throw new Error('Server busy: another packer operation is currently updating Google Sheets. Please retry in a moment.');
+  }
   try {
     return fn();
   } finally {
-    if (hasLock) {
-      try { lock.releaseLock(); } catch(_) {}
-    }
+    try { lock.releaseLock(); } catch(_) {}
   }
 }
 
@@ -940,13 +975,36 @@ function reservationKey_(order,platform,type){return 'DUPRES_'+Utilities.base64E
 
 function activeReservation_(k){
   const raw=PropertiesService.getScriptProperties().getProperty(k);if(!raw)return null;
-  try{const o=JSON.parse(raw);if(Date.now()-Number(o.time||0)>CONFIG.RESERVATION_SECONDS*1000){PropertiesService.getScriptProperties().deleteProperty(k);return null}return o}catch(_){PropertiesService.getScriptProperties().deleteProperty(k);return null}
+  try{
+    const o=JSON.parse(raw);
+    // Active reservations expire after 1 hour (3600s) if abandoned
+    const maxAgeMs = Math.min(3600 * 1000, Number(CONFIG.RESERVATION_SECONDS || 3600) * 1000);
+    if(Date.now() - Number(o.time || 0) > maxAgeMs){
+      PropertiesService.getScriptProperties().deleteProperty(k);
+      return null;
+    }
+    return o;
+  }catch(_){
+    PropertiesService.getScriptProperties().deleteProperty(k);
+    return null;
+  }
 }
 
-function reserve_(order,platform,type,user){
+function reserve_(order,platform,type,user,currentUploadId){
   const props=PropertiesService.getScriptProperties(), k=reservationKey_(order,platform,type), existing=activeReservation_(k);
-  if(existing)return {allowed:false,existing};
-  props.setProperty(k,JSON.stringify({time:Date.now(),email:user.email,uploadId:''}));return {allowed:true,key:k};
+  if(existing) {
+    // If it's the exact same uploadId or same user retrying within 10 minutes
+    if (currentUploadId && existing.uploadId && existing.uploadId === currentUploadId) {
+      return {allowed:true, key:k, existing:existing};
+    }
+    if (existing.email && existing.email === user.email && (Date.now() - Number(existing.time || 0) < 600000)) {
+      props.setProperty(k, JSON.stringify({time:Date.now(), email:user.email, uploadId:currentUploadId||''}));
+      return {allowed:true, key:k, existing:existing};
+    }
+    return {allowed:false, existing:existing, key:k};
+  }
+  props.setProperty(k,JSON.stringify({time:Date.now(),email:user.email,uploadId:currentUploadId||''}));
+  return {allowed:true,key:k};
 }
 
 function releaseReservation_(k){if(k)PropertiesService.getScriptProperties().deleteProperty(k)}
@@ -1507,7 +1565,16 @@ function startUpload_(p){
   let reservation = null;
   return withScriptLock_(function() {
     try {
-      reservation = reserve_(order,platform,type,user);
+      reservation = reserve_(order, platform, type, user, uploadId);
+      if (!reservation.allowed && !isBypass) {
+        return {
+          success: false,
+          code: 'ACTIVE_UPLOAD_IN_PROGRESS',
+          isDuplicate: true,
+          error: `Duplicate Order Collision: Order "${order}" (${platform} - ${type}) is currently being packed/uploaded by ${reservation.existing ? reservation.existing.email : 'another station'}. Duplicate upload was prevented.`,
+          existing: reservation.existing
+        };
+      }
 
       const sessionData = {
         uploadId: uploadId,
@@ -1525,6 +1592,7 @@ function startUpload_(p){
         driveFolderId: driveFolderId,
         targetFolderId: folder.getId(),
         reservationKey: reservation ? reservation.key : '',
+        bypassDuplicate: isBypass,
         createdAt: Date.now()
       };
 
@@ -1622,7 +1690,8 @@ function uploadChunk_(p){
       if (code === 308) {
         // Chunk accepted, upload in progress
         const pct = Math.min(99, Math.round(((inclusiveEnd + 1) / total) * 100));
-        updateUploadLog_(uploadId, 'Uploading chunk ' + (chunkIndex + 1) + '/' + totalChunks, pct, '', 'In Progress', '');
+        // Note: Do not call updateUploadLog_ on intermediate chunks to prevent Google Sheets
+        // lock contention when multiple packers upload concurrently.
         return {
           success: true,
           complete: false,
@@ -1674,7 +1743,6 @@ function uploadChunk_(p){
               const retryCode = retryResp.getResponseCode();
               if (retryCode === 308) {
                 const pct = Math.min(99, Math.round(((inclusiveEnd + 1) / total) * 100));
-                updateUploadLog_(uploadId, 'Uploading chunk 1/' + totalChunks, pct, '', 'In Progress', '');
                 return {
                   success: true,
                   complete: false,
@@ -1758,7 +1826,6 @@ function uploadChunk_(p){
     }
 
     const pct = Math.min(99, Math.round(((chunkIndex + 1) / totalChunks) * 100));
-    updateUploadLog_(uploadId, 'Uploading chunk ' + (chunkIndex + 1) + '/' + totalChunks, pct, '', 'In Progress', '');
     return {
       success: true,
       complete: false,
@@ -1794,12 +1861,25 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
   return withScriptLock_(function() {
     const targetLogSheet = getTargetLogSheet_(s.type);
     let alreadyLogged = false;
-    if (fid || s.queueJobId) {
+    const normTargetOrder = normalizeOrderId_(s.order);
+    const targetType = normalize_(s.type || 'Forward');
+
+    if (fid || s.queueJobId || normTargetOrder) {
       const existingData = targetLogSheet.getDataRange().getValues();
       for (let i = existingData.length - 1; i >= 1; i--) {
         const rowFid = String(existingData[i][4] || '').trim();
         const rowJob = String(existingData[i][9] || '').trim();
+        const rowOrder = normalizeOrderId_(existingData[i][1]);
+        const rowType = normalize_(existingData[i][8] || (targetType === 'return' ? 'Return' : 'Forward'));
+
         if ((fid && rowFid === fid) || (s.queueJobId && rowJob === s.queueJobId)) {
+          alreadyLogged = true;
+          break;
+        }
+
+        // Strict duplicate guard: if an identical order and recording type is ALREADY logged and not explicitly bypassed
+        if (normTargetOrder && rowOrder === normTargetOrder && rowType === targetType && !s.bypassDuplicate) {
+          console.warn('finalizeCompletedUpload_: Duplicate order ' + s.order + ' already logged at row ' + (i+1));
           alreadyLogged = true;
           break;
         }
@@ -1837,6 +1917,7 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
     }
     updateUploadLog_(uploadId, 'Uploaded to Google Drive', 100, fid, 'Completed', '', s.queueJobId, s.order, s.type);
     if(s.reservationKey) releaseReservation_(s.reservationKey);
+    releaseReservation_(reservationKey_(s.order, s.platform, s.type));
     cleanupOldStartedUploads_(s.order, uploadId);
 
     if (uploadId) {

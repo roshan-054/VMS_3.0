@@ -260,27 +260,15 @@ export async function triggerUploadWorker(): Promise<void> {
       }
 
       // If remote already has a completed Drive file for this order:
-      // Check if THIS queue item was the one uploaded (e.g. uploadId set, or progress >= 50%, or status was uploading/failed)
+      // Only treat as verified completion if this exact item was already uploaded and assigned this fileId
       if (remoteDuplicate && remoteDuplicate.fileId && remoteDuplicate.fileId.length > 5) {
-        const wasAttempted = Boolean(
-          currentItem.uploadId ||
-          (currentItem.progress && currentItem.progress >= 50) ||
-          currentItem.status === 'uploading' ||
-          (currentItem.status === 'failed' && (currentItem.stage?.includes('Upload') || currentItem.stage?.includes('Processing')))
-        );
-
-        if (wasAttempted) {
-          // The file was already successfully saved to Google Drive!
+        const isThisExactItem = Boolean(currentItem.fileId && currentItem.fileId === remoteDuplicate.fileId);
+        if (isThisExactItem) {
           currentItem.status = 'completed';
           currentItem.progress = 100;
           currentItem.stage = 'Uploaded to Google Drive';
           currentItem.isDuplicate = false;
           currentItem.error = undefined;
-          currentItem.fileId = remoteDuplicate.fileId;
-          currentItem.webViewLink =
-            remoteDuplicate.webViewLink ||
-            remoteDuplicate.playbackUrl ||
-            `https://drive.google.com/file/d/${remoteDuplicate.fileId}/preview`;
           await safePutQueue(currentItem);
           updateState({
             isProcessing: false,
@@ -288,24 +276,31 @@ export async function triggerUploadWorker(): Promise<void> {
             activeProgress: 100,
             activeStage: 'Upload verified completed',
           });
-          notify(`✅ Order ${currentItem.orderId} (${currentItem.recordingType}) verified as successfully uploaded to Google Drive!`, 'success');
+          notify(`✅ Order ${currentItem.orderId} (${currentItem.recordingType}) verified in Google Drive!`, 'success');
           isWorkerBusy = false;
           setTimeout(() => triggerUploadWorker(), 200);
           return;
         }
       }
 
-      if (localCompleted || (remoteDuplicate && (remoteDuplicate.fileId || remoteDuplicate.isDuplicate))) {
+      if (localCompleted || (remoteDuplicate && (remoteDuplicate.fileId || remoteDuplicate.isDuplicate || remoteDuplicate.isInProgress))) {
         const typeLabel = currentItem.recordingType || 'Forward';
         const targetSheetName = typeLabel === 'Return' ? 'ReturnLog' : 'OrderLog';
+        const isInProgressCollision = Boolean(remoteDuplicate?.isInProgress || remoteDuplicate?.status?.includes('Progress') || remoteDuplicate?.packerEmail);
 
         currentItem.status = 'failed';
         currentItem.isDuplicate = true;
-        currentItem.stage = `Blocked: Duplicate ${typeLabel} (${currentItem.orderId})`;
-        currentItem.error = `Duplicate Order ID: Order "${currentItem.orderId}" has already been uploaded for ${typeLabel} recording. Duplicate upload was prevented.`;
-        currentItem.duplicateReason = `Order ${currentItem.orderId} already exists in Google Drive / ${targetSheetName} for ${typeLabel} (Recorded: ${
-          remoteDuplicate?.timestamp || (localCompleted?.createdAt ? new Date(localCompleted.createdAt).toLocaleString() : 'Previous Record')
-        }).`;
+        currentItem.stage = isInProgressCollision
+          ? `Collision: Order ${currentItem.orderId} currently packing by ${remoteDuplicate?.packerEmail || 'another station'}`
+          : `Blocked: Duplicate ${typeLabel} (${currentItem.orderId})`;
+        currentItem.error = isInProgressCollision
+          ? `Duplicate Order Collision: Order "${currentItem.orderId}" is currently being packed/uploaded by ${remoteDuplicate?.packerEmail || 'another station'}. Simultaneous duplicate upload was prevented.`
+          : `Duplicate Order ID: Order "${currentItem.orderId}" has already been uploaded for ${typeLabel} recording. Duplicate upload was prevented.`;
+        currentItem.duplicateReason = isInProgressCollision
+          ? `Active upload in progress by ${remoteDuplicate?.packerEmail || 'another station'} started at ${remoteDuplicate?.timestamp || 'just now'}.`
+          : `Order ${currentItem.orderId} already exists in Google Drive / ${targetSheetName} for ${typeLabel} (Recorded: ${
+              remoteDuplicate?.timestamp || (localCompleted?.createdAt ? new Date(localCompleted.createdAt).toLocaleString() : 'Previous Record')
+            }).`;
 
         await safePutQueue(currentItem);
         updateState({
@@ -316,7 +311,9 @@ export async function triggerUploadWorker(): Promise<void> {
         });
 
         notify(
-          `⚠️ Duplicate ${typeLabel} Order blocked: Order ${currentItem.orderId} already exists in Google Drive. Click "Bypass & Upload" if you wish to upload anyway.`,
+          isInProgressCollision
+            ? `⚠️ Collision: Order ${currentItem.orderId} is currently being packed by ${remoteDuplicate?.packerEmail || 'another station'}. Duplicate upload prevented.`
+            : `⚠️ Duplicate ${typeLabel} Order blocked: Order ${currentItem.orderId} already exists in Google Drive. Click "Bypass & Upload" if you wish to upload anyway.`,
           'error'
         );
 
@@ -403,42 +400,21 @@ export async function triggerUploadWorker(): Promise<void> {
       const errMsg = startErr?.message || String(startErr);
       if (
         errMsg.toLowerCase().includes('duplicate') ||
-        errMsg.toLowerCase().includes('already exists')
+        errMsg.toLowerCase().includes('already exists') ||
+        errMsg.toLowerCase().includes('collision') ||
+        errMsg.toLowerCase().includes('currently being')
       ) {
-        // Double-check if the file was already uploaded
-        try {
-          const verified = await checkDuplicate({
-            orderId: currentItem.orderId,
-            platform: currentItem.platform,
-            recordingType: currentItem.recordingType,
-          });
-          if (verified && verified.fileId) {
-            currentItem.status = 'completed';
-            currentItem.progress = 100;
-            currentItem.stage = 'Uploaded to Google Drive';
-            currentItem.fileId = verified.fileId;
-            currentItem.webViewLink = verified.webViewLink || `https://drive.google.com/file/d/${verified.fileId}/preview`;
-            currentItem.error = undefined;
-            currentItem.isDuplicate = false;
-            await safePutQueue(currentItem);
-            notify(`✅ Order ${currentItem.orderId} verified in Google Drive!`, 'success');
-            isWorkerBusy = false;
-            setTimeout(() => triggerUploadWorker(), 200);
-            return;
-          }
-        } catch (_) {}
-
         currentItem.status = 'failed';
         currentItem.isDuplicate = true;
         currentItem.progress = 0;
         currentItem.uploadedBytes = 0;
         currentItem.currentChunk = 0;
-        currentItem.stage = `Blocked: Duplicate Order ID (${currentItem.orderId})`;
-        currentItem.error = `Duplicate Order ID: Order "${currentItem.orderId}" has already been uploaded to Google Drive.`;
+        currentItem.stage = `Blocked: Duplicate (${currentItem.orderId})`;
+        currentItem.error = errMsg;
         currentItem.duplicateReason = errMsg;
         await safePutQueue(currentItem);
         updateState({ isProcessing: false, activeItemId: null });
-        notify(`⚠️ Duplicate Order ID: Order ${currentItem.orderId} is already in Google Drive.`, 'error');
+        notify(`⚠️ ${errMsg}`, 'error');
         isWorkerBusy = false;
         setTimeout(() => triggerUploadWorker(), 300);
         return;
@@ -588,21 +564,6 @@ export async function triggerUploadWorker(): Promise<void> {
           }
         } catch (cErr: any) {
           console.warn(`Upload chunk ${c + 1} attempt ${attempt} note:`, cErr);
-
-          // Double check if backend already received it and finalized Drive file
-          try {
-            const verified = await checkDuplicate({
-              orderId: currentItem.orderId,
-              platform: currentItem.platform,
-              recordingType: currentItem.recordingType,
-            });
-            if (verified && verified.fileId) {
-              finalFileId = verified.fileId;
-              finalWebViewLink = verified.webViewLink || `https://drive.google.com/file/d/${verified.fileId}/preview`;
-              chunkSuccess = true;
-              break;
-            }
-          } catch (_) {}
 
           const errStr = String(cErr?.message || cErr || '');
           const isSessionExpired =

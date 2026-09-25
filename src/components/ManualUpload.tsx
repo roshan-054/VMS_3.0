@@ -275,6 +275,15 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
   const handleQueueAll = async () => {
     if (stagedFiles.length === 0) return;
 
+    const duplicateItems = stagedFiles.filter((item) => item.isDuplicate);
+    if (duplicateItems.length > 0) {
+      if (duplicateItems.length === stagedFiles.length) {
+        onShowToast('All staged files are duplicates already recorded in Google Drive. Queueing blocked.', 'error');
+        return;
+      }
+      onShowToast(`Skipping ${duplicateItems.length} duplicate file(s) already recorded in Google Drive.`, 'info');
+    }
+
     setIsProcessing(true);
     let queuedCount = 0;
     const driveFolderId = getStoredDriveFolderId();
@@ -283,6 +292,11 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
       for (const item of stagedFiles) {
         if (!item.orderId.trim()) {
           onShowToast(`Skipping item without Order ID: ${item.file.name}`, 'error');
+          continue;
+        }
+
+        if (item.isDuplicate) {
+          // Strictly skip duplicates to avoid uploading duplicate order videos
           continue;
         }
 

@@ -136,10 +136,27 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
         ]);
 
         if (isMounted) {
+          const sameObj = sameRes as any;
+          const otherObj = otherRes as any;
+          const isSameDup = Boolean(
+            sameRes &&
+              (sameRes.fileId ||
+                sameObj?.isDuplicate ||
+                sameObj?.isInProgress ||
+                sameObj?.packerEmail ||
+                sameObj?.status?.includes('Progress'))
+          );
+          const isOtherDup = Boolean(
+            otherRes &&
+              (otherRes.fileId ||
+                otherObj?.isDuplicate ||
+                otherObj?.isInProgress ||
+                otherObj?.packerEmail)
+          );
           setDuplicateStatus({
             checkedOrder: trimmed,
-            hasSameTypeDup: Boolean(sameRes && sameRes.fileId),
-            hasOtherTypeRecord: Boolean(otherRes && otherRes.fileId),
+            hasSameTypeDup: isSameDup,
+            hasOtherTypeRecord: isOtherDup,
             existingRecord: sameRes,
             otherTypeRecord: otherRes,
           });
@@ -783,6 +800,17 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       return;
     }
 
+    // STRICT DUPLICATE GUARD: Block recording if duplicate detected and bypass not checked
+    if (duplicateStatus && duplicateStatus.hasSameTypeDup && duplicateStatus.checkedOrder === orderId.trim() && !bypassDuplicateRef.current) {
+      const activePacker = (duplicateStatus.existingRecord as any)?.packerEmail;
+      const collisionMsg = activePacker
+        ? `Duplicate collision: Order "${orderId.trim()}" is currently being packed/uploaded by ${activePacker}. Duplicate recording blocked.`
+        : `Duplicate Order Blocked: Order "${orderId.trim()}" already has a completed ${recordingType} video in Google Drive. Check 'Re-record & Upload Anyway' below to bypass.`;
+      setStatusMessage({ text: collisionMsg, type: 'error' });
+      onShowToast(collisionMsg, 'error');
+      return;
+    }
+
     if (!streamRef.current || !isCameraActive) {
       await startCamera(selectedDeviceId);
       if (!streamRef.current) return;
@@ -899,6 +927,24 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
         setOrderId('');
         setRecordingType('Forward');
         setPlatform('Amazon');
+        setIsRecording(false);
+        recordedChunksRef.current = [];
+        return;
+      }
+
+      // STRICT DUPLICATE GUARD: Do not queue duplicate recording unless bypass was explicitly enabled
+      if (
+        duplicateStatus &&
+        duplicateStatus.hasSameTypeDup &&
+        duplicateStatus.checkedOrder === orderId.trim() &&
+        !bypassDuplicateRef.current
+      ) {
+        onShowToast(`Duplicate Order ${orderId.trim()} blocked from upload queue (saved to Downloads).`, 'error');
+        setStatusMessage({
+          text: `Duplicate Order "${orderId.trim()}" already uploaded. Video saved to Downloads but blocked from Drive upload.`,
+          type: 'error',
+        });
+        setOrderId('');
         setIsRecording(false);
         recordedChunksRef.current = [];
         return;
@@ -1243,14 +1289,32 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
               ) : (
                 <>
                   {!isRecording ? (
-                    <button
-                      id="start-recording-btn"
-                      onClick={() => startRecording()}
-                      className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm rounded-lg shadow-sm transition inline-flex items-center gap-2 cursor-pointer"
-                    >
-                      <Play className="w-4 h-4 fill-white" />
-                      Start Recording
-                    </button>
+                    duplicateStatus && duplicateStatus.hasSameTypeDup && duplicateStatus.checkedOrder === orderId.trim() && !allowBypassDuplicate ? (
+                      <button
+                        id="start-recording-btn"
+                        onClick={() => {
+                          const activePacker = (duplicateStatus.existingRecord as any)?.packerEmail;
+                          const msg = activePacker
+                            ? `Order "${orderId.trim()}" is currently being packed/uploaded by ${activePacker}. Duplicate packing is blocked.`
+                            : `Duplicate Order Blocked: Order "${orderId.trim()}" already uploaded. Check 'Re-record & Upload Anyway' below to bypass.`;
+                          onShowToast(msg, 'error');
+                        }}
+                        className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-semibold text-sm rounded-lg shadow-sm transition inline-flex items-center gap-2 cursor-pointer animate-pulse"
+                        title="Duplicate Order ID detected. Check 'Re-record & Upload Anyway' below to enable recording."
+                      >
+                        <ShieldAlert className="w-4 h-4 text-white" />
+                        Duplicate Order Blocked
+                      </button>
+                    ) : (
+                      <button
+                        id="start-recording-btn"
+                        onClick={() => startRecording()}
+                        className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm rounded-lg shadow-sm transition inline-flex items-center gap-2 cursor-pointer"
+                      >
+                        <Play className="w-4 h-4 fill-white" />
+                        Start Recording
+                      </button>
+                    )
                   ) : (
                     <button
                       id="stop-recording-btn"
@@ -1533,11 +1597,21 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
             {!isCheckingDup && duplicateStatus && duplicateStatus.checkedOrder === orderId.trim() && (
               <div className="text-xs space-y-1.5">
                 {duplicateStatus.hasSameTypeDup ? (
-                  <div className="bg-amber-50 border border-amber-300 text-amber-900 rounded-lg p-2.5 space-y-2">
+                  <div className={`rounded-lg p-2.5 space-y-2 border ${
+                    (duplicateStatus.existingRecord as any)?.packerEmail
+                      ? 'bg-red-50 border-red-300 text-red-900'
+                      : 'bg-amber-50 border-amber-300 text-amber-900'
+                  }`}>
                     <div className="flex items-center justify-between font-bold">
-                      <span className="flex items-center gap-1.5 text-amber-800">
-                        <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
-                        Existing {recordingType} Video in Drive
+                      <span className={`flex items-center gap-1.5 ${
+                        (duplicateStatus.existingRecord as any)?.packerEmail ? 'text-red-800' : 'text-amber-800'
+                      }`}>
+                        <ShieldAlert className={`w-4 h-4 shrink-0 ${
+                          (duplicateStatus.existingRecord as any)?.packerEmail ? 'text-red-600' : 'text-amber-600'
+                        }`} />
+                        {(duplicateStatus.existingRecord as any)?.packerEmail
+                          ? 'Simultaneous Packing Collision'
+                          : `Existing ${recordingType} Video in Drive`}
                       </span>
                       {duplicateStatus.existingRecord?.playbackUrl && (
                         <a
@@ -1550,8 +1624,14 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                         </a>
                       )}
                     </div>
-                    <p className="text-[11px] text-amber-700 leading-snug">
-                      Order <strong>{orderId}</strong> already has a completed <strong>{recordingType}</strong> video recorded on {duplicateStatus.existingRecord?.timestamp ? new Date(duplicateStatus.existingRecord.timestamp).toLocaleDateString() : 'earlier session'}.
+                    <p className={`text-[11px] leading-snug ${
+                      (duplicateStatus.existingRecord as any)?.packerEmail ? 'text-red-800 font-medium' : 'text-amber-700'
+                    }`}>
+                      {(duplicateStatus.existingRecord as any)?.packerEmail ? (
+                        <>Order <strong>{orderId}</strong> is currently being packed/uploaded by <strong>{(duplicateStatus.existingRecord as any)?.packerEmail}</strong>. Do NOT pack this order again to avoid duplicate shipping/verification.</>
+                      ) : (
+                        <>Order <strong>{orderId}</strong> already has a completed <strong>{recordingType}</strong> video recorded on {duplicateStatus.existingRecord?.timestamp ? new Date(duplicateStatus.existingRecord.timestamp).toLocaleDateString() : 'earlier session'}.</>
+                      )}
                     </p>
                     <label className="flex items-center gap-2 pt-1 border-t border-amber-200/80 cursor-pointer select-none">
                       <input
