@@ -82,7 +82,7 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
     sharedScannerSync.connectAsPhone(stationPin, phoneModel);
 
     const unsubStatus = sharedScannerSync.onPhoneStatus((connected, _count, _dev, ping) => {
-      setIsConnected(true);
+      setIsConnected(connected);
       if (ping) setLatencyMs(ping);
     });
 

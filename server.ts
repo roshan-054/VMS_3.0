@@ -40,7 +40,69 @@ async function startServer() {
 
   // In-memory real-time scanner state
   const stationRooms = new Map<string, Set<ScannerClientSocket>>();
+  const httpPresence = new Map<string, Map<string, { role: 'station' | 'phone'; deviceName: string; lastSeen: number }>>();
   const recentEvents: ScannerEvent[] = []; // Circular buffer of last 50 events for HTTP poll fallback
+
+  function recordPresence(stationId: string, clientId: string, role: 'station' | 'phone', deviceName: string) {
+    if (!httpPresence.has(stationId)) {
+      httpPresence.set(stationId, new Map());
+    }
+    httpPresence.get(stationId)!.set(clientId, {
+      role,
+      deviceName,
+      lastSeen: Date.now(),
+    });
+  }
+
+  function getActiveStationStats(stationId: string) {
+    const now = Date.now();
+    const wsRoom = stationRooms.get(stationId);
+    const httpMap = httpPresence.get(stationId);
+
+    const activePhoneDevices = new Set<string>();
+    let connectedPhones = 0;
+    let connectedStations = 0;
+
+    // 1. WS clients
+    if (wsRoom) {
+      wsRoom.forEach((c) => {
+        if (c.readyState === WebSocket.OPEN) {
+          if (c.role === 'phone') {
+            connectedPhones++;
+            activePhoneDevices.add(c.deviceName || 'Phone');
+          } else {
+            connectedStations++;
+          }
+        }
+      });
+    }
+
+    // 2. HTTP clients (active within last 8 seconds)
+    if (httpMap) {
+      httpMap.forEach((entry, clientId) => {
+        if (now - entry.lastSeen < 8000) {
+          if (entry.role === 'phone') {
+            if (!activePhoneDevices.has(entry.deviceName)) {
+              connectedPhones++;
+              activePhoneDevices.add(entry.deviceName);
+            }
+          } else {
+            if (!wsRoom || Array.from(wsRoom).filter(w => w.role === 'station' && w.readyState === WebSocket.OPEN).length === 0) {
+              connectedStations++;
+            }
+          }
+        } else {
+          httpMap.delete(clientId);
+        }
+      });
+    }
+
+    return {
+      connectedPhones,
+      connectedStations,
+      devices: Array.from(activePhoneDevices),
+    };
+  }
 
   function broadcastToStation(stationId: string, event: { type: string; [key: string]: any }, excludeSocket?: WebSocket) {
     // Record in fallback buffer
@@ -234,33 +296,29 @@ async function startServer() {
     });
   });
 
+  // REST API: Heartbeat (keeps station / phone linked even when WebSockets are restricted)
+  app.post('/api/scanner/heartbeat', (req, res) => {
+    const { stationId = 'default', clientId = 'anonymous', role = 'phone', deviceName = 'Device' } = req.body;
+    recordPresence(String(stationId), String(clientId), role === 'station' ? 'station' : 'phone', String(deviceName));
+    const stats = getActiveStationStats(String(stationId));
+    res.json({
+      success: true,
+      stationId,
+      ...stats,
+      serverTime: Date.now(),
+    });
+  });
+
   // REST API: Station status
   app.get('/api/scanner/status', (req, res) => {
     const stationId = String(req.query.stationId || 'default').trim();
-    const room = stationRooms.get(stationId);
-    let connectedPhones = 0;
-    let connectedStations = 0;
-    const phoneDevices: string[] = [];
-
-    if (room) {
-      room.forEach((c) => {
-        if (c.readyState === WebSocket.OPEN) {
-          if (c.role === 'phone') {
-            connectedPhones++;
-            phoneDevices.push(c.deviceName || 'Phone');
-          } else {
-            connectedStations++;
-          }
-        }
-      });
-    }
+    const stats = getActiveStationStats(stationId);
 
     res.json({
       success: true,
       stationId,
-      connectedPhones,
-      connectedStations,
-      devices: phoneDevices,
+      ...stats,
+      serverTime: Date.now(),
     });
   });
 

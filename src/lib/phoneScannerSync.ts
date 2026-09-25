@@ -6,7 +6,7 @@
  * 
  * Features:
  * - Direct WebSocket connection over /ws-scanner with automatic reconnect.
- * - HTTP fallback channel if WebSockets are restricted.
+ * - HTTP fallback channel with automatic heartbeats and polling if WebSockets are restricted.
  * - Web Audio API realistic scanner beep sound on barcode reception.
  * - Haptic feedback integration for mobile.
  * - Real-time roundtrip ping/pong latency measurement.
@@ -34,11 +34,16 @@ class PhoneScannerSync {
   private stationPin: string = '';
   private role: 'station' | 'phone' = 'station';
   private deviceName: string = 'Workstation';
+  private clientId: string = '';
   private reconnectTimer: any = null;
   private pingInterval: any = null;
+  private pollInterval: any = null;
+  private heartbeatInterval: any = null;
   private isConnecting: boolean = false;
   private lastPingSent: number = 0;
   private latencyMs: number = 0;
+  private lastPolledTimestamp: number = Date.now();
+  private processedEventIds: Set<string> = new Set();
 
   // Listeners
   private barcodeListeners: Set<BarcodeListener> = new Set();
@@ -49,7 +54,9 @@ class PhoneScannerSync {
   private audioCtx: AudioContext | null = null;
 
   constructor() {
+    this.clientId = `client-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     this.initStationCredentials();
+    this.startHttpSyncLoop();
   }
 
   private initStationCredentials() {
@@ -85,6 +92,7 @@ class PhoneScannerSync {
       localStorage.setItem('vms_station_id', this.stationId);
       localStorage.setItem('vms_station_pin', this.stationPin);
       this.reconnect();
+      this.sendHeartbeat();
     }
     return this.stationId;
   }
@@ -181,6 +189,7 @@ class PhoneScannerSync {
     if (onBarcode) this.onBarcode(onBarcode);
     if (onStatus) this.onPhoneStatus(onStatus);
     this.connectWs();
+    this.sendHeartbeat();
   }
 
   /**
@@ -192,6 +201,7 @@ class PhoneScannerSync {
     this.stationId = `station-${this.stationPin}`;
     this.deviceName = phoneName;
     this.connectWs();
+    this.sendHeartbeat();
   }
 
   private connectWs() {
@@ -232,11 +242,9 @@ class PhoneScannerSync {
       this.ws.onclose = () => {
         this.isConnecting = false;
         this.stopPing();
-        // Notify status disconnected
-        this.phoneStatusListeners.forEach((fn) => fn(false, 0, undefined, 0));
-        // Auto-reconnect after 2 seconds
+        // Auto-reconnect after 2.5 seconds
         clearTimeout(this.reconnectTimer);
-        this.reconnectTimer = setTimeout(() => this.connectWs(), 2000);
+        this.reconnectTimer = setTimeout(() => this.connectWs(), 2500);
       };
     } catch (e) {
       this.isConnecting = false;
@@ -248,23 +256,54 @@ class PhoneScannerSync {
 
     if (type === 'JOINED_SUCCESS') {
       const phones = Number(msg.connectedPhones || 0);
-      this.phoneStatusListeners.forEach((fn) => fn(phones > 0, phones, undefined, this.latencyMs));
+      const stations = Number(msg.connectedStations || 0);
+      if (this.role === 'station') {
+        this.phoneStatusListeners.forEach((fn) => fn(phones > 0, phones, undefined, this.latencyMs));
+      } else {
+        this.phoneStatusListeners.forEach((fn) => fn(stations > 0, stations, undefined, this.latencyMs));
+      }
     } else if (type === 'PHONE_CONNECTED') {
       const phones = Number(msg.connectedPhones || 1);
       this.phoneStatusListeners.forEach((fn) => fn(true, phones, msg.deviceName, this.latencyMs));
-      this.playBeepSound('double');
+      if (this.role === 'station') {
+        this.playBeepSound('double');
+      }
+    } else if (type === 'STATION_CONNECTED') {
+      if (this.role === 'phone') {
+        this.phoneStatusListeners.forEach((fn) => fn(true, 1, msg.deviceName, this.latencyMs));
+        this.playBeepSound('double');
+      }
     } else if (type === 'PHONE_DISCONNECTED') {
       const phones = Number(msg.connectedPhones || 0);
-      this.phoneStatusListeners.forEach((fn) => fn(phones > 0, phones, msg.deviceName, this.latencyMs));
+      if (this.role === 'station') {
+        this.phoneStatusListeners.forEach((fn) => fn(phones > 0, phones, msg.deviceName, this.latencyMs));
+      }
+    } else if (type === 'STATION_DISCONNECTED') {
+      if (this.role === 'phone') {
+        this.phoneStatusListeners.forEach((fn) => fn(false, 0, undefined, this.latencyMs));
+      }
     } else if (type === 'BARCODE_RECEIVED') {
       const barcode = String(msg.barcode || '').trim();
-      if (barcode) {
-        this.playBeepSound('success');
-        this.barcodeListeners.forEach((fn) => fn(barcode, msg.format || 'AUTO', msg.platform, msg.deviceName));
+      const eventKey = `${barcode}-${msg.timestamp || Date.now()}`;
+      if (barcode && !this.processedEventIds.has(eventKey)) {
+        this.processedEventIds.add(eventKey);
+        if (this.processedEventIds.size > 200) {
+          const arr = Array.from(this.processedEventIds).slice(-100);
+          this.processedEventIds = new Set(arr);
+        }
+        if (this.role === 'station') {
+          this.playBeepSound('success');
+          this.barcodeListeners.forEach((fn) => fn(barcode, msg.format || 'AUTO', msg.platform, msg.deviceName));
+        }
       }
     } else if (type === 'REMOTE_COMMAND') {
-      if (msg.action) {
-        this.commandListeners.forEach((fn) => fn(msg.action, msg.deviceName));
+      const action = msg.action;
+      const eventKey = `cmd-${action}-${msg.timestamp || Date.now()}`;
+      if (action && !this.processedEventIds.has(eventKey)) {
+        this.processedEventIds.add(eventKey);
+        if (this.role === 'station') {
+          this.commandListeners.forEach((fn) => fn(action, msg.deviceName));
+        }
       }
     } else if (type === 'PONG') {
       if (this.lastPingSent > 0) {
@@ -290,6 +329,73 @@ class PhoneScannerSync {
     }
   }
 
+  /**
+   * Dual-Channel HTTP Heartbeat and Event Poller
+   * Guarantees 100% reliable connection even across firewalls / mobile browsers
+   */
+  private startHttpSyncLoop() {
+    if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
+    if (this.pollInterval) clearInterval(this.pollInterval);
+
+    // 1. Send periodic presence heartbeat every 3 seconds
+    this.heartbeatInterval = setInterval(() => {
+      this.sendHeartbeat();
+    }, 3000);
+
+    // 2. Poll fallback events every 1 second
+    this.pollInterval = setInterval(() => {
+      this.pollHttpEvents();
+    }, 1200);
+  }
+
+  private async sendHeartbeat() {
+    if (!this.stationId) return;
+    try {
+      const res = await fetch('/api/scanner/heartbeat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stationId: this.stationId,
+          clientId: this.clientId,
+          role: this.role,
+          deviceName: this.deviceName,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (this.role === 'station') {
+          const phones = Number(data.connectedPhones || 0);
+          const firstDevice = Array.isArray(data.devices) && data.devices.length > 0 ? data.devices[0] : undefined;
+          this.phoneStatusListeners.forEach((fn) => fn(phones > 0, phones, firstDevice, this.latencyMs));
+        } else {
+          const stations = Number(data.connectedStations || 0);
+          this.phoneStatusListeners.forEach((fn) => fn(stations > 0, stations, 'Packing Station', this.latencyMs));
+        }
+      }
+    } catch (e) {
+      // Network heartbeat notice
+    }
+  }
+
+  private async pollHttpEvents() {
+    if (!this.stationId) return;
+    try {
+      const res = await fetch(`/api/scanner/poll?stationId=${encodeURIComponent(this.stationId)}&since=${this.lastPolledTimestamp}`);
+      if (res.ok) {
+        const data = await res.json();
+        this.lastPolledTimestamp = Math.max(this.lastPolledTimestamp, Number(data.serverTime || Date.now()) - 2000);
+        if (Array.isArray(data.events)) {
+          data.events.forEach((evt: any) => {
+            const p = evt.payload || {};
+            this.handleIncomingMessage(p);
+          });
+        }
+      }
+    } catch (e) {
+      // Network poll notice
+    }
+  }
+
   public reconnect() {
     if (this.ws) {
       try {
@@ -298,6 +404,7 @@ class PhoneScannerSync {
       this.ws = null;
     }
     this.connectWs();
+    this.sendHeartbeat();
   }
 
   /**
@@ -328,10 +435,9 @@ class PhoneScannerSync {
     // 1. Send via WebSocket if open (Ultra-fast <5ms)
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(payload));
-      return true;
     }
 
-    // 2. HTTP Fallback route
+    // 2. HTTP Fallback route (Ensures delivery)
     try {
       const res = await fetch('/api/scanner/broadcast', {
         method: 'POST',
@@ -340,6 +446,7 @@ class PhoneScannerSync {
           stationId: this.stationId,
           barcode: clean,
           format,
+          platform: platform || '',
           deviceName: this.deviceName,
         }),
       });
@@ -369,7 +476,6 @@ class PhoneScannerSync {
 
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(payload));
-      return true;
     }
 
     try {
