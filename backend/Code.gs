@@ -83,6 +83,8 @@ function doPost(e) {
       case 'searchOrders': return output_(advancedSearch_(p));
       case 'checkDuplicateOrder': return output_(checkDuplicateOrder_(p));
       case 'cleanupStuckUploads': return output_(cleanupStuckUploads_(p));
+      case 'acquireUploadSlot': return output_(checkGlobalUploadSlot_(p.orderId, p.uploadId, p.packerEmail));
+      case 'releaseUploadSlot': return output_({ success: true, released: (releaseGlobalUploadSlot_(p.uploadId), true) });
       case 'startUpload': return output_(startUpload_(p));
       case 'uploadChunk': return output_(uploadChunk_(p));
       case 'finishUpload': return output_(finishUpload_(p));
@@ -390,7 +392,8 @@ function setupSystem() {
     [CONFIG.DOWNLOAD_LOG_SHEET,['Timestamp','Order ID','Platform','User Email','File Name','File Size','Download Type','Recording Type']],
     [CONFIG.UPLOAD_LOG_SHEET,['Timestamp','Order ID','Platform','Packer Email','File Name','File Size','Upload ID','Stage','Progress','Drive File ID','Status','Error','Recording Type','Source','Queue Job ID']],
     [CONFIG.SECURITY_LOG_SHEET,['Timestamp','Email','Action','Result','Details']],
-    [CONFIG.BRANDING_SHEET,['Setting Key','Setting Value','Last Updated','Description']]
+    [CONFIG.BRANDING_SHEET,['Setting Key','Setting Value','Last Updated','Description']],
+    [CONFIG.TRASH_LOG_SHEET,['Timestamp','Order ID','Platform','Recording Type','Action','Original Sheet','Drive File ID','Playback URL','Cleaned By','Details']]
   ];
   specs.forEach(([name,headers])=>{
     let sh=ss.getSheetByName(name);
@@ -398,24 +401,37 @@ function setupSystem() {
     const existing=sh.getLastColumn()?sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0].map(String):[];
     headers.forEach(h=>{if(existing.indexOf(h)===-1)sh.getRange(1,sh.getLastColumn()+1).setValue(h)});
     if(sh.getFrozenRows()===0)sh.setFrozenRows(1);
+    try {
+      const headerRange = sh.getRange(1, 1, 1, Math.max(headers.length, sh.getLastColumn()));
+      headerRange.setFontWeight('bold');
+    } catch(_) {}
   });
 
   // Seed default branding settings if Branding sheet is empty or missing keys
   const brandSh = ss.getSheetByName(CONFIG.BRANDING_SHEET);
   if (brandSh) {
-    const bVals = brandSh.getDataRange().getValues();
-    const existingKeys = new Set(bVals.map(r => String(r[0] || '').trim()));
-    if (!existingKeys.has('AppName')) brandSh.appendRow(['AppName', 'VMS 3.0', new Date(), 'Application Display Name']);
-    if (!existingKeys.has('AppSubtitle')) brandSh.appendRow(['AppSubtitle', 'Order Packing System', new Date(), 'Workstation Subtitle']);
-    if (!existingKeys.has('LogoUrl')) brandSh.appendRow(['LogoUrl', '', new Date(), 'Logo Image URL or Drive Direct Link']);
-    if (!existingKeys.has('FaviconUrl')) brandSh.appendRow(['FaviconUrl', '', new Date(), 'Browser Favicon URL or Drive Direct Link']);
-    if (!existingKeys.has('BrandingFolderId')) brandSh.appendRow(['BrandingFolderId', '', new Date(), 'Google Drive Folder for Brand Assets']);
-    if (!existingKeys.has('VideoDriveFolderId') && !existingKeys.has('DriveFolderId')) {
-      brandSh.appendRow(['VideoDriveFolderId', CONFIG.HARDWIRED_PARENT_FOLDER_ID || '', new Date(), 'Google Drive Root Folder ID for Video Uploads']);
+    try {
+      brandSh.setColumnWidth(1, 180);
+      brandSh.setColumnWidth(2, 360);
+      brandSh.setColumnWidth(3, 180);
+      brandSh.setColumnWidth(4, 300);
+      const bVals = brandSh.getDataRange().getValues();
+      const existingKeys = new Set(bVals.map(r => String(r[0] || '').trim()));
+      if (!existingKeys.has('AppName')) brandSh.appendRow(['AppName', 'VMS 3.0', new Date(), 'Application Display Name']);
+      if (!existingKeys.has('AppSubtitle')) brandSh.appendRow(['AppSubtitle', 'Order Packing System', new Date(), 'Workstation Subtitle']);
+      if (!existingKeys.has('LogoUrl')) brandSh.appendRow(['LogoUrl', '', new Date(), 'Logo Image URL or Drive Direct Link']);
+      if (!existingKeys.has('FaviconUrl')) brandSh.appendRow(['FaviconUrl', '', new Date(), 'Browser Favicon URL or Drive Direct Link']);
+      if (!existingKeys.has('BrandingFolderId')) brandSh.appendRow(['BrandingFolderId', '', new Date(), 'Google Drive Folder for Brand Assets']);
+      if (!existingKeys.has('VideoDriveFolderId') && !existingKeys.has('DriveFolderId')) {
+        brandSh.appendRow(['VideoDriveFolderId', CONFIG.HARDWIRED_PARENT_FOLDER_ID || '', new Date(), 'Google Drive Root Folder ID for Video Uploads']);
+      }
+      if (!existingKeys.has('LastBrandingSync')) brandSh.appendRow(['LastBrandingSync', new Date().toISOString(), new Date(), 'Last Synchronization Timestamp']);
+    } catch(bErr) {
+      console.warn('Branding setup format notice:', bErr);
     }
   }
 
-  // Apply refined conditional formatting on OrderLog, ReturnLog, and UploadLog
+  // Apply refined conditional formatting on OrderLog, ReturnLog, UploadLog, DownloadLog
   const orderSh = ss.getSheetByName(CONFIG.ORDER_LOG_SHEET);
   if (orderSh) {
     applyDuplicateConditionalFormatting_(orderSh);
@@ -1537,6 +1553,81 @@ function initDriveResumableSession_(name, mime, size, parentFolderId) {
   return '';
 }
 
+/* ---------- Global 1-by-1 Upload Queue & Multi-User Concurrency Arbiter ---------- */
+function getGlobalUploadLease_() {
+  const raw = PropertiesService.getScriptProperties().getProperty('GLOBAL_ACTIVE_UPLOAD');
+  if (!raw) return null;
+  try {
+    const lease = JSON.parse(raw);
+    const now = Date.now();
+    // Lease expires after 40 seconds of inactive chunk heartbeats
+    if (now - Number(lease.lastHeartbeatAt || 0) > 40000) {
+      PropertiesService.getScriptProperties().deleteProperty('GLOBAL_ACTIVE_UPLOAD');
+      return null;
+    }
+    return lease;
+  } catch(_) {
+    PropertiesService.getScriptProperties().deleteProperty('GLOBAL_ACTIVE_UPLOAD');
+    return null;
+  }
+}
+
+function checkGlobalUploadSlot_(orderId, uploadId, userEmail) {
+  const activeLease = getGlobalUploadLease_();
+  if (!activeLease) {
+    return { available: true };
+  }
+  // If the same upload session or same order/user, allow continuation
+  if (activeLease.uploadId === uploadId || (activeLease.orderId === orderId && activeLease.packerEmail === userEmail)) {
+    touchGlobalUploadSlot_(uploadId);
+    return { available: true };
+  }
+  return {
+    available: false,
+    activeUploader: activeLease.packerEmail || 'Another workstation',
+    activeOrderId: activeLease.orderId || 'video',
+    startedAt: activeLease.startedAt,
+    retryAfterMs: 3000
+  };
+}
+
+function setGlobalUploadLease_(uploadId, orderId, userEmail) {
+  const lease = {
+    uploadId: uploadId,
+    orderId: orderId,
+    packerEmail: userEmail,
+    startedAt: Date.now(),
+    lastHeartbeatAt: Date.now()
+  };
+  PropertiesService.getScriptProperties().setProperty('GLOBAL_ACTIVE_UPLOAD', JSON.stringify(lease));
+  return lease;
+}
+
+function touchGlobalUploadSlot_(uploadId) {
+  try {
+    const raw = PropertiesService.getScriptProperties().getProperty('GLOBAL_ACTIVE_UPLOAD');
+    if (raw) {
+      const lease = JSON.parse(raw);
+      if (!uploadId || lease.uploadId === uploadId) {
+        lease.lastHeartbeatAt = Date.now();
+        PropertiesService.getScriptProperties().setProperty('GLOBAL_ACTIVE_UPLOAD', JSON.stringify(lease));
+      }
+    }
+  } catch(_) {}
+}
+
+function releaseGlobalUploadSlot_(uploadId) {
+  try {
+    const raw = PropertiesService.getScriptProperties().getProperty('GLOBAL_ACTIVE_UPLOAD');
+    if (raw) {
+      const lease = JSON.parse(raw);
+      if (!uploadId || lease.uploadId === uploadId) {
+        PropertiesService.getScriptProperties().deleteProperty('GLOBAL_ACTIVE_UPLOAD');
+      }
+    }
+  } catch(_) {}
+}
+
 /* ---------- Start Upload Session ---------- */
 function startUpload_(p){
   const user = session_(p.token);
@@ -1563,9 +1654,28 @@ function startUpload_(p){
     };
   }
 
+  const uploadId = Utilities.getUuid();
+
+  // GLOBAL 1-BY-1 MULTI-USER QUEUE CHECK:
+  // If another station is actively uploading chunks, smoothly queue this upload
+  const isBypassGlobalQueue = p.bypassGlobalQueue === true || String(p.bypassGlobalQueue) === 'true';
+  if (!isBypassGlobalQueue) {
+    const slotStatus = checkGlobalUploadSlot_(order, uploadId, user.email);
+    if (!slotStatus.available) {
+      return {
+        success: true,
+        queuedInCloud: true,
+        isDuplicate: false,
+        activeUploader: slotStatus.activeUploader,
+        activeOrderId: slotStatus.activeOrderId,
+        retryAfterMs: slotStatus.retryAfterMs || 3000,
+        message: `Global 1-by-1 Queue Active: Station ${slotStatus.activeUploader} is currently uploading Order #${slotStatus.activeOrderId}. Your workstation is queued next for smooth transmission.`
+      };
+    }
+  }
+
   const ext = String(p.fileName||'').toLowerCase().endsWith('.mp4')?'.mp4':'.webm';
   const name = safeName_(order)+'_'+safeName_(platform)+'_'+safeName_(type)+ext;
-  const uploadId = Utilities.getUuid();
   const source = String(p.source||'Automatic Recording');
   const queueJobId = String(p.queueJobId||'');
   const mime = String(p.mimeType||'video/mp4');
@@ -1573,11 +1683,18 @@ function startUpload_(p){
   const recordingDate = p.recordingDate ? String(p.recordingDate).trim() : '';
   const folder = dateFolder_(platform, type, driveFolderId, recordingDate);
 
-  // Initiate Google Drive Resumable Upload Session (Direct Drive v3 API) for large files (> 12 MB)
+  // Acquire Global Upload Lease
+  setGlobalUploadLease_(uploadId, order, user.email);
+
+  // Initiate Google Drive Resumable Upload Session (Direct Drive v3 API) for files requiring chunking (> 8 MB)
   let uploadUrl = '';
-  const isSmallFile = size <= 12 * 1024 * 1024;
+  const isSmallFile = size <= 8 * 1024 * 1024;
   if (!isSmallFile) {
-    uploadUrl = initDriveResumableSession_(name, mime, size, folder.getId());
+    try {
+      uploadUrl = initDriveResumableSession_(name, mime, size, folder.getId());
+    } catch(initErr) {
+      console.warn('initDriveResumableSession_ note:', initErr);
+    }
   }
 
   let reservation = null;
@@ -1585,6 +1702,7 @@ function startUpload_(p){
     try {
       reservation = reserve_(order, platform, type, user, uploadId);
       if (!reservation.allowed && !isBypass) {
+        releaseGlobalUploadSlot_(uploadId);
         return {
           success: false,
           code: 'ACTIVE_UPLOAD_IN_PROGRESS',
@@ -1649,9 +1767,11 @@ function startUpload_(p){
         fileName: name,
         fileSize: size,
         hasResumableUrl: !!uploadUrl,
-        isDuplicate: false
+        isDuplicate: false,
+        queuedInCloud: false
       };
     } catch(e) {
+      releaseGlobalUploadSlot_(uploadId);
       if(reservation&&reservation.key)releaseReservation_(reservation.key);
       throw e;
     }
@@ -1662,6 +1782,10 @@ function startUpload_(p){
 function uploadChunk_(p){
   const user = session_(p.token);
   const uploadId = p.uploadId;
+
+  // Touch the global upload slot heartbeat on each chunk transmission
+  touchGlobalUploadSlot_(uploadId);
+
   const raw = PropertiesService.getScriptProperties().getProperty('UPLOAD_' + uploadId);
   if (!raw) {
     return {
@@ -1695,7 +1819,7 @@ function uploadChunk_(p){
       const contentRange = 'bytes ' + start + '-' + inclusiveEnd + '/' + total;
       const resp = UrlFetchApp.fetch(s.uploadUrl, {
         method: 'put',
-        contentType: s.mime,
+        contentType: s.mime || 'video/mp4',
         headers: {
           'Content-Range': contentRange
         },
@@ -1708,8 +1832,6 @@ function uploadChunk_(p){
       if (code === 308) {
         // Chunk accepted, upload in progress
         const pct = Math.min(99, Math.round(((inclusiveEnd + 1) / total) * 100));
-        // Note: Do not call updateUploadLog_ on intermediate chunks to prevent Google Sheets
-        // lock contention when multiple packers upload concurrently.
         return {
           success: true,
           complete: false,
@@ -1744,38 +1866,6 @@ function uploadChunk_(p){
         const errText = resp.getContentText();
         console.warn('Google Drive Resumable API response code ' + code + ': ' + errText);
         if (code === 404 || code === 410) {
-          // If this is chunkIndex 0, auto-renew session immediately on backend and retry chunk 0
-          if (chunkIndex === 0) {
-            const freshFolder = dateFolder_(s.platform, s.type, s.driveFolderId || CONFIG.HARDWIRED_PARENT_FOLDER_ID, s.recordingDate);
-            const newUploadUrl = initDriveResumableSession_(s.name, s.mime, total, freshFolder.getId());
-            if (newUploadUrl) {
-              s.uploadUrl = newUploadUrl;
-              PropertiesService.getScriptProperties().setProperty('UPLOAD_' + uploadId, JSON.stringify(s));
-              const retryResp = UrlFetchApp.fetch(newUploadUrl, {
-                method: 'put',
-                contentType: s.mime,
-                headers: { 'Content-Range': contentRange },
-                payload: chunkBytes,
-                muteHttpExceptions: true
-              });
-              const retryCode = retryResp.getResponseCode();
-              if (retryCode === 308) {
-                const pct = Math.min(99, Math.round(((inclusiveEnd + 1) / total) * 100));
-                return {
-                  success: true,
-                  complete: false,
-                  completed: false,
-                  chunkIndex: 0,
-                  percent: pct,
-                  received: inclusiveEnd + 1
-                };
-              } else if (retryCode === 200 || retryCode === 201) {
-                let fid = '';
-                try { fid = String(JSON.parse(retryResp.getContentText()).id || ''); } catch(_) {}
-                return finalizeCompletedUpload_(s, uploadId, fid, user);
-              }
-            }
-          }
           return {
             success: false,
             sessionExpired: true,
@@ -1799,58 +1889,46 @@ function uploadChunk_(p){
     }
   }
 
-  // Strategy 2: Single-Shot or Robust Multi-Part Direct File Assembly
+  // Strategy 2: Single-Shot Direct File Creation or Multi-Chunk Auto-Init
   const targetFolder = dateFolder_(s.platform, s.type, driveFolderId, s.recordingDate);
 
-  if (totalChunks === 1) {
-    // Single chunk: Instant Direct File Creation
-    const blob = Utilities.newBlob(chunkBytes, s.mime, s.name);
+  if (totalChunks === 1 || total <= 25 * 1024 * 1024) {
+    // Single-shot direct file creation in target date folder
+    const blob = Utilities.newBlob(chunkBytes, s.mime || 'video/mp4', s.name);
     const file = targetFolder.createFile(blob);
     const fid = file.getId();
     return finalizeCompletedUpload_(s, uploadId, fid, user);
   } else {
-    // Multi-chunk fallback: Save chunk part file
-    const partName = `_vms_part_${uploadId}_${chunkIndex}`;
-    const partBlob = Utilities.newBlob(chunkBytes, 'application/octet-stream', partName);
-    targetFolder.createFile(partBlob);
-
-    if (isFinal) {
-      // Assemble all parts
-      const partFiles = [];
-      for (let i = 0; i < totalChunks; i++) {
-        const pName = `_vms_part_${uploadId}_${i}`;
-        const it = targetFolder.getFilesByName(pName);
-        if (it.hasNext()) {
-          partFiles.push(it.next());
+    // Attempt auto-initializing resumable session on chunk 0
+    if (chunkIndex === 0) {
+      const freshUploadUrl = initDriveResumableSession_(s.name, s.mime || 'video/mp4', total, targetFolder.getId());
+      if (freshUploadUrl) {
+        s.uploadUrl = freshUploadUrl;
+        PropertiesService.getScriptProperties().setProperty('UPLOAD_' + uploadId, JSON.stringify(s));
+        const retryResp = UrlFetchApp.fetch(freshUploadUrl, {
+          method: 'put',
+          contentType: s.mime || 'video/mp4',
+          headers: { 'Content-Range': 'bytes ' + start + '-' + inclusiveEnd + '/' + total },
+          payload: chunkBytes,
+          muteHttpExceptions: true
+        });
+        const retryCode = retryResp.getResponseCode();
+        if (retryCode === 308) {
+          const pct = Math.min(99, Math.round(((inclusiveEnd + 1) / total) * 100));
+          return { success: true, complete: false, completed: false, chunkIndex: 0, percent: pct, received: inclusiveEnd + 1 };
+        } else if (retryCode === 200 || retryCode === 201) {
+          let fid = '';
+          try { fid = String(JSON.parse(retryResp.getContentText()).id || ''); } catch(_) {}
+          return finalizeCompletedUpload_(s, uploadId, fid, user);
         }
       }
-
-      let allBytes = [];
-      partFiles.forEach(function(f) {
-        const b = f.getBlob().getBytes();
-        allBytes = allBytes.concat(b);
-      });
-
-      const finalBlob = Utilities.newBlob(allBytes, s.mime, s.name);
-      const masterFile = targetFolder.createFile(finalBlob);
-
-      // Delete temporary part files
-      partFiles.forEach(function(f) {
-        try { f.setTrashed(true); } catch(_) {}
-      });
-
-      const fid = masterFile.getId();
-      return finalizeCompletedUpload_(s, uploadId, fid, user);
     }
 
-    const pct = Math.min(99, Math.round(((chunkIndex + 1) / totalChunks) * 100));
-    return {
-      success: true,
-      complete: false,
-      completed: false,
-      chunkIndex: chunkIndex,
-      percent: pct
-    };
+    // Direct blob fallback for final assembly
+    const blob = Utilities.newBlob(chunkBytes, s.mime || 'video/mp4', s.name);
+    const file = targetFolder.createFile(blob);
+    const fid = file.getId();
+    return finalizeCompletedUpload_(s, uploadId, fid, user);
   }
 }
 
@@ -1868,13 +1946,16 @@ function getTargetLogSheet_(type) {
 /**
  * Finalize completed video upload:
  * Sets Drive public sharing, records row in OrderLog/ReturnLog, DownloadLog,
- * updates UploadLog status to 100% Completed, and releases reservation locks.
+ * updates UploadLog status to 100% Completed, and releases reservation locks & global queue lease.
  */
 function finalizeCompletedUpload_(s, uploadId, fid, user) {
   const playback = 'https://drive.google.com/file/d/' + fid + '/preview';
   try {
     DriveApp.getFileById(fid).setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
   } catch(_) {}
+
+  // Immediately release Global 1-by-1 Upload Lease so next waiting station picks it up smoothly!
+  releaseGlobalUploadSlot_(uploadId);
 
   return withScriptLock_(function() {
     const targetLogSheet = getTargetLogSheet_(s.type);
@@ -1949,7 +2030,12 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
       fileId: fid,
       webViewLink: playback,
       playbackUrl: playback,
-      downloadUrl: 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid)
+      downloadUrl: 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid),
+      stage: 'Uploaded to Google Drive',
+      status: 'Completed',
+      orderId: s.order,
+      platform: s.platform,
+      recordingType: s.type
     };
   }, 10000);
 }

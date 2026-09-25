@@ -448,6 +448,33 @@ export async function triggerUploadWorker(): Promise<void> {
       throw new Error(startRes?.error || 'Failed to initiate Google Drive upload session.');
     }
 
+    // -------------------------------------------------------------
+    // GLOBAL 1-BY-1 CLOUD QUEUE HANDLING:
+    // If another workstation is currently transmitting an upload, gracefully wait
+    // and poll until the single-lane cloud slot is freed.
+    // -------------------------------------------------------------
+    if (startRes?.queuedInCloud) {
+      currentItem.status = 'uploading';
+      const activeWho = startRes.activeUploader
+        ? `Station (${startRes.activeUploader.split('@')[0]})`
+        : 'Another station';
+      const orderWho = startRes.activeOrderId ? `Order #${startRes.activeOrderId}` : 'video';
+      const waitStage = `⏳ 1-by-1 Queue: Waiting for ${activeWho} to finish ${orderWho}...`;
+      currentItem.stage = waitStage;
+      currentItem.progress = Math.max(currentItem.progress || 0, 5);
+      await safePutQueue(currentItem);
+      updateState({
+        isProcessing: true,
+        activeItemId: currentItem.id,
+        activeProgress: currentItem.progress,
+        activeStage: waitStage,
+      });
+      isWorkerBusy = false;
+      const waitMs = Math.max(2000, Number(startRes.retryAfterMs || 3000));
+      setTimeout(() => triggerUploadWorker(), waitMs);
+      return;
+    }
+
     let uploadId = startRes.uploadId;
     currentItem.uploadId = uploadId;
     currentItem.totalChunks = totalChunks;
@@ -532,7 +559,7 @@ export async function triggerUploadWorker(): Promise<void> {
 
       // Apps Script Upload Chunk Proxy (Direct Google datacenter communication to Drive)
       const base64 = await blobToBase64(chunkBlob);
-      while (attempt < 3 && !chunkSuccess) {
+      while (attempt < 4 && !chunkSuccess) {
         if (deletedItemIds.has(currentItem.id)) {
           isWorkerBusy = false;
           return;
@@ -620,12 +647,12 @@ export async function triggerUploadWorker(): Promise<void> {
             }
           }
 
-          if (attempt >= 3 && !chunkSuccess) {
+          if (attempt >= 4 && !chunkSuccess) {
             throw new Error(
-              `Chunk ${c + 1}/${totalChunks} failed: ${cErr.message || cErr}`
+              `Chunk ${c + 1}/${totalChunks} failed after 4 attempts: ${cErr.message || cErr}`
             );
           }
-          await new Promise((r) => setTimeout(r, 600 * attempt));
+          await new Promise((r) => setTimeout(r, 800 * attempt));
         }
       }
 

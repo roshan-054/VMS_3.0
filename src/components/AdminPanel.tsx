@@ -1948,6 +1948,38 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                     </span>
                   </div>
                 </div>
+
+                {/* Permanent Google Sheet Branding Tab Status */}
+                <div className="mt-4 pt-3 border-t border-slate-800 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                      Google Sheet &quot;Branding&quot; Tab
+                    </span>
+                    <span className="text-[10px] font-mono bg-emerald-950 text-emerald-300 border border-emerald-800 px-2 py-0.5 rounded-md font-semibold">
+                      Tab: Branding
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    All company branding, logo assets, browser favicon, and the video root folder ID are permanently stored in the dedicated <strong>Branding</strong> tab in your connected Google Sheet.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        onShowToast('Syncing branding with Google Sheet "Branding" tab...', 'info');
+                        await syncCloudBranding();
+                        onShowToast('✅ Branding Sheet tab synced & active in Google Sheet!', 'success');
+                      } catch (err: any) {
+                        onShowToast(`Branding sync note: ${err?.message || err}`, 'info');
+                      }
+                    }}
+                    className="w-full py-2 px-3 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg text-xs font-semibold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Verify & Sync Branding Tab in Sheet
+                  </button>
+                </div>
               </div>
             </div>
           </form>
