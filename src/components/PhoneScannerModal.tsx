@@ -301,7 +301,7 @@ export const PhoneScannerModal: React.FC<PhoneScannerModalProps> = ({
                   </div>
                 )}
                 <p className="text-[11px] text-slate-400 leading-snug">
-                  Or open <span className="font-mono text-slate-300">{window.location.host}/?scanner=mobile</span> on phone.
+                  Or open <span className="font-mono text-slate-300">{`${window.location.host}${window.location.pathname.replace(/\/$/, '')}/?scanner=mobile`}</span> on phone.
                 </p>
               </div>
 
@@ -326,37 +326,6 @@ export const PhoneScannerModal: React.FC<PhoneScannerModalProps> = ({
                   <span>Test Mobile Scanner in New Tab</span>
                 </a>
               </div>
-            </div>
-          </div>
-
-          {/* Workflow Configuration Toggles */}
-          <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
-            <div className="font-semibold text-xs text-slate-300 flex items-center gap-2 border-b border-slate-800 pb-1.5">
-              <Sliders className="w-3.5 h-3.5 text-blue-400" />
-              <span>Scanner Automation Options</span>
-            </div>
-
-            <div className="flex items-center justify-between gap-3 text-xs">
-              <div>
-                <span className="font-medium text-slate-200 block">
-                  Auto-Start Recording on Phone Scan
-                </span>
-                <span className="text-[11px] text-slate-400">
-                  Instantly triggers video recording as soon as barcode is scanned
-                </span>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => onToggleAutoRecord && onToggleAutoRecord(!autoRecordOnScan)}
-                className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer border ${
-                  autoRecordOnScan
-                    ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
-                    : 'bg-slate-800 border-slate-700 text-slate-400'
-                }`}
-              >
-                {autoRecordOnScan ? 'Auto-Start: ON' : 'Auto-Start: OFF'}
-              </button>
             </div>
           </div>
 

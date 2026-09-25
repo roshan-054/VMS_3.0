@@ -91,8 +91,19 @@ class PhoneScannerSync {
 
   public getPairingUrl(targetPin?: string): string {
     const pin = targetPin || this.stationPin;
-    const origin = window.location.origin;
-    return `${origin}/?scanner=mobile&pin=${pin}`;
+    try {
+      const url = new URL(window.location.href);
+      url.search = '';
+      url.hash = '';
+      url.searchParams.set('scanner', 'mobile');
+      url.searchParams.set('pin', pin);
+      return url.toString();
+    } catch {
+      const origin = window.location.origin;
+      const path = window.location.pathname || '/';
+      const cleanPath = path.endsWith('/') ? path : `${path}/`;
+      return `${origin}${cleanPath}?scanner=mobile&pin=${pin}`;
+    }
   }
 
   /**
