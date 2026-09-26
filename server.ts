@@ -60,36 +60,34 @@ async function startServer() {
     const httpMap = httpPresence.get(stationId);
 
     const activePhoneDevices = new Set<string>();
-    let connectedPhones = 0;
-    let connectedStations = 0;
+    let wsPhones = 0;
+    let wsStations = 0;
+    let httpPhones = 0;
+    let httpStations = 0;
 
     // 1. WS clients
     if (wsRoom) {
       wsRoom.forEach((c) => {
         if (c.readyState === WebSocket.OPEN) {
           if (c.role === 'phone') {
-            connectedPhones++;
+            wsPhones++;
             activePhoneDevices.add(c.deviceName || 'Phone');
           } else {
-            connectedStations++;
+            wsStations++;
           }
         }
       });
     }
 
-    // 2. HTTP clients (active within last 8 seconds)
+    // 2. HTTP clients (active within last 12 seconds)
     if (httpMap) {
       httpMap.forEach((entry, clientId) => {
-        if (now - entry.lastSeen < 8000) {
+        if (now - entry.lastSeen < 12000) {
           if (entry.role === 'phone') {
-            if (!activePhoneDevices.has(entry.deviceName)) {
-              connectedPhones++;
-              activePhoneDevices.add(entry.deviceName);
-            }
+            httpPhones++;
+            activePhoneDevices.add(entry.deviceName || 'Mobile Phone');
           } else {
-            if (!wsRoom || Array.from(wsRoom).filter(w => w.role === 'station' && w.readyState === WebSocket.OPEN).length === 0) {
-              connectedStations++;
-            }
+            httpStations++;
           }
         } else {
           httpMap.delete(clientId);
@@ -97,9 +95,12 @@ async function startServer() {
       });
     }
 
+    const finalPhones = Math.max(wsPhones, httpPhones, activePhoneDevices.size);
+    const finalStations = Math.max(wsStations, httpStations);
+
     return {
-      connectedPhones,
-      connectedStations,
+      connectedPhones: finalPhones,
+      connectedStations: finalStations,
       devices: Array.from(activePhoneDevices),
     };
   }

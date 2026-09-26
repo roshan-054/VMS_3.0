@@ -42,8 +42,13 @@ class PhoneScannerSync {
   private isConnecting: boolean = false;
   private lastPingSent: number = 0;
   private latencyMs: number = 0;
-  private lastPolledTimestamp: number = Date.now();
+  private lastPolledTimestamp: number = 0;
   private processedEventIds: Set<string> = new Set();
+
+  // State cache
+  private isPhoneConnected: boolean = false;
+  private connectedPhonesCount: number = 0;
+  private lastDeviceName: string = '';
 
   // Listeners
   private barcodeListeners: Set<BarcodeListener> = new Set();
@@ -84,6 +89,15 @@ class PhoneScannerSync {
     return this.stationPin;
   }
 
+  public getStatus() {
+    return {
+      connected: this.isPhoneConnected,
+      phoneCount: this.connectedPhonesCount,
+      deviceName: this.lastDeviceName,
+      latencyMs: this.latencyMs,
+    };
+  }
+
   public setStationPin(newPin: string): string {
     const clean = newPin.replace(/\D/g, '').slice(0, 4);
     if (clean.length === 4) {
@@ -91,8 +105,10 @@ class PhoneScannerSync {
       this.stationId = `station-${clean}`;
       localStorage.setItem('vms_station_id', this.stationId);
       localStorage.setItem('vms_station_pin', this.stationPin);
+      this.lastPolledTimestamp = 0;
       this.reconnect();
       this.sendHeartbeat();
+      this.pollHttpEvents();
     }
     return this.stationId;
   }
@@ -190,6 +206,7 @@ class PhoneScannerSync {
     if (onStatus) this.onPhoneStatus(onStatus);
     this.connectWs();
     this.sendHeartbeat();
+    this.pollHttpEvents();
   }
 
   /**
@@ -200,8 +217,15 @@ class PhoneScannerSync {
     this.stationPin = stationPin.trim();
     this.stationId = `station-${this.stationPin}`;
     this.deviceName = phoneName;
+    this.lastPolledTimestamp = 0;
     this.connectWs();
     this.sendHeartbeat();
+    this.pollHttpEvents();
+  }
+
+  public forceSync() {
+    this.sendHeartbeat();
+    this.pollHttpEvents();
   }
 
   private connectWs() {
@@ -242,13 +266,20 @@ class PhoneScannerSync {
       this.ws.onclose = () => {
         this.isConnecting = false;
         this.stopPing();
-        // Auto-reconnect after 2.5 seconds
+        // Auto-reconnect after 2 seconds
         clearTimeout(this.reconnectTimer);
-        this.reconnectTimer = setTimeout(() => this.connectWs(), 2500);
+        this.reconnectTimer = setTimeout(() => this.connectWs(), 2000);
       };
     } catch (e) {
       this.isConnecting = false;
     }
+  }
+
+  private emitStatus(connected: boolean, count: number, deviceName?: string) {
+    this.isPhoneConnected = connected;
+    this.connectedPhonesCount = count;
+    if (deviceName) this.lastDeviceName = deviceName;
+    this.phoneStatusListeners.forEach((fn) => fn(connected, count, this.lastDeviceName || deviceName, this.latencyMs));
   }
 
   private handleIncomingMessage(msg: any) {
@@ -258,29 +289,33 @@ class PhoneScannerSync {
       const phones = Number(msg.connectedPhones || 0);
       const stations = Number(msg.connectedStations || 0);
       if (this.role === 'station') {
-        this.phoneStatusListeners.forEach((fn) => fn(phones > 0, phones, undefined, this.latencyMs));
+        this.emitStatus(phones > 0, phones, undefined);
       } else {
-        this.phoneStatusListeners.forEach((fn) => fn(stations > 0, stations, undefined, this.latencyMs));
+        this.emitStatus(stations > 0, stations, 'Packing Station');
       }
     } else if (type === 'PHONE_CONNECTED') {
       const phones = Number(msg.connectedPhones || 1);
-      this.phoneStatusListeners.forEach((fn) => fn(true, phones, msg.deviceName, this.latencyMs));
-      if (this.role === 'station') {
+      const wasDisconnected = !this.isPhoneConnected;
+      this.emitStatus(true, phones, msg.deviceName);
+      if (this.role === 'station' && wasDisconnected) {
         this.playBeepSound('double');
       }
     } else if (type === 'STATION_CONNECTED') {
       if (this.role === 'phone') {
-        this.phoneStatusListeners.forEach((fn) => fn(true, 1, msg.deviceName, this.latencyMs));
-        this.playBeepSound('double');
+        const wasDisconnected = !this.isPhoneConnected;
+        this.emitStatus(true, 1, msg.deviceName || 'Packing Station');
+        if (wasDisconnected) {
+          this.playBeepSound('double');
+        }
       }
     } else if (type === 'PHONE_DISCONNECTED') {
       const phones = Number(msg.connectedPhones || 0);
       if (this.role === 'station') {
-        this.phoneStatusListeners.forEach((fn) => fn(phones > 0, phones, msg.deviceName, this.latencyMs));
+        this.emitStatus(phones > 0, phones, msg.deviceName);
       }
     } else if (type === 'STATION_DISCONNECTED') {
       if (this.role === 'phone') {
-        this.phoneStatusListeners.forEach((fn) => fn(false, 0, undefined, this.latencyMs));
+        this.emitStatus(false, 0, undefined);
       }
     } else if (type === 'BARCODE_RECEIVED') {
       const barcode = String(msg.barcode || '').trim();
@@ -319,7 +354,7 @@ class PhoneScannerSync {
         this.lastPingSent = Date.now();
         this.ws.send(JSON.stringify({ type: 'PING', timestamp: this.lastPingSent }));
       }
-    }, 5000);
+    }, 4000);
   }
 
   private stopPing() {
@@ -337,15 +372,15 @@ class PhoneScannerSync {
     if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
     if (this.pollInterval) clearInterval(this.pollInterval);
 
-    // 1. Send periodic presence heartbeat every 3 seconds
+    // 1. Send periodic presence heartbeat every 1.5 seconds
     this.heartbeatInterval = setInterval(() => {
       this.sendHeartbeat();
-    }, 3000);
+    }, 1500);
 
-    // 2. Poll fallback events every 1 second
+    // 2. Poll fallback events every 800ms
     this.pollInterval = setInterval(() => {
       this.pollHttpEvents();
-    }, 1200);
+    }, 800);
   }
 
   private async sendHeartbeat() {
@@ -365,11 +400,11 @@ class PhoneScannerSync {
         const data = await res.json();
         if (this.role === 'station') {
           const phones = Number(data.connectedPhones || 0);
-          const firstDevice = Array.isArray(data.devices) && data.devices.length > 0 ? data.devices[0] : undefined;
-          this.phoneStatusListeners.forEach((fn) => fn(phones > 0, phones, firstDevice, this.latencyMs));
+          const firstDevice = Array.isArray(data.devices) && data.devices.length > 0 ? data.devices[0] : (phones > 0 ? 'Wireless Scanner' : undefined);
+          this.emitStatus(phones > 0, phones, firstDevice);
         } else {
           const stations = Number(data.connectedStations || 0);
-          this.phoneStatusListeners.forEach((fn) => fn(stations > 0, stations, 'Packing Station', this.latencyMs));
+          this.emitStatus(stations > 0, stations, 'Packing Station');
         }
       }
     } catch (e) {
@@ -383,11 +418,13 @@ class PhoneScannerSync {
       const res = await fetch(`/api/scanner/poll?stationId=${encodeURIComponent(this.stationId)}&since=${this.lastPolledTimestamp}`);
       if (res.ok) {
         const data = await res.json();
-        this.lastPolledTimestamp = Math.max(this.lastPolledTimestamp, Number(data.serverTime || Date.now()) - 2000);
-        if (Array.isArray(data.events)) {
+        if (Array.isArray(data.events) && data.events.length > 0) {
           data.events.forEach((evt: any) => {
             const p = evt.payload || {};
             this.handleIncomingMessage(p);
+            if (evt.timestamp) {
+              this.lastPolledTimestamp = Math.max(this.lastPolledTimestamp, evt.timestamp);
+            }
           });
         }
       }
@@ -405,6 +442,7 @@ class PhoneScannerSync {
     }
     this.connectWs();
     this.sendHeartbeat();
+    this.pollHttpEvents();
   }
 
   /**
@@ -501,6 +539,9 @@ class PhoneScannerSync {
 
   public onPhoneStatus(listener: PhoneStatusListener) {
     this.phoneStatusListeners.add(listener);
+    // Immediately invoke with current state
+    listener(this.isPhoneConnected, this.connectedPhonesCount, this.lastDeviceName, this.latencyMs);
+    this.forceSync();
     return () => this.phoneStatusListeners.delete(listener);
   }
 

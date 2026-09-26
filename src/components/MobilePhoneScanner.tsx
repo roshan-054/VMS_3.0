@@ -62,6 +62,13 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
   const lastScannedCodeRef = useRef<string>('');
   const barcodeAnimRef = useRef<number | null>(null);
 
+  useEffect(() => {
+    if (initialPin && initialPin.length === 4 && initialPin !== stationPin) {
+      setStationPin(initialPin);
+      setPinInput(initialPin);
+    }
+  }, [initialPin]);
+
   // Auto-connect to WebSocket station room
   useEffect(() => {
     if (!stationPin || stationPin.length !== 4) {
