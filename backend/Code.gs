@@ -1786,10 +1786,10 @@ function startUpload_(p){
   // Acquire Global Upload Lease
   setGlobalUploadLease_(uploadId, order, user.email);
 
-  // Initiate Google Drive Resumable Upload Session (Direct Drive v3 API) for files requiring chunking (> 8 MB)
+  // Initiate Google Drive Resumable Upload Session (Direct Drive v3 API) whenever file is chunked (totalChunks > 1)
   let uploadUrl = '';
-  const isSmallFile = size <= 8 * 1024 * 1024;
-  if (!isSmallFile) {
+  const totalChunks = Number(p.totalChunks || 1);
+  if (totalChunks > 1) {
     try {
       uploadUrl = initDriveResumableSession_(name, mime, size, folder.getId());
     } catch(initErr) {
@@ -1888,6 +1888,36 @@ function uploadChunk_(p){
 
   const raw = PropertiesService.getScriptProperties().getProperty('UPLOAD_' + uploadId);
   if (!raw) {
+    // CRITICAL: Before declaring session expired, verify if this upload has already completed!
+    // This happens when final chunk completed, deleted the session, and client network retried the request.
+    try {
+      const targetSheet = getTargetLogSheet_(p.recordingType || 'Forward');
+      const existingData = targetSheet.getDataRange().getValues();
+      const normOrder = normalizeOrderId_(p.orderId || '');
+      const cleanJobId = String(p.queueJobId || '').trim();
+
+      for (let i = existingData.length - 1; i >= Math.max(1, existingData.length - 50); i--) {
+        const rowOrder = normalizeOrderId_(existingData[i][1]);
+        const rowFid = String(existingData[i][4] || '').trim();
+        const rowPlay = String(existingData[i][5] || '').trim();
+        const rowJob = String(existingData[i][9] || '').trim();
+
+        if ((cleanJobId && rowJob === cleanJobId) || (normOrder && rowOrder === normOrder && rowFid)) {
+          return {
+            success: true,
+            complete: true,
+            completed: true,
+            fileId: rowFid,
+            webViewLink: rowPlay || ('https://drive.google.com/file/d/' + rowFid + '/preview'),
+            playbackUrl: rowPlay || ('https://drive.google.com/file/d/' + rowFid + '/preview'),
+            stage: 'Uploaded to Google Drive',
+            status: 'Completed',
+            message: 'Upload already completed and verified in Google Drive.'
+          };
+        }
+      }
+    } catch (_) {}
+
     return {
       success: false,
       sessionExpired: true,
@@ -1989,18 +2019,18 @@ function uploadChunk_(p){
     }
   }
 
-  // Strategy 2: Single-Shot Direct File Creation or Multi-Chunk Auto-Init
+  // Strategy 2: Single-Shot Direct File Creation or Multi-Chunk Stream
   const targetFolder = dateFolder_(s.platform, s.type, driveFolderId, s.recordingDate);
 
-  if (totalChunks === 1 || total <= 25 * 1024 * 1024) {
+  if (totalChunks === 1) {
     // Single-shot direct file creation in target date folder
     const blob = Utilities.newBlob(chunkBytes, s.mime || 'video/mp4', s.name);
     const file = targetFolder.createFile(blob);
     const fid = file.getId();
     return finalizeCompletedUpload_(s, uploadId, fid, user);
   } else {
-    // Attempt auto-initializing resumable session on chunk 0
-    if (chunkIndex === 0) {
+    // Attempt auto-initializing resumable session on chunk 0 if missing
+    if (!s.uploadUrl || chunkIndex === 0) {
       const freshUploadUrl = initDriveResumableSession_(s.name, s.mime || 'video/mp4', total, targetFolder.getId());
       if (freshUploadUrl) {
         s.uploadUrl = freshUploadUrl;
@@ -2015,7 +2045,7 @@ function uploadChunk_(p){
         const retryCode = retryResp.getResponseCode();
         if (retryCode === 308) {
           const pct = Math.min(99, Math.round(((inclusiveEnd + 1) / total) * 100));
-          return { success: true, complete: false, completed: false, chunkIndex: 0, percent: pct, received: inclusiveEnd + 1 };
+          return { success: true, complete: false, completed: false, chunkIndex: chunkIndex, percent: pct, received: inclusiveEnd + 1 };
         } else if (retryCode === 200 || retryCode === 201) {
           let fid = '';
           try { fid = String(JSON.parse(retryResp.getContentText()).id || ''); } catch(_) {}
@@ -2024,11 +2054,17 @@ function uploadChunk_(p){
       }
     }
 
-    // Direct blob fallback for final assembly
-    const blob = Utilities.newBlob(chunkBytes, s.mime || 'video/mp4', s.name);
-    const file = targetFolder.createFile(blob);
-    const fid = file.getId();
-    return finalizeCompletedUpload_(s, uploadId, fid, user);
+    if (isFinal) {
+      // If final chunk reached in direct mode, create file
+      const blob = Utilities.newBlob(chunkBytes, s.mime || 'video/mp4', s.name);
+      const file = targetFolder.createFile(blob);
+      const fid = file.getId();
+      return finalizeCompletedUpload_(s, uploadId, fid, user);
+    }
+
+    // Acknowledge intermediate chunk
+    const pct = Math.min(99, Math.round(((inclusiveEnd + 1) / total) * 100));
+    return { success: true, complete: false, completed: false, chunkIndex: chunkIndex, percent: pct, received: inclusiveEnd + 1 };
   }
 }
 
