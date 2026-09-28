@@ -36,7 +36,7 @@ import {
 import { HighQualityVideoPlayer } from './HighQualityVideoPlayer';
 import { User, UploadLogItem, QueueItem, PlatformType, RecordingType } from '../types';
 import { CleanDuplicatesModal } from './CleanDuplicatesModal';
-import { fetchUploadLogs, deleteLogEntry, formatFileSize, fetchDriveFileSize } from '../lib/api';
+import { fetchUploadLogs, deleteLogEntry, formatFileSize, fetchDriveFileSize, normalizeOrderId } from '../lib/api';
 import { dbGetAllQueue, dbPutQueue, dbDeleteQueueItem, getStoredDriveFolderId, getStoredAutoRefreshInterval, manualFileCache } from '../lib/storage';
 import { canUserDeleteData } from '../lib/permissions';
 import { retryUploadItem, fixAndCleanAllStuckUploads, subscribeWorkerStatus } from '../lib/uploadWorker';
@@ -468,14 +468,16 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
 
   const handleOpenPlayback = (log: UploadLogItem) => {
     // Check if there is a local blob in the local queue
+    const targetOrderNorm = normalizeOrderId(log.orderId);
     const localMatch = localQueue.find(
-      (q) => (log.queueJobId && q.id === log.queueJobId) || (log.orderId && q.orderId === log.orderId)
+      (q) => (log.queueJobId && q.id === log.queueJobId) || (targetOrderNorm && normalizeOrderId(q.orderId) === targetOrderNorm)
     );
     const hasLocalBlob = localMatch && ((localMatch.blob && localMatch.blob.size > 0) || manualFileCache.has(localMatch.id));
     const hasDriveVideo = Boolean((log.driveFileId && log.driveFileId.length > 5) || log.playbackUrl);
 
     if (!hasLocalBlob && !hasDriveVideo) {
-      onShowToast(`⚠️ Order #${log.orderId} was interrupted before upload finished and has no cloud file. You can resume/re-upload or delete this stale log row.`, 'error');
+      const cleanOrderId = (log.orderId || '').replace(/^#+/, '');
+      onShowToast(`⚠️ Order #${cleanOrderId} was interrupted before upload finished and has no cloud file. Click the Trash icon to remove this stale log row.`, 'error');
       return;
     }
 
@@ -1865,12 +1867,30 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
                             return null;
                           })()}
 
-                          {/* Play in Portal Button */}
-                          {(log.playbackUrl || log.driveFileId || log.queueJobId || isCompleted) && (
+                          {/* Play in Portal Button or Remove Stale Row */}
+                          {(log.playbackUrl || log.driveFileId || isCompleted) ? (
                             <button
                               onClick={() => handleOpenPlayback(log)}
                               className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition inline-flex items-center gap-1.5 text-xs font-semibold shadow-2xs cursor-pointer"
                               title="Play Video in Portal"
+                            >
+                              <Play className="w-3.5 h-3.5 fill-white" />
+                              <span className="hidden sm:inline text-[11px]">Play</span>
+                            </button>
+                          ) : isFailed ? (
+                            <button
+                              onClick={() => handleOpenDeleteModal(log)}
+                              className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 rounded-lg transition inline-flex items-center gap-1.5 text-xs font-semibold shadow-2xs cursor-pointer"
+                              title="Remove Stale Interrupted Row from Google Sheet"
+                            >
+                              <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                              <span className="hidden sm:inline text-[11px]">Remove</span>
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleOpenPlayback(log)}
+                              className="px-2.5 py-1.5 bg-slate-600 hover:bg-slate-700 text-white rounded-lg transition inline-flex items-center gap-1.5 text-xs font-semibold shadow-2xs cursor-pointer"
+                              title="Check Video Status"
                             >
                               <Play className="w-3.5 h-3.5 fill-white" />
                               <span className="hidden sm:inline text-[11px]">Play</span>

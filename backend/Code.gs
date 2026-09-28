@@ -1021,19 +1021,27 @@ function cleanupStuckUploads_(p){
     const data = uploadSh.getDataRange().getValues();
     const now = Date.now();
 
+    const targetUploadId = p.uploadId ? String(p.uploadId).trim() : '';
+    const targetOrderId = p.orderId ? normalizeOrderId_(p.orderId) : '';
+
     for (let i = data.length - 1; i >= 1; i--) {
       const rawStatus = normalize_(data[i][10] || '');
       const fileId = String(data[i][9] || '').trim();
+      const rowStage = normalize_(data[i][7] || '');
+      const rowOrder = normalizeOrderId_(data[i][1]);
+      const rowUploadId = String(data[i][6] || '').trim();
       const rowTime = parseSheetTimestamp_(data[i][0]);
 
-      // Abandoned in-progress sessions must be older than 30 minutes to prevent interfering with active uploads
+      // Abandoned in-progress sessions older than 8 minutes without a Drive File ID
       const isAbandonedInProgress = (
         rawStatus === 'in progress' ||
         rawStatus === 'started' ||
         rawStatus === 'initiated' ||
         rawStatus === 'uploading' ||
-        rawStatus === 'session created'
-      ) && !fileId && (rowTime > 0 && (now - rowTime > 30 * 60 * 1000));
+        rawStatus === 'session created' ||
+        rowStage === 'session created' ||
+        rowStage.indexOf('session created') !== -1
+      ) && !fileId && (rowTime > 0 && (now - rowTime > 8 * 60 * 1000));
 
       const isFailedOrInterrupted = (
         rawStatus === 'failed' ||
@@ -1046,8 +1054,13 @@ function cleanupStuckUploads_(p){
         rawStatus.indexOf('expired') !== -1
       ) && !fileId;
 
-      if (purgeInterrupted) {
-        if (isFailedOrInterrupted || isAbandonedInProgress) {
+      const isExplicitTarget = Boolean(
+        (targetUploadId && rowUploadId === targetUploadId) ||
+        (targetOrderId && rowOrder === targetOrderId && !fileId)
+      );
+
+      if (purgeInterrupted || isExplicitTarget) {
+        if (isFailedOrInterrupted || isAbandonedInProgress || isExplicitTarget) {
           uploadSh.deleteRow(i + 1);
           cleanedRows++;
         }

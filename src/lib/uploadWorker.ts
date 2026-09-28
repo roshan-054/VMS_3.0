@@ -368,21 +368,22 @@ export async function triggerUploadWorker(): Promise<void> {
       return;
     }
 
-    const configuredChunkSize = getStoredChunkSize();
-    // Intelligent Adaptive Chunking:
-    // If total file size is <= 18 MB (covers 95%+ of standard packing recordings),
-    // upload in 1 single smooth shot (totalChunks = 1)!
-    // This avoids multi-chunk handshakes, 0% restarts, and session timeouts completely.
+    // Strict Google Apps Script & Google Drive Resumable Compatibility:
+    // Google Apps Script Web App POST payload limit is strictly 10 MB (10,485,760 bytes).
+    // In Base64 encoding, every 3 bytes becomes 4 bytes (size increases by 33.3%).
+    // 4 MB binary = 4,194,304 bytes -> 5.33 MB Base64 (+ JSON envelope ~5.35 MB).
+    // This is 100% safe, well below the 10 MB limit, and conforms to Google Drive's 256 KiB alignment (16 * 256 KiB).
+    // If total file size is <= 4 MB, upload in 1 single clean shot.
+    // If total file size > 4 MB, stream via 4 MB chunks.
+    const CHUNK_4MB = 4 * 1024 * 1024; // 4,194,304 bytes (16 * 256 KiB)
     let chunkSize: number;
     let totalChunks: number;
 
-    if (totalBytes <= 18 * 1024 * 1024) {
+    if (totalBytes <= CHUNK_4MB) {
       chunkSize = totalBytes;
       totalChunks = 1;
     } else {
-      // For larger files (> 18 MB), use 8 MB chunks aligned to Google Drive 256 KiB boundary
-      const rawChunk = configuredChunkSize > 0 ? configuredChunkSize : 8 * 1024 * 1024;
-      chunkSize = Math.max(256 * 1024, Math.floor(rawChunk / (256 * 1024)) * (256 * 1024));
+      chunkSize = CHUNK_4MB;
       totalChunks = Math.max(1, Math.ceil(totalBytes / chunkSize));
     }
     const driveFolderId = currentItem.driveFolderId || getStoredDriveFolderId();
