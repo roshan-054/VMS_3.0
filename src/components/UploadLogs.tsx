@@ -409,6 +409,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
 
   const [isCleaningStuck, setIsCleaningStuck] = useState(false);
   const [isPurgingInterrupted, setIsPurgingInterrupted] = useState(false);
+  const [showPurgeModal, setShowPurgeModal] = useState(false);
 
   const handleCleanStuckUploads = async () => {
     setIsCleaningStuck(true);
@@ -423,10 +424,12 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
     }
   };
 
-  const handlePurgeInterrupted = async () => {
-    if (!window.confirm('Are you sure you want to permanently remove all interrupted/failed upload session rows from Google Sheet? This will clear stale interrupted rows from the table.')) {
-      return;
-    }
+  const handlePurgeInterrupted = () => {
+    setShowPurgeModal(true);
+  };
+
+  const executePurgeInterrupted = async () => {
+    setShowPurgeModal(false);
     setIsPurgingInterrupted(true);
     try {
       const result = await fixAndCleanAllStuckUploads({ purgeInterrupted: true });
@@ -2477,6 +2480,56 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
         onShowToast={onShowToast}
         onCleanSuccess={() => loadData(true)}
       />
+
+      {/* In-App Confirmation Modal: Purge Interrupted / Stale Upload Rows */}
+      {showPurgeModal && (
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl overflow-hidden border border-rose-100">
+            <div className="bg-gradient-to-r from-rose-600 to-rose-700 p-5 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <Trash2 className="w-5 h-5 text-rose-100" />
+                <h3 className="font-bold text-base">Purge Interrupted & Failed Rows</h3>
+              </div>
+              <button
+                onClick={() => setShowPurgeModal(false)}
+                className="text-rose-100 hover:text-white p-1 rounded-lg transition cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-slate-700 leading-relaxed">
+                Are you sure you want to permanently remove all <strong>interrupted / failed upload session rows</strong> (such as test diagnostic probes like <code className="bg-rose-50 text-rose-700 px-1 py-0.5 rounded text-xs">TEST-DIRECT-PUT</code>) from the Google Sheet?
+              </p>
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 space-y-1">
+                <p className="font-semibold">What will be removed:</p>
+                <ul className="list-disc list-inside space-y-0.5 text-amber-900/90 pl-1">
+                  <li>Incomplete or interrupted rows in the <strong>UploadLog</strong> Google Sheet tab</li>
+                  <li>Stale upload lock properties in the backend</li>
+                </ul>
+                <p className="pt-1 text-[11px] text-amber-700">Completed order videos in OrderLog/ReturnLog will NOT be touched.</p>
+              </div>
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowPurgeModal(false)}
+                  className="px-4 py-2 border border-slate-200 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-xl transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={executePurgeInterrupted}
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-sm font-semibold rounded-xl transition shadow-xs flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Purge Stale Rows
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
