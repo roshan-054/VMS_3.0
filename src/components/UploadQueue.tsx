@@ -87,18 +87,15 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
   const loadQueue = async () => {
     try {
       const localItems = await dbGetAllQueue();
-      // Only normalize presentation for completed items without triggering unneeded write locks
       const normalized = localItems.map((item) => {
-        const isDoneOrFinished = Boolean(
-          item.fileId ||
-          item.webViewLink ||
-          (item.status === 'uploading' && item.progress && item.progress >= 95 && !workerState.isProcessing) ||
-          (item.uploadedBytes && item.fileSize && item.uploadedBytes >= item.fileSize && item.status !== 'completed' && !workerState.isProcessing) ||
-          (item.progress && item.progress >= 99 && item.stage?.toLowerCase().includes('upload'))
+        // Genuine completed item must have a valid Google Drive fileId or webViewLink
+        const hasDriveProof = Boolean(
+          (item.fileId && item.fileId.length > 5) ||
+          (item.webViewLink && item.webViewLink.length > 10)
         );
 
-        if (isDoneOrFinished && item.status !== 'completed') {
-          return {
+        if (hasDriveProof && item.status !== 'completed') {
+          const updated = {
             ...item,
             status: 'completed' as const,
             progress: 100,
@@ -106,6 +103,9 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
             isDuplicate: false,
             error: undefined,
           };
+          // Persist to IndexedDB so background worker doesn't re-upload it
+          dbPutQueue(updated).catch(() => {});
+          return updated;
         }
         return item;
       });

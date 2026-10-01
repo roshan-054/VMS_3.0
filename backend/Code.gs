@@ -1021,18 +1021,43 @@ function cleanupStuckUploads_(p){
     const data = uploadSh.getDataRange().getValues();
     const now = Date.now();
 
+    // Cache completed orders from OrderLog and ReturnLog to prevent marking completed orders as stale
+    const completedOrdersMap = {};
+    try {
+      [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET].forEach(function(sName) {
+        const sh = sheet_(sName);
+        if (sh) {
+          const sVals = sh.getDataRange().getValues();
+          for (let r = 1; r < sVals.length; r++) {
+            const o = normalizeOrderId_(sVals[r][1]);
+            const f = String(sVals[r][4] || '').trim();
+            if (o && f) completedOrdersMap[o] = f;
+          }
+        }
+      });
+    } catch (_) {}
+
     const targetUploadId = p.uploadId ? String(p.uploadId).trim() : '';
     const targetOrderId = p.orderId ? normalizeOrderId_(p.orderId) : '';
 
     for (let i = data.length - 1; i >= 1; i--) {
       const rawStatus = normalize_(data[i][10] || '');
-      const fileId = String(data[i][9] || '').trim();
+      let fileId = String(data[i][9] || '').trim();
       const rowStage = normalize_(data[i][7] || '');
       const rowOrder = normalizeOrderId_(data[i][1]);
       const rowUploadId = String(data[i][6] || '').trim();
       const rowTime = parseSheetTimestamp_(data[i][0]);
 
-      // Abandoned in-progress sessions older than 8 minutes without a Drive File ID
+      // If this order is already recorded as completed in OrderLog / ReturnLog, attach the fileId
+      if (!fileId && rowOrder && completedOrdersMap[rowOrder]) {
+        fileId = completedOrdersMap[rowOrder];
+        uploadSh.getRange(i + 1, 10).setValue(fileId);
+        uploadSh.getRange(i + 1, 11).setValue('Completed');
+        uploadSh.getRange(i + 1, 8).setValue('Uploaded to Google Drive');
+        continue;
+      }
+
+      // Abandoned in-progress sessions older than 20 minutes without a Drive File ID and not in completed map
       const isAbandonedInProgress = (
         rawStatus === 'in progress' ||
         rawStatus === 'started' ||
@@ -1041,7 +1066,7 @@ function cleanupStuckUploads_(p){
         rawStatus === 'session created' ||
         rowStage === 'session created' ||
         rowStage.indexOf('session created') !== -1
-      ) && !fileId && (rowTime > 0 && (now - rowTime > 8 * 60 * 1000));
+      ) && !fileId && !completedOrdersMap[rowOrder] && (rowTime > 0 && (now - rowTime > 20 * 60 * 1000));
 
       const isFailedOrInterrupted = (
         rawStatus === 'failed' ||
@@ -1052,7 +1077,7 @@ function cleanupStuckUploads_(p){
         rawStatus.indexOf('interrupt') !== -1 ||
         rawStatus.indexOf('stale') !== -1 ||
         rawStatus.indexOf('expired') !== -1
-      ) && !fileId;
+      ) && !fileId && !completedOrdersMap[rowOrder];
 
       const isExplicitTarget = Boolean(
         (targetUploadId && rowUploadId === targetUploadId) ||
@@ -1613,6 +1638,7 @@ function updateUploadLog_(uploadId, stage, progress, fileId, status, error, queu
       else if (normOrderId && rOrderId === normOrderId && (!normType || rType === normType)) match = true;
 
       if (match) {
+        sh.getRange(i + 1, 1).setValue(new Date());
         sh.getRange(i + 1, 8, 1, 5).setValues([[stage || 'Uploaded to Google Drive', progress !== undefined ? progress : 100, fileId || '', status || 'Completed', error || '']]);
         SpreadsheetApp.flush();
         return;
@@ -1673,8 +1699,8 @@ function getGlobalUploadLease_() {
   try {
     const lease = JSON.parse(raw);
     const now = Date.now();
-    // Lease expires after 40 seconds of inactive chunk heartbeats
-    if (now - Number(lease.lastHeartbeatAt || 0) > 40000) {
+    // Lease expires after 35 seconds of inactive chunk heartbeats or 5 minutes total maximum
+    if (now - Number(lease.lastHeartbeatAt || 0) > 35000 || (now - Number(lease.startedAt || 0) > 300000)) {
       PropertiesService.getScriptProperties().deleteProperty('GLOBAL_ACTIVE_UPLOAD');
       return null;
     }
@@ -1692,8 +1718,13 @@ function checkGlobalUploadSlot_(orderId, uploadId, userEmail) {
   }
   // If the same upload session or same order/user, allow continuation
   if (activeLease.uploadId === uploadId || (activeLease.orderId === orderId && activeLease.packerEmail === userEmail)) {
-    touchGlobalUploadSlot_(uploadId);
-    return { available: true };
+    if (Date.now() - Number(activeLease.startedAt || 0) < 300000) {
+      touchGlobalUploadSlot_(uploadId);
+      return { available: true };
+    } else {
+      PropertiesService.getScriptProperties().deleteProperty('GLOBAL_ACTIVE_UPLOAD');
+      return { available: true };
+    }
   }
   return {
     available: false,
@@ -1799,10 +1830,10 @@ function startUpload_(p){
   // Acquire Global Upload Lease
   setGlobalUploadLease_(uploadId, order, user.email);
 
-  // Initiate Google Drive Resumable Upload Session (Direct Drive v3 API) whenever file is chunked (totalChunks > 1)
+  // Initiate Google Drive Resumable Upload Session (Direct Drive v3 API) for fast direct binary uploads
   let uploadUrl = '';
   const totalChunks = Number(p.totalChunks || 1);
-  if (totalChunks > 1) {
+  if (totalChunks > 1 || size >= 2 * 1024 * 1024) {
     try {
       uploadUrl = initDriveResumableSession_(name, mime, size, folder.getId());
     } catch(initErr) {
@@ -1900,33 +1931,63 @@ function uploadChunk_(p){
   touchGlobalUploadSlot_(uploadId);
 
   const raw = PropertiesService.getScriptProperties().getProperty('UPLOAD_' + uploadId);
+  if (raw) {
+    try {
+      const sParsed = JSON.parse(raw);
+      if (sParsed.completed && sParsed.fileId) {
+        return {
+          success: true,
+          complete: true,
+          completed: true,
+          fileId: sParsed.fileId,
+          webViewLink: sParsed.webViewLink || ('https://drive.google.com/file/d/' + sParsed.fileId + '/preview'),
+          playbackUrl: sParsed.playbackUrl || ('https://drive.google.com/file/d/' + sParsed.fileId + '/preview'),
+          stage: 'Uploaded to Google Drive',
+          status: 'Completed',
+          orderId: sParsed.order,
+          platform: sParsed.platform,
+          recordingType: sParsed.type,
+          message: 'Upload already completed and verified in Google Drive.'
+        };
+      }
+    } catch(_) {}
+  }
+
   if (!raw) {
     // CRITICAL: Before declaring session expired, verify if this upload has already completed!
-    // This happens when final chunk completed, deleted the session, and client network retried the request.
+    // This happens when final chunk completed, saved the session, and client network retried the request.
     try {
-      const targetSheet = getTargetLogSheet_(p.recordingType || 'Forward');
-      const existingData = targetSheet.getDataRange().getValues();
       const normOrder = normalizeOrderId_(p.orderId || '');
       const cleanJobId = String(p.queueJobId || '').trim();
+      const targetSheets = [
+        getTargetLogSheet_(p.recordingType || 'Forward'),
+        sheet_(CONFIG.ORDER_LOG_SHEET),
+        sheet_(CONFIG.RETURN_LOG_SHEET)
+      ];
 
-      for (let i = existingData.length - 1; i >= Math.max(1, existingData.length - 50); i--) {
-        const rowOrder = normalizeOrderId_(existingData[i][1]);
-        const rowFid = String(existingData[i][4] || '').trim();
-        const rowPlay = String(existingData[i][5] || '').trim();
-        const rowJob = String(existingData[i][9] || '').trim();
+      for (let sIdx = 0; sIdx < targetSheets.length; sIdx++) {
+        const sh = targetSheets[sIdx];
+        if (!sh) continue;
+        const existingData = sh.getDataRange().getValues();
+        for (let i = existingData.length - 1; i >= Math.max(1, existingData.length - 50); i--) {
+          const rowOrder = normalizeOrderId_(existingData[i][1]);
+          const rowFid = String(existingData[i][4] || '').trim();
+          const rowPlay = String(existingData[i][5] || '').trim();
+          const rowJob = String(existingData[i][9] || '').trim();
 
-        if ((cleanJobId && rowJob === cleanJobId) || (normOrder && rowOrder === normOrder && rowFid)) {
-          return {
-            success: true,
-            complete: true,
-            completed: true,
-            fileId: rowFid,
-            webViewLink: rowPlay || ('https://drive.google.com/file/d/' + rowFid + '/preview'),
-            playbackUrl: rowPlay || ('https://drive.google.com/file/d/' + rowFid + '/preview'),
-            stage: 'Uploaded to Google Drive',
-            status: 'Completed',
-            message: 'Upload already completed and verified in Google Drive.'
-          };
+          if ((cleanJobId && rowJob === cleanJobId) || (normOrder && rowOrder === normOrder && rowFid)) {
+            return {
+              success: true,
+              complete: true,
+              completed: true,
+              fileId: rowFid,
+              webViewLink: rowPlay || ('https://drive.google.com/file/d/' + rowFid + '/preview'),
+              playbackUrl: rowPlay || ('https://drive.google.com/file/d/' + rowFid + '/preview'),
+              stage: 'Uploaded to Google Drive',
+              status: 'Completed',
+              message: 'Upload already completed and verified in Google Drive.'
+            };
+          }
         }
       }
     } catch (_) {}
@@ -1975,6 +2036,13 @@ function uploadChunk_(p){
       if (code === 308) {
         // Chunk accepted, upload in progress
         const pct = Math.min(99, Math.round(((inclusiveEnd + 1) / total) * 100));
+        try {
+          s.lastHeartbeatAt = Date.now();
+          PropertiesService.getScriptProperties().setProperty('UPLOAD_' + uploadId, JSON.stringify(s));
+          if (chunkIndex % 4 === 0) {
+            updateUploadLog_(uploadId, 'Uploading chunk ' + (chunkIndex + 1) + ' of ' + totalChunks, pct, '', 'In Progress', '', s.queueJobId, s.order, s.type);
+          }
+        } catch(_) {}
         return {
           success: true,
           complete: false,
@@ -2043,7 +2111,7 @@ function uploadChunk_(p){
     return finalizeCompletedUpload_(s, uploadId, fid, user);
   } else {
     // Attempt auto-initializing resumable session on chunk 0 if missing
-    if (!s.uploadUrl || chunkIndex === 0) {
+    if (!s.uploadUrl) {
       const freshUploadUrl = initDriveResumableSession_(s.name, s.mime || 'video/mp4', total, targetFolder.getId());
       if (freshUploadUrl) {
         s.uploadUrl = freshUploadUrl;
@@ -2169,7 +2237,19 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
     cleanupOldStartedUploads_(s.order, uploadId);
 
     if (uploadId) {
-      try { PropertiesService.getScriptProperties().deleteProperty('UPLOAD_' + uploadId); } catch(_) {}
+      try {
+        // Keep completed record in PropertiesService for 30 minutes so retried requests get instant success
+        PropertiesService.getScriptProperties().setProperty('UPLOAD_' + uploadId, JSON.stringify({
+          completed: true,
+          fileId: fid,
+          webViewLink: playback,
+          playbackUrl: playback,
+          order: s.order,
+          platform: s.platform,
+          type: s.type,
+          completedAt: Date.now()
+        }));
+      } catch(_) {}
     }
 
     return {
@@ -2245,6 +2325,7 @@ function uploadLogs_(p){
   const seenFids = {};
   const seenUploadIds = {};
   const seenJobIds = {};
+  const seenOrders = {};
 
   let totalCount = 0;
   let completedCount = 0;
@@ -2338,6 +2419,7 @@ function uploadLogs_(p){
 
         if (fid) seenFids[fid] = true;
         if (jid) seenJobIds[jid] = true;
+        if (oid) seenOrders[normalizeOrderId_(oid) + '_' + normalize_(rt)] = true;
 
         totalCount++;
         completedCount++;
@@ -2401,6 +2483,10 @@ function uploadLogs_(p){
 
         if (!orderId && !driveFileId && !uploadId) continue;
 
+        // If this order was already completed in OrderLog / ReturnLog, skip leftover in-progress/stale row
+        const ordKey = normalizeOrderId_(orderId) + '_' + normalize_(recordingType);
+        if (orderId && seenOrders[ordKey]) continue;
+
         // If this exact video file or job ID was already added from OrderLog, skip duplicate
         if (driveFileId && seenFids[driveFileId]) continue;
         if (queueJobId && seenJobIds[queueJobId]) continue;
@@ -2414,9 +2500,9 @@ function uploadLogs_(p){
           progress = '100';
         }
 
-        // Auto-detect abandoned in-progress sessions older than 10 minutes without Drive File ID
+        // Auto-detect abandoned in-progress sessions older than 20 minutes without Drive File ID
         const rowDate = ts instanceof Date && !isNaN(ts.getTime()) ? ts.getTime() : Date.now();
-        const isStale = (normSt === 'in progress' || normSt === 'uploading' || normSt === 'processing' || normSt === 'started') && !driveFileId && (Date.now() - rowDate > 10 * 60 * 1000);
+        const isStale = (normSt === 'in progress' || normSt === 'uploading' || normSt === 'processing' || normSt === 'started') && !driveFileId && (Date.now() - rowDate > 20 * 60 * 1000);
         if (isStale) {
           rawStatus = 'Interrupted / Stale';
           normSt = 'failed';

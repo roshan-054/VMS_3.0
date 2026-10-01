@@ -777,8 +777,8 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
         if (localMatch.orderId) matchedLocalKeys.add(norm(localMatch.orderId));
         if (localMatch.fileName) matchedLocalKeys.add(norm(localMatch.fileName));
 
-        const isLocalDone = localMatch.status === 'Completed' || Number(localMatch.progress) >= 100 || !!(localMatch.driveFileId && localMatch.driveFileId.length > 5);
-        const isCloudDone = cloudLog.status === 'Completed' || Number(cloudLog.progress) >= 100 || !!(cloudLog.driveFileId && cloudLog.driveFileId.length > 5);
+        const isLocalDone = (localMatch.status === 'Completed' && Boolean(localMatch.driveFileId)) || !!(localMatch.driveFileId && localMatch.driveFileId.length > 5);
+        const isCloudDone = cloudLog.status === 'Completed' || !!(cloudLog.driveFileId && cloudLog.driveFileId.length > 5);
 
         // If local is completed but cloud log still says 'Started' or 'In Progress', INSTANTLY upgrade cloud log to Completed!
         if (isLocalDone || isCloudDone) {
@@ -819,7 +819,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
       }
 
       // If cloudLog itself has driveFileId, ensure status is Completed and playback URL exists
-      if ((cloudLog.driveFileId && cloudLog.driveFileId.length > 5) || Number(cloudLog.progress) >= 100) {
+      if (cloudLog.driveFileId && cloudLog.driveFileId.length > 5) {
         return {
           ...cloudLog,
           status: 'Completed',
@@ -831,6 +831,22 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
       }
 
       return cloudLog;
+    });
+
+    // Deduplicate: if an order has a completed row, omit any stale/failed duplicate row for that exact order
+    const completedOrderKeys = new Set<string>();
+    enhancedCloudLogs.forEach((l) => {
+      if ((l.status === 'Completed' || (l.driveFileId && l.driveFileId.length > 5)) && l.orderId) {
+        completedOrderKeys.add(`${norm(l.orderId)}_${norm(l.recordingType || 'forward')}`);
+      }
+    });
+
+    const dedupedCloudLogs = enhancedCloudLogs.filter((l) => {
+      if (l.status !== 'Completed' && (!l.driveFileId || l.driveFileId.length <= 5)) {
+        const key = `${norm(l.orderId)}_${norm(l.recordingType || 'forward')}`;
+        if (completedOrderKeys.has(key)) return false;
+      }
+      return true;
     });
 
     // 2. Add active local queue items that haven't been registered in cloudLogs yet
@@ -859,7 +875,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
       return true;
     });
 
-    return [...uniqueLocal, ...enhancedCloudLogs];
+    return [...uniqueLocal, ...dedupedCloudLogs];
   }, [sourceView, cloudLogs, localAsLogs]);
 
   // Scoped Logs: Filtered by platform, type, date range, and search query (before applying status tab filter)
