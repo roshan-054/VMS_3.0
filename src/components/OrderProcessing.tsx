@@ -1082,7 +1082,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
   // User-Scoped Manifests (Strict Isolation):
   // - Admin users see ALL manifests across all workstations & operators
-  // - Regular operators ONLY see and count manifests assigned to their own email/name
+  // - Regular operators ONLY see and count manifests assigned to or completed by their own email/name
   const userScopedManifests = useMemo(() => {
     if (isUserAdmin) return manifests;
 
@@ -1095,17 +1095,21 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
       const procEmail = ((m as any).processedByEmail || '').trim().toLowerCase();
       const procName = (m.processedByName || '').trim().toLowerCase();
       const opName = ((m as any).operator || '').trim().toLowerCase();
+      const packedEmail = ((m as any).packedByEmail || '').trim().toLowerCase();
+      const packedName = ((m as any).packedByName || '').trim().toLowerCase();
 
       const matchByEmail = userEmail && (
         assignedEmail === userEmail ||
         procEmail === userEmail ||
-        opName === userEmail
+        opName === userEmail ||
+        packedEmail === userEmail
       );
 
       const matchByName = userName && (
         assignedName === userName ||
         procName === userName ||
-        opName === userName
+        opName === userName ||
+        packedName === userName
       );
 
       return matchByEmail || matchByName;
@@ -1145,8 +1149,9 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         statusFilter === 'ALL' ||
         !statusFilter ||
         mStatus === sFilter ||
-        (sFilter === 'packed' && (mStatus === 'completed' || mStatus === 'packed')) ||
-        (sFilter === 'completed' && (mStatus === 'packed' || mStatus === 'completed'));
+        (sFilter === 'packed' && (mStatus === 'completed' || mStatus === 'packed' || mStatus.includes('packed') || mStatus.includes('completed'))) ||
+        (sFilter === 'completed' && (mStatus === 'packed' || mStatus === 'completed' || mStatus.includes('packed') || mStatus.includes('completed'))) ||
+        (sFilter === 'pending' && mStatus === 'pending');
 
       const matchPlatform =
         platformFilter === 'ALL' ||
