@@ -369,6 +369,23 @@ export async function deleteGtinProduct(gtin: string): Promise<boolean> {
   return true;
 }
 
+export async function deleteMultipleGtinProducts(gtins: string[]): Promise<number> {
+  if (!Array.isArray(gtins) || gtins.length === 0) return 0;
+  const cleanSet = new Set(gtins.map((g) => normalizeBarcode(g)).filter(Boolean));
+  if (cleanSet.size === 0) return 0;
+
+  const catalog = getStoredGtinCatalog();
+  const filtered = catalog.filter((p) => !cleanSet.has(normalizeBarcode(p.gtin)));
+  const removedCount = catalog.length - filtered.length;
+  saveStoredGtinCatalog(filtered);
+
+  try {
+    requestApi('deleteGtinProductsBatch', { gtins: Array.from(cleanSet) }).catch(() => {});
+  } catch (_) {}
+
+  return removedCount;
+}
+
 export async function importGtinCatalog(products: GtinCatalogProduct[]): Promise<number> {
   const catalog = getStoredGtinCatalog();
   let newCount = 0;

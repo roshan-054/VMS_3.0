@@ -125,6 +125,7 @@ function doPost(e) {
       case 'getGtinCatalog': return output_(getGtinCatalog_(p));
       case 'saveGtinProduct': return output_(saveGtinProduct_(p));
       case 'deleteGtinProduct': return output_(deleteGtinProduct_(p));
+      case 'deleteGtinProductsBatch': return output_(deleteGtinProductsBatch_(p));
       case 'saveGtinCatalogBatch': return output_(saveGtinCatalogBatch_(p));
       case 'syncExternalGtinSheet': return output_(syncExternalGtinSheet_(p));
       default: return output_({success:false, error:'Unknown action: '+a});
@@ -4527,6 +4528,33 @@ function deleteGtinProduct_(p) {
   }
 
   return { success: true, deleted: deleted, gtin: gtin };
+}
+
+function deleteGtinProductsBatch_(p) {
+  var gtins = p.gtins || [];
+  if (!Array.isArray(gtins) || gtins.length === 0) {
+    return { success: false, error: 'GTINs array is required' };
+  }
+
+  var set = {};
+  for (var k = 0; k < gtins.length; k++) {
+    var g = String(gtins[k] || '').trim().toUpperCase();
+    if (g) set[g] = true;
+  }
+
+  var sh = getGtinCatalogSheet_();
+  var data = sh.getDataRange().getValues();
+  var deletedCount = 0;
+
+  for (var i = data.length - 1; i >= 1; i--) {
+    var rowGtin = String(data[i][1] || '').trim().toUpperCase();
+    if (rowGtin && set[rowGtin]) {
+      sh.deleteRow(i + 1);
+      deletedCount++;
+    }
+  }
+
+  return { success: true, count: deletedCount };
 }
 
 function saveGtinCatalogBatch_(p) {

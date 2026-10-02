@@ -26,7 +26,11 @@ import {
   ShieldCheck,
   ShoppingBag,
   Eye,
-  Edit2
+  Edit2,
+  CheckSquare,
+  Square,
+  LayoutGrid,
+  List
 } from 'lucide-react';
 import { PlatformType, User, OrderManifest, ManifestItem, GtinCatalogProduct, PackVerificationLog } from '../types';
 import {
@@ -37,6 +41,7 @@ import {
   getStoredGtinCatalog,
   addOrUpdateGtinProduct,
   deleteGtinProduct,
+  deleteMultipleGtinProducts,
   importGtinCatalog,
   normalizeBarcode,
   findProductByGtin,
@@ -118,6 +123,9 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   const [gtinSearchQuery, setGtinSearchQuery] = useState<string>('');
   const [isSyncingMasterSheet, setIsSyncingMasterSheet] = useState<boolean>(false);
   const [isInitializingTabs, setIsInitializingTabs] = useState<boolean>(false);
+  const [selectedGtins, setSelectedGtins] = useState<Set<string>>(new Set());
+  const [catalogViewMode, setCatalogViewMode] = useState<'grid' | 'table'>('grid');
+  const [isDeletingBulk, setIsDeletingBulk] = useState<boolean>(false);
 
   // --- Add Product to Catalog State ---
   const [isAddProductModalOpen, setIsAddProductModalOpen] = useState<boolean>(false);
@@ -452,7 +460,78 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     }
   };
 
-  // Delete product from Catalog and Google Sheet
+  // Multi-Selection handlers for Catalog
+  const handleToggleSelectProduct = (gtin: string) => {
+    const clean = normalizeBarcode(gtin);
+    if (!clean) return;
+    setSelectedGtins((prev) => {
+      const next = new Set(prev);
+      if (next.has(clean)) {
+        next.delete(clean);
+      } else {
+        next.add(clean);
+      }
+      return next;
+    });
+  };
+
+  const handleSelectAllFiltered = () => {
+    const allFiltered = filteredGtinCatalog.map((p) => normalizeBarcode(p.gtin)).filter(Boolean);
+    setSelectedGtins(new Set(allFiltered));
+  };
+
+  const handleDeselectAll = () => {
+    setSelectedGtins(new Set());
+  };
+
+  const handleDeleteSelectedProducts = async () => {
+    if (selectedGtins.size === 0) return;
+    const count = selectedGtins.size;
+
+    if (
+      window.confirm(
+        `Are you sure you want to delete ${count} selected products from the GTIN catalog and Google Sheet? This will permanently remove them.`
+      )
+    ) {
+      setIsDeletingBulk(true);
+      try {
+        const deleted = await deleteMultipleGtinProducts(Array.from(selectedGtins));
+        setGtinCatalog(getStoredGtinCatalog());
+        setSelectedGtins(new Set());
+        onShowToast(`Deleted ${deleted} selected products from catalog and Google Sheet!`, 'success');
+      } catch (err: any) {
+        onShowToast(err?.message || 'Failed to delete selected products', 'error');
+      } finally {
+        setIsDeletingBulk(false);
+      }
+    }
+  };
+
+  const handleDeleteAllCatalog = async () => {
+    if (gtinCatalog.length === 0) return;
+    if (
+      window.confirm(
+        `⚠️ DANGER: Are you sure you want to DELETE ALL ${gtinCatalog.length} products in your catalog and Google Sheet?`
+      )
+    ) {
+      if (window.confirm(`Please confirm once more: All ${gtinCatalog.length} products will be permanently wiped.`)) {
+        setIsDeletingBulk(true);
+        try {
+          const allGtins = gtinCatalog.map((p) => p.gtin);
+          await deleteMultipleGtinProducts(allGtins);
+          setGtinCatalog(getStoredGtinCatalog());
+          setSelectedGtins(new Set());
+          onShowToast('All products cleared from catalog and Google Sheet.', 'info');
+        } catch (err: any) {
+          onShowToast(err?.message || 'Failed to clear catalog', 'error');
+        } finally {
+          setIsDeletingBulk(false);
+        }
+      }
+    }
+  };
+
+  // Delete single product from Catalog and Google Sheet
   const handleDeleteProduct = async (gtin: string, name?: string) => {
     const clean = normalizeBarcode(gtin);
     if (!clean) return;
@@ -460,6 +539,11 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     if (window.confirm(`Are you sure you want to delete "${name || clean}" (Barcode: ${clean}) from the GTIN product catalog and Google Sheet?`)) {
       await deleteGtinProduct(clean);
       setGtinCatalog(getStoredGtinCatalog());
+      setSelectedGtins((prev) => {
+        const next = new Set(prev);
+        next.delete(clean);
+        return next;
+      });
       onShowToast(`Product ${clean} deleted from catalog and Google Sheet!`, 'info');
     }
   };
@@ -1726,35 +1810,127 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
             </div>
           </div>
 
-          {/* Search Bar for Product Catalog */}
-          <div className="flex items-center gap-3">
-            <div className="relative flex-1">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                value={gtinSearchQuery}
-                onChange={(e) => setGtinSearchQuery(e.target.value)}
-                placeholder="Search catalog by Barcode / GTIN, SKU, Product Name, or Category..."
-                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500 shadow-inner"
-              />
-              {gtinSearchQuery && (
+          {/* Search Bar & Multi-Select Action Toolbar */}
+          <div className="space-y-3">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+              {/* Search Bar */}
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={gtinSearchQuery}
+                  onChange={(e) => setGtinSearchQuery(e.target.value)}
+                  placeholder="Search catalog by Barcode / GTIN, SKU, Product Name, or Category..."
+                  className="w-full pl-10 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500 shadow-inner"
+                />
+                {gtinSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setGtinSearchQuery('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+
+              {/* View Switcher & Global Select All */}
+              <div className="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
-                  onClick={() => setGtinSearchQuery('')}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  onClick={
+                    selectedGtins.size === filteredGtinCatalog.length && filteredGtinCatalog.length > 0
+                      ? handleDeselectAll
+                      : handleSelectAllFiltered
+                  }
+                  disabled={filteredGtinCatalog.length === 0}
+                  className={`px-3 py-2 text-xs font-bold rounded-xl border transition flex items-center gap-1.5 cursor-pointer disabled:opacity-40 shadow-2xs ${
+                    selectedGtins.size > 0 && selectedGtins.size === filteredGtinCatalog.length
+                      ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
+                      : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                  }`}
+                  title="Select or deselect all visible products"
                 >
-                  <X className="w-4 h-4" />
+                  {selectedGtins.size > 0 && selectedGtins.size === filteredGtinCatalog.length ? (
+                    <CheckSquare className="w-4 h-4 text-indigo-600" />
+                  ) : (
+                    <Square className="w-4 h-4 text-slate-400" />
+                  )}
+                  <span>
+                    {selectedGtins.size > 0 && selectedGtins.size === filteredGtinCatalog.length
+                      ? 'Deselect All'
+                      : 'Select All'}
+                  </span>
                 </button>
-              )}
+
+                {/* View Switcher: Grid vs Table */}
+                <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => setCatalogViewMode('grid')}
+                    className={`p-1.5 rounded-lg transition cursor-pointer ${
+                      catalogViewMode === 'grid'
+                        ? 'bg-white text-indigo-600 shadow-xs font-bold'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                    title="Grid Card View"
+                  >
+                    <LayoutGrid className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCatalogViewMode('table')}
+                    className={`p-1.5 rounded-lg transition cursor-pointer ${
+                      catalogViewMode === 'table'
+                        ? 'bg-white text-indigo-600 shadow-xs font-bold'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                    title="Table / List View"
+                  >
+                    <List className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
             </div>
-            {gtinSearchQuery && (
-              <span className="text-xs font-mono text-slate-500 font-bold whitespace-nowrap">
-                Showing {filteredGtinCatalog.length} of {gtinCatalog.length}
-              </span>
+
+            {/* Bulk Selection Active Action Banner */}
+            {selectedGtins.size > 0 && (
+              <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-3 shadow-xs animate-fade-in">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-bold text-xs">
+                    {selectedGtins.size}
+                  </div>
+                  <span className="text-xs font-bold text-indigo-950">
+                    {selectedGtins.size} of {filteredGtinCatalog.length} products selected
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleDeselectAll}
+                    className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-600 text-xs font-bold rounded-xl border border-slate-200 transition cursor-pointer"
+                  >
+                    Cancel Selection
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isDeletingBulk}
+                    onClick={handleDeleteSelectedProducts}
+                    className="px-4 py-1.5 bg-red-600 hover:bg-red-500 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>
+                      {isDeletingBulk ? 'Deleting...' : `Delete Selected (${selectedGtins.size})`}
+                    </span>
+                  </button>
+                </div>
+              </div>
             )}
           </div>
 
-          {/* Product Catalog Grid */}
+          {/* Product Catalog Display (Grid View or Table View) */}
           {filteredGtinCatalog.length === 0 ? (
             <div className="p-12 text-center text-slate-400 space-y-3 border-2 border-dashed border-slate-200 rounded-2xl">
               <ShoppingBag className="w-10 h-10 mx-auto text-slate-300" />
@@ -1785,76 +1961,230 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                 </button>
               </div>
             </div>
-          ) : (
+          ) : catalogViewMode === 'grid' ? (
+            /* 1. GRID VIEW */
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3.5">
-              {filteredGtinCatalog.map((prod) => (
-                <div
-                  key={prod.gtin}
-                  className="bg-slate-50 border border-slate-200 hover:border-indigo-300 rounded-2xl p-3.5 space-y-2.5 transition shadow-2xs flex flex-col justify-between group"
-                >
-                  <div className="flex items-start gap-3">
-                    {prod.imageUrl ? (
-                      <img
-                        src={prod.imageUrl}
-                        alt={prod.shortName}
-                        className="w-14 h-14 rounded-xl object-contain bg-white border border-slate-200 p-1 shadow-xs shrink-0"
-                        onError={(e) => {
-                          (e.target as HTMLElement).style.display = 'none';
-                        }}
-                      />
-                    ) : (
-                      <div className="w-14 h-14 rounded-xl bg-slate-200 text-slate-400 flex items-center justify-center shrink-0">
-                        <ShoppingBag className="w-6 h-6" />
-                      </div>
-                    )}
+              {filteredGtinCatalog.map((prod) => {
+                const isSelected = selectedGtins.has(normalizeBarcode(prod.gtin));
+                return (
+                  <div
+                    key={prod.gtin}
+                    className={`rounded-2xl p-3.5 space-y-2.5 transition shadow-2xs flex flex-col justify-between group relative border ${
+                      isSelected
+                        ? 'border-indigo-500 bg-indigo-50/40 ring-2 ring-indigo-500/20'
+                        : 'bg-slate-50 border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      {/* Checkbox */}
+                      <button
+                        type="button"
+                        onClick={() => handleToggleSelectProduct(prod.gtin)}
+                        className="mt-0.5 p-0.5 text-slate-400 hover:text-indigo-600 transition cursor-pointer"
+                        title={isSelected ? 'Deselect product' : 'Select product for bulk action'}
+                      >
+                        {isSelected ? (
+                          <CheckSquare className="w-4 h-4 text-indigo-600" />
+                        ) : (
+                          <Square className="w-4 h-4 text-slate-300 group-hover:text-slate-400" />
+                        )}
+                      </button>
 
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-1">
-                        <span className="text-[10px] font-mono text-indigo-600 uppercase font-bold truncate">
+                      {/* Product Thumbnail */}
+                      {prod.imageUrl ? (
+                        <img
+                          src={prod.imageUrl}
+                          alt={prod.shortName}
+                          className="w-13 h-13 rounded-xl object-contain bg-white border border-slate-200 p-1 shadow-xs shrink-0"
+                          onError={(e) => {
+                            (e.target as HTMLElement).style.display = 'none';
+                          }}
+                        />
+                      ) : (
+                        <div className="w-13 h-13 rounded-xl bg-slate-200 text-slate-400 flex items-center justify-center shrink-0">
+                          <ShoppingBag className="w-5 h-5" />
+                        </div>
+                      )}
+
+                      {/* Product Info */}
+                      <div className="min-w-0 flex-1">
+                        <span className="text-[10px] font-mono text-indigo-600 uppercase font-bold truncate block">
                           {prod.category || 'General'}
                         </span>
-                        <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => setEditingProduct(prod)}
-                            className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition cursor-pointer"
-                            title="Edit product"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteProduct(prod.gtin, prod.shortName || prod.productName)}
-                            className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition cursor-pointer"
-                            title="Delete product from catalog & Google Sheet"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
+                        <h3 className="text-xs font-bold text-slate-900 truncate" title={prod.productName}>
+                          {prod.shortName || prod.productName}
+                        </h3>
+                        <p className="text-[11px] font-mono text-slate-500 font-bold mt-0.5 truncate">
+                          SKU: <span className="text-slate-700">{prod.sku}</span>
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Card Footer with GTIN & Action Buttons */}
+                    <div className="pt-2 border-t border-slate-200/80 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <Barcode className="w-4 h-4 text-slate-400 shrink-0" />
+                        <span className="text-xs font-mono font-black text-slate-900 truncate tracking-wide">
+                          {prod.gtin}
+                        </span>
                       </div>
 
-                      <h3 className="text-xs font-bold text-slate-900 truncate" title={prod.productName}>
-                        {prod.shortName || prod.productName}
-                      </h3>
-                      <p className="text-[11px] font-mono text-slate-500 font-bold mt-0.5 truncate">
-                        SKU: <span className="text-slate-700">{prod.sku}</span>
-                      </p>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setEditingProduct(prod)}
+                          className="px-2 py-1 bg-white hover:bg-indigo-50 text-indigo-700 hover:text-indigo-800 border border-slate-200 hover:border-indigo-300 rounded-lg text-[11px] font-bold transition flex items-center gap-1 cursor-pointer shadow-2xs"
+                          title="Edit product details"
+                        >
+                          <Edit2 className="w-3 h-3" />
+                          <span>Edit</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteProduct(prod.gtin, prod.shortName || prod.productName)}
+                          className="px-2 py-1 bg-white hover:bg-red-50 text-red-600 hover:text-red-700 border border-slate-200 hover:border-red-300 rounded-lg text-[11px] font-bold transition flex items-center gap-1 cursor-pointer shadow-2xs"
+                          title="Delete product from catalog & Google Sheet"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          <span>Delete</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
+                );
+              })}
+            </div>
+          ) : (
+            /* 2. TABLE / LIST VIEW FOR HIGH-DENSITY MULTI-SELECTION & EDITING */
+            <div className="overflow-x-auto border border-slate-200 rounded-2xl">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-mono text-[11px]">
+                  <tr>
+                    <th className="p-3 w-10 text-center">
+                      <button
+                        type="button"
+                        onClick={
+                          selectedGtins.size === filteredGtinCatalog.length && filteredGtinCatalog.length > 0
+                            ? handleDeselectAll
+                            : handleSelectAllFiltered
+                        }
+                        className="cursor-pointer"
+                        title="Toggle select all"
+                      >
+                        {selectedGtins.size > 0 && selectedGtins.size === filteredGtinCatalog.length ? (
+                          <CheckSquare className="w-4 h-4 text-indigo-600" />
+                        ) : (
+                          <Square className="w-4 h-4 text-slate-400" />
+                        )}
+                      </button>
+                    </th>
+                    <th className="p-3 w-12 text-center">Image</th>
+                    <th className="p-3">GTIN / Barcode</th>
+                    <th className="p-3">SKU / Code</th>
+                    <th className="p-3">Product Name</th>
+                    <th className="p-3">Short Name</th>
+                    <th className="p-3">Category</th>
+                    <th className="p-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredGtinCatalog.map((prod) => {
+                    const isSelected = selectedGtins.has(normalizeBarcode(prod.gtin));
+                    return (
+                      <tr
+                        key={prod.gtin}
+                        className={`transition ${
+                          isSelected ? 'bg-indigo-50/50 hover:bg-indigo-50' : 'hover:bg-slate-50/80'
+                        }`}
+                      >
+                        <td className="p-3 text-center">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleSelectProduct(prod.gtin)}
+                            className="cursor-pointer text-slate-400 hover:text-indigo-600"
+                          >
+                            {isSelected ? (
+                              <CheckSquare className="w-4 h-4 text-indigo-600" />
+                            ) : (
+                              <Square className="w-4 h-4 text-slate-300" />
+                            )}
+                          </button>
+                        </td>
+                        <td className="p-2 text-center">
+                          {prod.imageUrl ? (
+                            <img
+                              src={prod.imageUrl}
+                              alt=""
+                              className="w-8 h-8 rounded-lg object-contain bg-white border border-slate-200 p-0.5 mx-auto"
+                              onError={(e) => {
+                                (e.target as HTMLElement).style.display = 'none';
+                              }}
+                            />
+                          ) : (
+                            <div className="w-8 h-8 rounded-lg bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
+                              <ShoppingBag className="w-4 h-4" />
+                            </div>
+                          )}
+                        </td>
+                        <td className="p-3 font-mono font-bold text-slate-900 whitespace-nowrap">
+                          {prod.gtin}
+                        </td>
+                        <td className="p-3 font-mono text-slate-700 whitespace-nowrap font-medium">
+                          {prod.sku}
+                        </td>
+                        <td className="p-3 text-slate-900 font-medium max-w-xs truncate" title={prod.productName}>
+                          {prod.productName}
+                        </td>
+                        <td className="p-3 text-slate-600 max-w-[150px] truncate" title={prod.shortName}>
+                          {prod.shortName || '-'}
+                        </td>
+                        <td className="p-3 whitespace-nowrap">
+                          <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-full font-mono text-[10px] font-bold">
+                            {prod.category || 'General'}
+                          </span>
+                        </td>
+                        <td className="p-3 text-right whitespace-nowrap">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setEditingProduct(prod)}
+                              className="px-2.5 py-1 bg-white hover:bg-indigo-50 text-indigo-700 border border-slate-200 hover:border-indigo-300 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer shadow-2xs"
+                            >
+                              <Edit2 className="w-3 h-3" />
+                              <span>Edit</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteProduct(prod.gtin, prod.shortName || prod.productName)}
+                              className="px-2.5 py-1 bg-white hover:bg-red-50 text-red-600 border border-slate-200 hover:border-red-300 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer shadow-2xs"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              <span>Delete</span>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
 
-                  <div className="pt-2 border-t border-slate-200/80 flex items-center justify-between">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <Barcode className="w-4 h-4 text-slate-400 shrink-0" />
-                      <span className="text-xs font-mono font-black text-slate-900 truncate tracking-wide">
-                        {prod.gtin}
-                      </span>
-                    </div>
-                    <span className="text-[10px] font-mono bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full border border-emerald-200 font-bold shrink-0">
-                      Active
-                    </span>
-                  </div>
-                </div>
-              ))}
+          {/* Catalog Footer Stats & Wipe Option */}
+          {gtinCatalog.length > 0 && (
+            <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400">
+              <span className="font-mono">
+                Total Catalog: <strong className="text-slate-700">{gtinCatalog.length}</strong> items in Master Sheet
+              </span>
+              <button
+                type="button"
+                onClick={handleDeleteAllCatalog}
+                className="text-slate-400 hover:text-red-600 text-[11px] font-bold flex items-center gap-1 cursor-pointer transition"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Wipe Entire Catalog</span>
+              </button>
             </div>
           )}
         </div>
