@@ -109,6 +109,9 @@ function doPost(e) {
       case 'saveBranding': return output_(saveBrandingConfig_(p));
       case 'uploadBrandingImage': return output_(uploadBrandingImage_(p));
       case 'getDriveFileSize': return output_(getDriveFileSize_(p));
+      case 'scannerPair': return output_(handleScannerPair_(p));
+      case 'scannerPoll': return output_(handleScannerPoll_(p));
+      case 'scannerBroadcast': return output_(handleScannerBroadcast_(p));
       default: return output_({success:false, error:'Unknown action: '+a});
     }
   } catch(err) {
@@ -4037,4 +4040,168 @@ function getDriveFileSize_(p) {
     return { success: false, error: err.message || String(err) };
   }
 }
+
+// -------------------------------------------------------------
+// Real-Time Wireless Phone Scanner Handshake & Relay (Apps Script Cloud Cache)
+// Enables zero-server real-time phone scanner syncing on GitHub Pages & Static Hosts
+// -------------------------------------------------------------
+
+function handleScannerPair_(p) {
+  var stationId = String(p.stationId || '').replace(/\D/g, '').slice(0, 4);
+  if (!stationId) stationId = '5829';
+  var cache = CacheService.getScriptCache();
+  var key = 'vms_scan_' + stationId;
+  
+  var state = {};
+  try {
+    var raw = cache.get(key);
+    if (raw) state = JSON.parse(raw);
+  } catch(e) {}
+  
+  var now = Date.now();
+  var clientId = p.clientId || ('c_' + now);
+  var role = p.role === 'phone' ? 'phone' : 'station';
+  var devName = String(p.deviceName || (role === 'phone' ? 'Mobile Scanner' : 'Workstation'));
+  
+  if (!state.clients) state.clients = {};
+  state.clients[clientId] = { role: role, deviceName: devName, lastSeen: now };
+  
+  // Clean inactive clients (> 25s)
+  var phones = 0, stations = 0, devices = [];
+  for (var cid in state.clients) {
+    if (now - state.clients[cid].lastSeen < 25000) {
+      if (state.clients[cid].role === 'phone') {
+        phones++;
+        devices.push(state.clients[cid].deviceName);
+      } else {
+        stations++;
+      }
+    } else {
+      delete state.clients[cid];
+    }
+  }
+  
+  if (!state.events) state.events = [];
+  if (role === 'phone') {
+    state.events.push({
+      id: now + '-' + Math.random().toString(36).slice(2, 6),
+      type: 'PHONE_CONNECTED',
+      deviceName: devName,
+      timestamp: now
+    });
+  } else {
+    state.events.push({
+      id: now + '-' + Math.random().toString(36).slice(2, 6),
+      type: 'STATION_CONNECTED',
+      deviceName: devName,
+      timestamp: now
+    });
+  }
+  if (state.events.length > 30) state.events = state.events.slice(-30);
+  
+  cache.put(key, JSON.stringify(state), 600);
+  
+  return {
+    success: true,
+    stationId: 'station-' + stationId,
+    connectedPhones: phones,
+    connectedStations: stations,
+    devices: devices,
+    serverTime: now
+  };
+}
+
+function handleScannerPoll_(p) {
+  var stationId = String(p.stationId || '').replace(/\D/g, '').slice(0, 4);
+  if (!stationId) stationId = '5829';
+  var cache = CacheService.getScriptCache();
+  var key = 'vms_scan_' + stationId;
+  
+  var state = {};
+  try {
+    var raw = cache.get(key);
+    if (raw) state = JSON.parse(raw);
+  } catch(e) {}
+  
+  var now = Date.now();
+  var since = Number(p.since || 0);
+  var cutoff = since > 0 ? since : (now - 3000);
+  
+  var phones = 0, stations = 0, devices = [];
+  if (state.clients) {
+    for (var cid in state.clients) {
+      if (now - state.clients[cid].lastSeen < 25000) {
+        if (state.clients[cid].role === 'phone') {
+          phones++;
+          devices.push(state.clients[cid].deviceName);
+        } else {
+          stations++;
+        }
+      }
+    }
+  }
+  
+  var matches = [];
+  if (state.events) {
+    matches = state.events.filter(function(ev) {
+      return ev.timestamp > cutoff;
+    });
+  }
+  
+  return {
+    success: true,
+    stationId: 'station-' + stationId,
+    events: matches,
+    connectedPhones: phones,
+    connectedStations: stations,
+    devices: devices,
+    serverTime: now
+  };
+}
+
+function handleScannerBroadcast_(p) {
+  var stationId = String(p.stationId || '').replace(/\D/g, '').slice(0, 4);
+  if (!stationId) stationId = '5829';
+  var cache = CacheService.getScriptCache();
+  var key = 'vms_scan_' + stationId;
+  
+  var state = {};
+  try {
+    var raw = cache.get(key);
+    if (raw) state = JSON.parse(raw);
+  } catch(e) {}
+  
+  var now = Date.now();
+  if (!state.events) state.events = [];
+  
+  var barcode = String(p.barcode || '').trim();
+  var action = p.command || p.remoteAction || (p.action !== 'scannerBroadcast' ? p.action : undefined);
+  var devName = String(p.deviceName || 'Wireless Scanner');
+  
+  if (action) {
+    state.events.push({
+      id: now + '-' + Math.random().toString(36).slice(2, 6),
+      type: 'REMOTE_COMMAND',
+      action: action,
+      deviceName: devName,
+      timestamp: now
+    });
+  } else if (barcode) {
+    state.events.push({
+      id: now + '-' + Math.random().toString(36).slice(2, 6),
+      type: 'BARCODE_RECEIVED',
+      barcode: barcode,
+      format: p.format || 'AUTO',
+      platform: p.platform || '',
+      deviceName: devName,
+      timestamp: now
+    });
+  }
+  if (state.events.length > 30) state.events = state.events.slice(-30);
+  
+  cache.put(key, JSON.stringify(state), 600);
+  
+  return { success: true, stationId: 'station-' + stationId, timestamp: now };
+}
+
 
