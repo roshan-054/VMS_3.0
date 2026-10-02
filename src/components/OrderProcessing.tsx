@@ -188,11 +188,15 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
   // Filter registered users: ONLY user/packer role accounts (no Admin accounts in packer dropdown)
   const availablePackers = useMemo(() => {
-    return registeredUsers.filter((u) => {
+    const list = registeredUsers.filter((u) => {
       const isAdm = isAdmin(u) || isMasterAdmin(u) || u.role === 'Admin' || u.role === 'Master Admin';
       return !isAdm && (u.status === 'Approved' || !u.status);
     });
-  }, [registeredUsers]);
+    if (list.length === 0 && currentUser) {
+      return [currentUser];
+    }
+    return list;
+  }, [registeredUsers, currentUser]);
 
   // Load registered users and sync live data from Master Sheet in real-time
   useEffect(() => {

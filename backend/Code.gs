@@ -729,7 +729,7 @@ function logout_(p){
 }
 
 function getUsers_(p){
-  admin_(p.token);
+  session_(p.token);
   const v=sheet_(CONFIG.USERS_SHEET).getDataRange().getValues(), users=[];
   for(let i=1;i<v.length;i++)users.push({row:i+1,name:String(v[i][1]||''),email:String(v[i][2]||''),role:String(v[i][4]||'User'),status:String(v[i][5]||'Pending'),created:v[i][0] instanceof Date?v[i][0].toISOString():String(v[i][0]||'')});
   return {success:true,users};
