@@ -149,6 +149,10 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   // --- Edit Product State ---
   const [editingProduct, setEditingProduct] = useState<GtinCatalogProduct | null>(null);
 
+  // --- Edit Manifest State (Admin Only) ---
+  const [editingManifest, setEditingManifest] = useState<OrderManifest | null>(null);
+  const [isEditManifestModalOpen, setIsEditManifestModalOpen] = useState<boolean>(false);
+
   // --- Multi-Product Manual Entry & Excel Paste State ---
   const [isBulkManualModalOpen, setIsBulkManualModalOpen] = useState<boolean>(false);
   const [bulkManualText, setBulkManualText] = useState<string>('');
@@ -633,6 +637,111 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     onShowToast(`Product ${updatedProd.shortName} updated successfully!`, 'success');
   };
 
+  // --- Manifest Edit Handlers (Admin Only) ---
+  const handleStartEditManifest = (m: OrderManifest) => {
+    setEditingManifest(JSON.parse(JSON.stringify(m)));
+    setIsEditManifestModalOpen(true);
+  };
+
+  const handleSaveEditedManifest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingManifest) return;
+
+    const trimmedOrderId = editingManifest.orderId.trim();
+    if (!trimmedOrderId) {
+      onShowToast('Order ID cannot be empty', 'error');
+      return;
+    }
+
+    if (!editingManifest.assignedPackerEmail) {
+      onShowToast('Please select an assigned packer', 'error');
+      return;
+    }
+
+    if (!editingManifest.items || editingManifest.items.length === 0) {
+      onShowToast('Please include at least 1 product item in the order', 'error');
+      return;
+    }
+
+    for (const it of editingManifest.items) {
+      if (!it.gtin.trim() && !it.sku.trim()) {
+        onShowToast('Each item must have a GTIN barcode or SKU', 'error');
+        return;
+      }
+    }
+
+    const assignedUser = registeredUsers.find((u) => u.email === editingManifest.assignedPackerEmail);
+    const updated: OrderManifest = {
+      ...editingManifest,
+      orderId: trimmedOrderId,
+      assignedPackerName: assignedUser ? assignedUser.name : editingManifest.assignedPackerName || 'Packer',
+      assignedPackerEmail: editingManifest.assignedPackerEmail
+    };
+
+    await saveOrderManifest(updated);
+    setManifests(getStoredManifests());
+    setIsEditManifestModalOpen(false);
+    setEditingManifest(null);
+    onShowToast(`Manifest Order ${updated.orderId} updated & synced to Google Sheet!`, 'success');
+  };
+
+  const handleAddEditManifestItem = () => {
+    if (!editingManifest) return;
+    setEditingManifest({
+      ...editingManifest,
+      items: [
+        ...editingManifest.items,
+        {
+          id: `item-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          sku: '',
+          productName: '',
+          shortName: '',
+          gtin: '',
+          quantity: 1,
+          scannedCount: 0,
+          imageUrl: ''
+        }
+      ]
+    });
+  };
+
+  const handleRemoveEditManifestItem = (itemIdx: number) => {
+    if (!editingManifest || editingManifest.items.length <= 1) return;
+    setEditingManifest({
+      ...editingManifest,
+      items: editingManifest.items.filter((_, idx) => idx !== itemIdx)
+    });
+  };
+
+  const handleEditManifestItemChange = (itemIdx: number, field: string, value: any) => {
+    if (!editingManifest) return;
+    const updatedItems = [...editingManifest.items];
+    updatedItems[itemIdx] = {
+      ...updatedItems[itemIdx],
+      [field]: value
+    };
+
+    // Smart auto-fill if user types or selects from catalog
+    if (field === 'gtin' || field === 'sku' || field === 'productName') {
+      const found = findProductInCatalog(String(value).trim());
+      if (found) {
+        updatedItems[itemIdx] = {
+          ...updatedItems[itemIdx],
+          gtin: found.gtin || updatedItems[itemIdx].gtin,
+          sku: found.sku || updatedItems[itemIdx].sku,
+          productName: found.productName || updatedItems[itemIdx].productName,
+          shortName: found.shortName || found.productName || updatedItems[itemIdx].shortName,
+          imageUrl: found.imageUrl || updatedItems[itemIdx].imageUrl
+        };
+      }
+    }
+
+    setEditingManifest({
+      ...editingManifest,
+      items: updatedItems
+    });
+  };
+
   // Multi-Product Manual Entry & Excel Paste handlers
   const handleOpenBulkManualModal = () => {
     setBulkManualText('');
@@ -1107,7 +1216,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
           {/* Core Order Metadata: Order ID, Platform, Assigned Packer */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* Order ID */}
+            {/* Order ID (Case Sensitive) */}
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1.5">
                 Order ID / AWB Number <span className="text-red-500">*</span>
@@ -1117,9 +1226,9 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                   type="text"
                   required
                   value={orderId}
-                  onChange={(e) => setOrderId(e.target.value.toUpperCase())}
+                  onChange={(e) => setOrderId(e.target.value)}
                   placeholder="e.g. 402-1234567-8901234"
-                  className="w-full pl-3.5 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-mono font-bold text-slate-900 uppercase focus:bg-white focus:outline-none focus:border-indigo-500 transition shadow-inner"
+                  className="w-full pl-3.5 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-mono font-bold text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500 transition shadow-inner"
                 />
                 <Barcode className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
               </div>
@@ -1667,14 +1776,25 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                         )}
 
                         {isUserAdmin && (
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteManifest(m.id, m.orderId)}
-                            className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg transition cursor-pointer"
-                            title="Delete from manifest"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleStartEditManifest(m)}
+                              className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs rounded-xl border border-indigo-200 transition flex items-center gap-1 cursor-pointer shadow-2xs"
+                              title="Edit manifest order, items, or assigned packer"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                              <span>Edit</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteManifest(m.id, m.orderId)}
+                              className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg transition cursor-pointer"
+                              title="Delete from manifest"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </>
                         )}
                       </div>
                     </div>
@@ -2846,6 +2966,310 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* MODAL 5: EDIT MANIFEST ORDER (Admin Only) */}
+      {isEditManifestModalOpen && editingManifest && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in overflow-y-auto">
+          <form
+            onSubmit={handleSaveEditedManifest}
+            className="w-full max-w-3xl bg-white border border-slate-200 rounded-3xl p-6 shadow-2xl space-y-5 my-8 max-h-[90vh] flex flex-col"
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-xs">
+                  <PackagePlus className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
+                    <span>Edit Manifest Order</span>
+                    <span className="text-xs font-mono font-bold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full border border-indigo-200">
+                      {editingManifest.orderId}
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Modify order metadata, reassigned packer, status, or item quantities.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsEditManifestModalOpen(false);
+                  setEditingManifest(null);
+                }}
+                className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+              {/* Order Metadata Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {/* Order ID (Case Sensitive) */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Order ID / AWB <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editingManifest.orderId}
+                    onChange={(e) =>
+                      setEditingManifest({ ...editingManifest, orderId: e.target.value })
+                    }
+                    placeholder="e.g. 402-1234567-8901234"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                {/* E-Commerce Platform */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Platform <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={editingManifest.platform}
+                    onChange={(e) =>
+                      setEditingManifest({
+                        ...editingManifest,
+                        platform: e.target.value as PlatformType
+                      })
+                    }
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:border-indigo-500 cursor-pointer"
+                  >
+                    <option value="Amazon">Amazon</option>
+                    <option value="D2C">D2C</option>
+                    <option value="JioMart">JioMart</option>
+                    <option value="Custom">Custom</option>
+                  </select>
+                </div>
+
+                {/* Status */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Packing Status <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={editingManifest.status}
+                    onChange={(e) =>
+                      setEditingManifest({
+                        ...editingManifest,
+                        status: e.target.value as any
+                      })
+                    }
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:border-indigo-500 cursor-pointer"
+                  >
+                    <option value="Pending">Pending</option>
+                    <option value="In Progress">In Progress</option>
+                    <option value="Packed">Packed</option>
+                    <option value="Cancelled">Cancelled</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Assigned Packer Selection (User Accounts Only) */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Assigned Packer / Operator <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <select
+                    required
+                    value={editingManifest.assignedPackerEmail}
+                    onChange={(e) =>
+                      setEditingManifest({
+                        ...editingManifest,
+                        assignedPackerEmail: e.target.value
+                      })
+                    }
+                    className="w-full pl-3 pr-8 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:border-indigo-500 cursor-pointer"
+                  >
+                    <option value="">-- Choose Assigned Packer --</option>
+                    {availablePackers.map((u) => (
+                      <option key={u.email} value={u.email}>
+                        {u.name} ({u.email}) - {u.role}
+                      </option>
+                    ))}
+                    {availablePackers.length === 0 && (
+                      <option value="" disabled>
+                        No user/packer accounts registered.
+                      </option>
+                    )}
+                  </select>
+                  <UserCheck className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
+              </div>
+
+              {/* Order Notes */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Special Packing Notes / Instructions
+                </label>
+                <input
+                  type="text"
+                  value={editingManifest.notes || ''}
+                  onChange={(e) =>
+                    setEditingManifest({
+                      ...editingManifest,
+                      notes: e.target.value
+                    })
+                  }
+                  placeholder="e.g. Fragile sticker required, pack in standard shipper box..."
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800 focus:bg-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              {/* Items in Manifest Table */}
+              <div className="space-y-2 pt-2 border-t border-slate-100">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-800 uppercase tracking-wider block">
+                    Products in This Manifest ({editingManifest.items.length})
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleAddEditManifestItem}
+                    className="px-3 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs rounded-xl border border-indigo-200 transition flex items-center gap-1 cursor-pointer shadow-2xs"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add Item</span>
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  {editingManifest.items.map((item, idx) => (
+                    <div
+                      key={item.id || idx}
+                      className="bg-slate-50 border border-slate-200 rounded-2xl p-3 grid grid-cols-1 sm:grid-cols-12 gap-2 items-center"
+                    >
+                      {/* Thumbnail */}
+                      <div className="sm:col-span-1 flex items-center justify-center">
+                        {item.imageUrl ? (
+                          <img
+                            src={item.imageUrl}
+                            alt=""
+                            className="w-9 h-9 rounded-lg object-contain bg-white border border-slate-200 p-0.5 shrink-0"
+                          />
+                        ) : (
+                          <div className="w-9 h-9 rounded-lg bg-slate-200 text-slate-400 flex items-center justify-center shrink-0">
+                            <ShoppingBag className="w-4 h-4" />
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Product Name */}
+                      <div className="sm:col-span-4">
+                        <label className="text-[10px] text-slate-500 font-bold block mb-0.5">
+                          Product Name
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={item.productName}
+                          onChange={(e) =>
+                            handleEditManifestItemChange(idx, 'productName', e.target.value)
+                          }
+                          placeholder="Product Name..."
+                          className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-900 focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
+
+                      {/* SKU */}
+                      <div className="sm:col-span-3">
+                        <label className="text-[10px] text-slate-500 font-bold block mb-0.5">
+                          SKU / Code
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={item.sku}
+                          onChange={(e) =>
+                            handleEditManifestItemChange(idx, 'sku', e.target.value)
+                          }
+                          placeholder="SKU..."
+                          className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800 uppercase focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
+
+                      {/* GTIN Barcode */}
+                      <div className="sm:col-span-2">
+                        <label className="text-[10px] text-slate-500 font-bold block mb-0.5">
+                          Barcode / GTIN
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={item.gtin}
+                          onChange={(e) =>
+                            handleEditManifestItemChange(idx, 'gtin', e.target.value)
+                          }
+                          placeholder="Barcode..."
+                          className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-900 focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
+
+                      {/* Quantity & Delete */}
+                      <div className="sm:col-span-2 flex items-center gap-1.5 justify-end">
+                        <div>
+                          <label className="text-[10px] text-slate-500 font-bold block mb-0.5 text-center">
+                            Qty
+                          </label>
+                          <input
+                            type="number"
+                            min={1}
+                            required
+                            value={item.quantity}
+                            onChange={(e) =>
+                              handleEditManifestItemChange(
+                                idx,
+                                'quantity',
+                                Math.max(1, parseInt(e.target.value) || 1)
+                              )
+                            }
+                            className="w-14 px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-black text-indigo-700 text-center focus:outline-none focus:border-indigo-500"
+                          />
+                        </div>
+
+                        {editingManifest.items.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveEditManifestItem(idx)}
+                            className="p-2 text-slate-400 hover:text-red-600 rounded-lg transition cursor-pointer mt-3.5"
+                            title="Remove item"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsEditManifestModalOpen(false);
+                  setEditingManifest(null);
+                }}
+                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="submit"
+                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-md flex items-center gap-2 cursor-pointer"
+              >
+                <Check className="w-4 h-4" />
+                <span>Save Manifest Changes &amp; Sync</span>
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>

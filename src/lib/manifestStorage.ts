@@ -27,54 +27,17 @@ export const DEFAULT_VERIFICATION_SETTINGS: VerificationSettings = {
   allowSupervisorOverride: true,
 };
 
-// Seed sample GTIN catalog items so the system is immediately usable out of the box
-const DEFAULT_GTIN_CATALOG: GtinCatalogProduct[] = [
-  {
-    gtin: '8901234567890',
-    sku: 'SKU-SHIRT-BLUE-L',
-    productName: 'Premium Cotton Oxford Shirt - Navy Blue (Size L)',
-    shortName: 'Navy Oxford Shirt (L)',
-    category: 'Apparel',
-    imageUrl: 'https://images.unsplash.com/photo-1596755094514-f87e34085b2c?w=300&q=80',
-    notes: 'Standard Polybag Packing'
-  },
-  {
-    gtin: '8901234567891',
-    sku: 'SKU-SHIRT-WHITE-M',
-    productName: 'Crisp Formal White Shirt - Classic Fit (Size M)',
-    shortName: 'White Formal Shirt (M)',
-    category: 'Apparel',
-    imageUrl: 'https://images.unsplash.com/photo-1620799140408-edc6dcb6d633?w=300&q=80',
-    notes: 'Delicate Collar Protection'
-  },
-  {
-    gtin: '8909876543210',
-    sku: 'SKU-EARBUDS-PRO',
-    productName: 'Wireless Active Noise Cancelling Earbuds Pro - Matte Black',
-    shortName: 'ANC Earbuds Pro',
-    category: 'Electronics',
-    imageUrl: 'https://images.unsplash.com/photo-1590658268037-6bf12165a8df?w=300&q=80',
-    notes: 'Fragile - Bubble Wrap Required'
-  },
-  {
-    gtin: '8909876543211',
-    sku: 'SKU-CABLE-65W-2M',
-    productName: 'Braided Fast Charging Type-C to Type-C Cable 65W (2m)',
-    shortName: 'Type-C Cable 65W',
-    category: 'Accessories',
-    imageUrl: 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80',
-    notes: 'Check Hologram Seal'
-  },
-  {
-    gtin: '8904567890123',
-    sku: 'SKU-WATER-BOTTLE-1L',
-    productName: 'Insulated Stainless Steel Vacuum Flask 1000ml (Steel Finish)',
-    shortName: 'Insulated Flask 1L',
-    category: 'Home & Kitchen',
-    imageUrl: 'https://images.unsplash.com/photo-1602143407151-7111542de6e8?w=300&q=80',
-    notes: 'Box Packaging with Fragile Sticker'
-  }
-];
+// Clean empty catalog by default (no sample data)
+const DEFAULT_GTIN_CATALOG: GtinCatalogProduct[] = [];
+
+// Legacy sample GTIN set to automatically purge
+const SAMPLE_GTIN_SET = new Set([
+  '8901234567890',
+  '8901234567891',
+  '8909876543210',
+  '8909876543211',
+  '8904567890123'
+]);
 
 // --- Order Manifest Store ---
 
@@ -232,14 +195,20 @@ export function getStoredGtinCatalog(): GtinCatalogProduct[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_GTIN_CATALOG);
     if (!raw) {
-      // Seed default items initially
-      localStorage.setItem(STORAGE_KEY_GTIN_CATALOG, JSON.stringify(DEFAULT_GTIN_CATALOG));
-      return DEFAULT_GTIN_CATALOG;
+      return [];
     }
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : DEFAULT_GTIN_CATALOG;
+    if (Array.isArray(parsed)) {
+      // Filter out any legacy dummy sample data
+      const cleaned = parsed.filter((p) => {
+        const gtin = normalizeBarcode(p.gtin);
+        return gtin && !SAMPLE_GTIN_SET.has(gtin);
+      });
+      return cleaned;
+    }
+    return [];
   } catch (e) {
-    return DEFAULT_GTIN_CATALOG;
+    return [];
   }
 }
 
