@@ -4,6 +4,7 @@ import {
   QrCode,
   X,
   Check,
+  CheckCircle2,
   Copy,
   Wifi,
   WifiOff,
@@ -35,11 +36,20 @@ export const PhoneScannerModal: React.FC<PhoneScannerModalProps> = ({
   const [copiedLink, setCopiedLink] = useState(false);
   const [recentScans, setRecentScans] = useState<Array<{ code: string; time: string; device: string }>>([]);
   const [lanIp, setLanIp] = useState<string>('');
+  const autoCloseTimerRef = useRef<any>(null);
+  const hasAutoClosedRef = useRef(false);
 
   const qrContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      hasAutoClosedRef.current = false;
+      if (autoCloseTimerRef.current) {
+        clearTimeout(autoCloseTimerRef.current);
+        autoCloseTimerRef.current = null;
+      }
+      return;
+    }
     fetch('/api/scanner/info')
       .then((r) => r.json())
       .then((d) => {
@@ -78,6 +88,15 @@ export const PhoneScannerModal: React.FC<PhoneScannerModalProps> = ({
       setPhoneCount(count);
       if (device) setPhoneDeviceName(device);
       if (latency !== undefined) setLatencyMs(latency);
+
+      // Automatically close modal as soon as phone connection is established
+      if (connected && !hasAutoClosedRef.current) {
+        hasAutoClosedRef.current = true;
+        onShowToast(`📱 ${device || 'Mobile Phone'} connected! Closing setup window…`, 'success');
+        autoCloseTimerRef.current = setTimeout(() => {
+          onClose();
+        }, 500);
+      }
     });
 
     const unsubBarcode = sharedScannerSync.onBarcode((barcode, format, platform, deviceName) => {
@@ -95,6 +114,10 @@ export const PhoneScannerModal: React.FC<PhoneScannerModalProps> = ({
     }, 300);
 
     return () => {
+      if (autoCloseTimerRef.current) {
+        clearTimeout(autoCloseTimerRef.current);
+        autoCloseTimerRef.current = null;
+      }
       clearInterval(activePollTimer);
       unsubStatus();
       unsubBarcode();
@@ -234,9 +257,9 @@ export const PhoneScannerModal: React.FC<PhoneScannerModalProps> = ({
             </div>
 
             {isPhoneConnected ? (
-              <span className="px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-mono font-bold flex items-center gap-1 shrink-0">
-                <Wifi className="w-3.5 h-3.5 text-emerald-400" />
-                Live Sync
+              <span className="px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-mono font-bold flex items-center gap-1.5 shrink-0 animate-pulse">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                Connected! Closing…
               </span>
             ) : (
               <div className="flex items-center gap-1.5 shrink-0">
