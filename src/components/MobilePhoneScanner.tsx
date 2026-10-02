@@ -56,13 +56,23 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [latencyMs, setLatencyMs] = useState<number>(0);
   const [lastScanSuccessTime, setLastScanSuccessTime] = useState<number>(0);
+  const [isScanLocked, setIsScanLocked] = useState<boolean>(false);
+  const [cooldownSeconds, setCooldownSeconds] = useState<number>(0);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const apertureRef = useRef<HTMLDivElement | null>(null);
+  const cropCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const zxingReaderRef = useRef<BrowserMultiFormatReader | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const lastScannedTimeRef = useRef<number>(0);
   const lastScannedCodeRef = useRef<string>('');
   const barcodeAnimRef = useRef<number | null>(null);
+  const isLockedRef = useRef<boolean>(false);
+  const lockTimerRef = useRef<any>(null);
+  const candidateCodeRef = useRef<string>('');
+  const candidateCountRef = useRef<number>(0);
+  const noBarcodeFramesRef = useRef<number>(0);
 
   useEffect(() => {
     const clean = cleanStationPin(initialPin);
@@ -155,10 +165,9 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
           await videoRef.current.play();
         }
 
-        // Check for native BarcodeDetector API (Ultra-fast, hardware accelerated 60fps)
-        const hasNativeBarcodeDetector = 'BarcodeDetector' in window;
-
-        if (hasNativeBarcodeDetector) {
+        // Initialize decoders
+        // 1. Hardware BarcodeDetector if supported
+        if ('BarcodeDetector' in window) {
           try {
             barcodeDetectorInstance = new (window as any).BarcodeDetector({
               formats: [
@@ -173,111 +182,163 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
                 'itf',
               ],
             });
-
-            const scanLoop = async () => {
-              if (!isMounted || !videoRef.current) return;
-              if (videoRef.current.readyState >= 2 && barcodeDetectorInstance) {
-                try {
-                  const barcodes = await barcodeDetectorInstance.detect(videoRef.current);
-                  if (barcodes && barcodes.length > 0 && isMounted && videoRef.current) {
-                    const vHeight = videoRef.current.videoHeight || 1080;
-                    const vWidth = videoRef.current.videoWidth || 1920;
-                    const vCenterY = vHeight / 2;
-                    const vCenterX = vWidth / 2;
-
-                    // Aperture filter: barcode MUST fall inside the central clear scanning window (not in the blacked-out rest area)
-                    const apertureBarcodes = barcodes.filter((b: any) => {
-                      const box = b.boundingBox;
-                      if (!box || typeof box.y !== 'number' || typeof box.height !== 'number') return true;
-                      const bCenterY = box.y + box.height / 2;
-                      const bCenterX = (typeof box.x === 'number' && typeof box.width === 'number') ? (box.x + box.width / 2) : vCenterX;
-                      // Strictly match the clear unmasked aperture box (central 44% vertically, 90% horizontally)
-                      const inVerticalBounds = Math.abs(bCenterY - vCenterY) <= vHeight * 0.22;
-                      const inHorizontalBounds = Math.abs(bCenterX - vCenterX) <= vWidth * 0.45;
-                      return inVerticalBounds && inHorizontalBounds;
-                    });
-
-                    // Avoid unwanted / missed scans: strictly ignore barcodes outside the clear aperture window
-                    if (apertureBarcodes.length === 0) {
-                      barcodeAnimRef.current = requestAnimationFrame(scanLoop);
-                      return;
-                    }
-
-                    const candidateList = apertureBarcodes;
-
-                    // Sort candidates by proximity to exact laser center
-                    candidateList.sort((a: any, b: any) => {
-                      const boxA = a.boundingBox || {};
-                      const boxB = b.boundingBox || {};
-                      const distA = Math.abs((boxA.y || 0) + (boxA.height || 0) / 2 - vCenterY) * 3 + Math.abs((boxA.x || 0) + (boxA.width || 0) / 2 - vCenterX);
-                      const distB = Math.abs((boxB.y || 0) + (boxB.height || 0) / 2 - vCenterY) * 3 + Math.abs((boxB.x || 0) + (boxB.width || 0) / 2 - vCenterX);
-                      return distA - distB;
-                    });
-
-                    const targetBarcode = candidateList[0];
-                    const rawText = targetBarcode.rawValue || targetBarcode.text || '';
-                    if (rawText) {
-                      const text = rawText.trim();
-                      const now = Date.now();
-                      if (text !== lastScannedCodeRef.current || now - lastScannedTimeRef.current >= 1500) {
-                        lastScannedCodeRef.current = text;
-                        lastScannedTimeRef.current = now;
-                        handleBarcodeScanned(text, targetBarcode.format || 'BARCODE');
-                      }
-                    }
-                  }
-                } catch (detErr) {
-                  // Frame capture skip
-                }
-              }
-              barcodeAnimRef.current = requestAnimationFrame(scanLoop);
-            };
-
-            barcodeAnimRef.current = requestAnimationFrame(scanLoop);
-            return;
-          } catch (initErr) {
-            console.warn('Native BarcodeDetector fallback to ZXing:', initErr);
+          } catch (e) {
+            console.warn('BarcodeDetector init fallback:', e);
           }
         }
 
-        // Fallback: ZXing Library
+        // 2. ZXing fallback instance
         const codeReader = new BrowserMultiFormatReader();
         zxingReaderRef.current = codeReader;
 
-        (codeReader as any).decodeFromVideoElement(
-          videoRef.current!,
-          (result: any, _err: any) => {
-            if (result && isMounted) {
-              // Ensure barcode points are inside the central aperture window (not in blacked-out rest area)
-              try {
-                const pts = typeof result.getResultPoints === 'function' ? result.getResultPoints() : (result.resultPoints || []);
-                if (pts && pts.length > 0 && videoRef.current) {
-                  const vH = videoRef.current.videoHeight || 1080;
-                  const vW = videoRef.current.videoWidth || 1920;
-                  const avgY = pts.reduce((sum: number, p: any) => sum + (typeof p.getY === 'function' ? p.getY() : (p.y || 0)), 0) / pts.length;
-                  const avgX = pts.reduce((sum: number, p: any) => sum + (typeof p.getX === 'function' ? p.getX() : (p.x || 0)), 0) / pts.length;
-                  if (Math.abs(avgY - vH / 2) > vH * 0.22 || Math.abs(avgX - vW / 2) > vW * 0.45) {
-                    // Barcode was detected in the blacked out rest area - ignore to avoid unwanted scan
-                    return;
-                  }
-                }
-              } catch (_) {}
+        // Unified High-Precision Frame Loop: CROPS ONLY THE CLEAR APERTURE WINDOW
+        const scanFrame = async () => {
+          if (!isMounted) return;
 
-              const text = (typeof result.getText === 'function' ? result.getText() : String(result.text || '')).trim();
-              const now = Date.now();
+          // If currently in post-scan lock / cooldown, pause frame decoding completely
+          if (isLockedRef.current) {
+            barcodeAnimRef.current = requestAnimationFrame(scanFrame);
+            return;
+          }
 
-              // Debounce identical scans within 1.5 seconds
-              if (text === lastScannedCodeRef.current && now - lastScannedTimeRef.current < 1500) {
-                return;
+          const video = videoRef.current;
+          const container = containerRef.current;
+          const aperture = apertureRef.current;
+
+          if (
+            !video ||
+            !container ||
+            !aperture ||
+            video.readyState < 2 ||
+            video.videoWidth === 0 ||
+            video.videoHeight === 0
+          ) {
+            barcodeAnimRef.current = requestAnimationFrame(scanFrame);
+            return;
+          }
+
+          const cRect = container.getBoundingClientRect();
+          const aRect = aperture.getBoundingClientRect();
+          const vWidth = video.videoWidth;
+          const vHeight = video.videoHeight;
+
+          if (cRect.width > 0 && cRect.height > 0 && aRect.width > 0 && aRect.height > 0) {
+            // Compute layout of video with object-cover inside container
+            const containerRatio = cRect.width / cRect.height;
+            const videoRatio = vWidth / vHeight;
+            let renderWidth = cRect.width;
+            let renderHeight = cRect.height;
+            let offsetX = 0;
+            let offsetY = 0;
+
+            if (containerRatio > videoRatio) {
+              renderWidth = cRect.width;
+              renderHeight = cRect.width / videoRatio;
+              offsetY = (cRect.height - renderHeight) / 2;
+            } else {
+              renderHeight = cRect.height;
+              renderWidth = cRect.height * videoRatio;
+              offsetX = (cRect.width - renderWidth) / 2;
+            }
+
+            const scale = vWidth / renderWidth;
+            const sx = Math.max(0, (aRect.left - cRect.left - offsetX) * scale);
+            const sy = Math.max(0, (aRect.top - cRect.top - offsetY) * scale);
+            const sWidth = Math.min(vWidth - sx, aRect.width * scale);
+            const sHeight = Math.min(vHeight - sy, aRect.height * scale);
+
+            if (sWidth > 20 && sHeight > 20) {
+              if (!cropCanvasRef.current) {
+                cropCanvasRef.current = document.createElement('canvas');
+              }
+              const canvas = cropCanvasRef.current;
+
+              // High-clarity resolution suitable for rapid 1D & 2D barcode detection
+              const targetWidth = Math.min(640, Math.round(sWidth));
+              const targetHeight = Math.max(1, Math.round(targetWidth * (sHeight / sWidth)));
+
+              if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+                canvas.width = targetWidth;
+                canvas.height = targetHeight;
               }
 
-              lastScannedCodeRef.current = text;
-              lastScannedTimeRef.current = now;
-              const formatStr = typeof result.getBarcodeFormat === 'function' ? String(result.getBarcodeFormat()) : 'AUTO';
-              handleBarcodeScanned(text, formatStr);
+              const ctx = canvas.getContext('2d', { willReadFrequently: true });
+              if (ctx) {
+                // PHYSICAL CROP: ONLY THE CLEAR BOX IS DRAWN. ZERO PIXELS FROM THE DARK AREA!
+                ctx.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, targetWidth, targetHeight);
+
+                let detectedText: string | null = null;
+                let detectedFormat = 'BARCODE';
+
+                // 1. Try Hardware GPU BarcodeDetector on cropped canvas
+                if (barcodeDetectorInstance) {
+                  try {
+                    const detected = await barcodeDetectorInstance.detect(canvas);
+                    if (detected && detected.length > 0) {
+                      const raw = detected[0].rawValue || detected[0].text || '';
+                      if (raw && raw.trim().length >= 4) {
+                        detectedText = raw.trim();
+                        detectedFormat = detected[0].format || 'BARCODE';
+                      }
+                    }
+                  } catch (_) {}
+                }
+
+                // 2. Try ZXing fallback on the exact same cropped canvas
+                if (!detectedText && zxingReaderRef.current) {
+                  try {
+                    const zxResult = zxingReaderRef.current.decode(canvas);
+                    if (zxResult) {
+                      const text = typeof zxResult.getText === 'function' ? zxResult.getText() : String(zxResult.text || '');
+                      if (text && text.trim().length >= 4) {
+                        detectedText = text.trim();
+                        detectedFormat = typeof zxResult.getBarcodeFormat === 'function' ? String(zxResult.getBarcodeFormat()) : 'AUTO';
+                      }
+                    }
+                  } catch (_) {
+                    // NotFoundException is standard when no code in crop
+                  }
+                }
+
+                // 3. Double-Read Consensus (eliminates mis-scans and noisy single-frame glitches)
+                if (detectedText) {
+                  const cleaned = detectedText.replace(/[\x00-\x1F\x7F]/g, '').replace(/^\][a-zA-Z0-9]{2,3}/, '').trim();
+                  if (cleaned.length >= 4) {
+                    if (cleaned === lastScannedCodeRef.current && isLockedRef.current) {
+                      // Already locked on this code
+                      barcodeAnimRef.current = requestAnimationFrame(scanFrame);
+                      return;
+                    }
+
+                    if (candidateCodeRef.current === cleaned) {
+                      candidateCountRef.current += 1;
+                    } else {
+                      candidateCodeRef.current = cleaned;
+                      candidateCountRef.current = 1;
+                    }
+
+                    if (candidateCountRef.current >= 2) {
+                      candidateCodeRef.current = '';
+                      candidateCountRef.current = 0;
+                      triggerConfirmedScan(cleaned, detectedFormat);
+                      return;
+                    }
+                  }
+                } else {
+                  noBarcodeFramesRef.current += 1;
+                  if (noBarcodeFramesRef.current > 8) {
+                    candidateCodeRef.current = '';
+                    candidateCountRef.current = 0;
+                  }
+                }
+              }
             }
           }
-        );
+
+          barcodeAnimRef.current = requestAnimationFrame(scanFrame);
+        };
+
+        barcodeAnimRef.current = requestAnimationFrame(scanFrame);
       } catch (err: any) {
         console.error('Mobile camera start error:', err);
         setStatusMessage('Camera error: Please allow camera access in mobile browser');
@@ -288,12 +349,18 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
 
     return () => {
       isMounted = false;
+      if (lockTimerRef.current) {
+        clearInterval(lockTimerRef.current);
+        lockTimerRef.current = null;
+      }
       if (barcodeAnimRef.current) {
         cancelAnimationFrame(barcodeAnimRef.current);
         barcodeAnimRef.current = null;
       }
       if (zxingReaderRef.current) {
-        zxingReaderRef.current.reset();
+        try {
+          zxingReaderRef.current.reset();
+        } catch (_) {}
       }
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
@@ -301,6 +368,44 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
       }
     };
   }, [isPaired, facingMode]);
+
+  const triggerConfirmedScan = (code: string, format: string) => {
+    isLockedRef.current = true;
+    setIsScanLocked(true);
+    setCooldownSeconds(3);
+    lastScannedCodeRef.current = code;
+    lastScannedTimeRef.current = Date.now();
+
+    handleBarcodeScanned(code, format);
+
+    if (lockTimerRef.current) clearInterval(lockTimerRef.current);
+    let remaining = 3;
+    lockTimerRef.current = setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        unlockScanner();
+      } else {
+        setCooldownSeconds(remaining);
+      }
+    }, 1000);
+  };
+
+  const unlockScanner = () => {
+    if (lockTimerRef.current) {
+      clearInterval(lockTimerRef.current);
+      lockTimerRef.current = null;
+    }
+    isLockedRef.current = false;
+    setIsScanLocked(false);
+    setCooldownSeconds(0);
+    candidateCodeRef.current = '';
+    candidateCountRef.current = 0;
+    noBarcodeFramesRef.current = 0;
+  };
+
+  const handleScanNextNow = () => {
+    unlockScanner();
+  };
 
   const handleBarcodeScanned = async (rawCode: string, format: string) => {
     // Clean raw barcode (remove prefixes/control chars)
@@ -526,7 +631,7 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
       </div>
 
       {/* Camera Viewfinder Area */}
-      <div className="relative flex-1 bg-black flex items-center justify-center overflow-hidden">
+      <div ref={containerRef} className="relative flex-1 bg-black flex items-center justify-center overflow-hidden">
         <video
           ref={videoRef}
           playsInline
@@ -550,34 +655,62 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
 
             {/* Central High-Precision Clear Scan Window */}
             <div
+              ref={apertureRef}
               className={`w-[90%] max-w-[420px] h-48 sm:h-56 relative rounded-2xl border-2 transition-all duration-200 flex items-center justify-center shrink-0 ${
-                isRecentScan
+                isScanLocked
+                  ? 'border-emerald-400 bg-emerald-950/80 scale-[1.02] ring-4 ring-emerald-500/50'
+                  : isRecentScan
                   ? 'border-emerald-400 bg-emerald-500/25 scale-[1.02] ring-4 ring-emerald-500/50'
                   : 'border-white/90 bg-transparent'
               }`}
               style={{
-                boxShadow: isRecentScan
+                boxShadow: (isScanLocked || isRecentScan)
                   ? '0 0 0 9999px #000000, 0 0 35px rgba(52, 211, 153, 0.9)'
                   : '0 0 0 9999px #000000',
               }}
             >
-              {/* Industrial Aiming Corner Brackets */}
-              <div className="absolute -top-1.5 -left-1.5 w-6 h-6 border-t-3 border-l-3 border-emerald-400 rounded-tl-md shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
-              <div className="absolute -top-1.5 -right-1.5 w-6 h-6 border-t-3 border-r-3 border-emerald-400 rounded-tr-md shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
-              <div className="absolute -bottom-1.5 -left-1.5 w-6 h-6 border-b-3 border-l-3 border-emerald-400 rounded-bl-md shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
-              <div className="absolute -bottom-1.5 -right-1.5 w-6 h-6 border-b-3 border-r-3 border-emerald-400 rounded-br-md shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+              {isScanLocked ? (
+                /* Scan Locked Confirmation & Cooldown View */
+                <div className="absolute inset-0 z-20 flex flex-col items-center justify-center p-3 text-center pointer-events-auto rounded-2xl animate-fade-in">
+                  <div className="w-10 h-10 rounded-full bg-emerald-500/20 border border-emerald-400/80 flex items-center justify-center mb-1 shadow-[0_0_15px_rgba(52,211,153,0.5)]">
+                    <CheckCircle2 className="w-6 h-6 text-emerald-400" />
+                  </div>
+                  <div className="text-[10px] font-mono uppercase tracking-widest text-emerald-300 font-bold">
+                    Order Scanned &amp; Sent
+                  </div>
+                  <div className="text-sm font-mono font-black text-white tracking-wider truncate max-w-full my-1">
+                    {lastScannedBarcode}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleScanNextNow}
+                    className="mt-1 px-4 py-1.5 bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-slate-950 font-bold font-mono text-xs rounded-xl shadow-lg flex items-center gap-1.5 cursor-pointer transition"
+                  >
+                    <Zap className="w-3.5 h-3.5 fill-current" />
+                    Scan Next Now {cooldownSeconds > 0 ? `(${cooldownSeconds}s)` : ''}
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {/* Industrial Aiming Corner Brackets */}
+                  <div className="absolute -top-1.5 -left-1.5 w-6 h-6 border-t-3 border-l-3 border-emerald-400 rounded-tl-md shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+                  <div className="absolute -top-1.5 -right-1.5 w-6 h-6 border-t-3 border-r-3 border-emerald-400 rounded-tr-md shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+                  <div className="absolute -bottom-1.5 -left-1.5 w-6 h-6 border-b-3 border-l-3 border-emerald-400 rounded-bl-md shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+                  <div className="absolute -bottom-1.5 -right-1.5 w-6 h-6 border-b-3 border-r-3 border-emerald-400 rounded-br-md shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
 
-              {/* Ultra-Crisp Red Laser Scanning Line */}
-              <div className="absolute inset-x-3 h-0.5 bg-gradient-to-r from-red-500/10 via-red-500 to-red-500/10 shadow-[0_0_16px_rgba(239,68,68,1)] animate-pulse" />
+                  {/* Ultra-Crisp Red Laser Scanning Line */}
+                  <div className="absolute inset-x-3 h-0.5 bg-gradient-to-r from-red-500/10 via-red-500 to-red-500/10 shadow-[0_0_16px_rgba(239,68,68,1)] animate-pulse" />
 
-              {/* Center Alignment Guide Marks */}
-              <div className="absolute inset-y-1/2 left-2.5 w-3 border-t-2 border-emerald-400/90" />
-              <div className="absolute inset-y-1/2 right-2.5 w-3 border-t-2 border-emerald-400/90" />
+                  {/* Center Alignment Guide Marks */}
+                  <div className="absolute inset-y-1/2 left-2.5 w-3 border-t-2 border-emerald-400/90" />
+                  <div className="absolute inset-y-1/2 right-2.5 w-3 border-t-2 border-emerald-400/90" />
 
-              {/* Precision Badge Note */}
-              <div className="absolute -bottom-3.5 left-1/2 -translate-x-1/2 bg-slate-950 text-[10px] font-mono font-bold px-3 py-0.5 rounded-full border border-slate-700 text-slate-200 whitespace-nowrap shadow-md">
-                Align Barcode Here
-              </div>
+                  {/* Precision Badge Note */}
+                  <div className="absolute -bottom-3.5 left-1/2 -translate-x-1/2 bg-slate-950 text-[10px] font-mono font-bold px-3 py-0.5 rounded-full border border-slate-700 text-slate-200 whitespace-nowrap shadow-md">
+                    Align Barcode Here
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Right flank: 100% Solid Black */}
