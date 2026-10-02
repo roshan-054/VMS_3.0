@@ -6,6 +6,8 @@ const STORAGE_KEY_GTIN_CATALOG = 'vms_gtin_catalog_v1';
 const STORAGE_KEY_GTIN_CONFIG = 'vms_gtin_sheet_config_v1';
 const STORAGE_KEY_VERIFICATION_LOGS = 'vms_pack_verification_logs_v1';
 const STORAGE_KEY_VERIFICATION_SETTINGS = 'vms_pack_verification_settings_v1';
+const STORAGE_KEY_DELETED_MANIFESTS = 'vms_deleted_manifest_ids_v1';
+const STORAGE_KEY_DELETED_GTINS = 'vms_deleted_gtin_codes_v1';
 
 export interface GtinSheetConfig {
   sheetIdOrUrl: string;
@@ -27,17 +29,62 @@ export const DEFAULT_VERIFICATION_SETTINGS: VerificationSettings = {
   allowSupervisorOverride: true,
 };
 
-// Clean empty catalog by default (no sample data)
-const DEFAULT_GTIN_CATALOG: GtinCatalogProduct[] = [];
-
 // Legacy sample GTIN set to automatically purge
 const SAMPLE_GTIN_SET = new Set([
+  '8901030865412',
   '8901234567890',
   '8901234567891',
   '8909876543210',
   '8909876543211',
-  '8904567890123'
+  '8904567890123',
+  '0123456789012',
+  '0890123456789',
+  '8901122334455',
 ]);
+
+// --- Deletion Tombstones Tracking (Prevents resurrecting deleted entries on background cloud polling) ---
+
+export function getDeletedManifestIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_DELETED_MANIFESTS);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    return new Set(Array.isArray(arr) ? arr.map((x: string) => String(x).toLowerCase().trim()) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export function recordDeletedManifestId(orderId: string): void {
+  const clean = String(orderId || '').toLowerCase().trim();
+  if (!clean) return;
+  const set = getDeletedManifestIds();
+  set.add(clean);
+  try {
+    localStorage.setItem(STORAGE_KEY_DELETED_MANIFESTS, JSON.stringify(Array.from(set)));
+  } catch {}
+}
+
+export function getDeletedGtinCodes(): Set<string> {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_DELETED_GTINS);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    return new Set(Array.isArray(arr) ? arr.map((x: string) => normalizeBarcode(x).toLowerCase()) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export function recordDeletedGtinCode(gtin: string): void {
+  const clean = normalizeBarcode(gtin).toLowerCase();
+  if (!clean) return;
+  const set = getDeletedGtinCodes();
+  set.add(clean);
+  try {
+    localStorage.setItem(STORAGE_KEY_DELETED_GTINS, JSON.stringify(Array.from(set)));
+  } catch {}
+}
 
 // --- Order Manifest Store ---
 
@@ -45,7 +92,13 @@ export function getStoredManifests(): OrderManifest[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_MANIFESTS);
     if (!raw) return [];
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const deletedSet = getDeletedManifestIds();
+    return parsed.filter((m) => {
+      const id = String(m.orderId || '').toLowerCase().trim();
+      return id && !deletedSet.has(id);
+    });
   } catch (e) {
     return [];
   }
@@ -53,8 +106,13 @@ export function getStoredManifests(): OrderManifest[] {
 
 export function saveStoredManifests(manifests: OrderManifest[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY_MANIFESTS, JSON.stringify(manifests));
-    window.dispatchEvent(new CustomEvent('vms_manifests_updated', { detail: { count: manifests.length } }));
+    const deletedSet = getDeletedManifestIds();
+    const cleaned = manifests.filter((m) => {
+      const id = String(m.orderId || '').toLowerCase().trim();
+      return id && !deletedSet.has(id);
+    });
+    localStorage.setItem(STORAGE_KEY_MANIFESTS, JSON.stringify(cleaned));
+    window.dispatchEvent(new CustomEvent('vms_manifests_updated', { detail: { count: cleaned.length } }));
   } catch (e) {
     console.warn('Could not save manifests to localStorage:', e);
   }
@@ -63,6 +121,9 @@ export function saveStoredManifests(manifests: OrderManifest[]): void {
 export function getManifestByOrderId(orderId: string): OrderManifest | null {
   if (!orderId) return null;
   const clean = orderId.trim().toLowerCase();
+  const deletedSet = getDeletedManifestIds();
+  if (deletedSet.has(clean)) return null;
+
   const list = getStoredManifests();
   return list.find((m) => m.orderId.trim().toLowerCase() === clean) || null;
 }
@@ -70,6 +131,16 @@ export function getManifestByOrderId(orderId: string): OrderManifest | null {
 export async function saveOrderManifest(manifest: OrderManifest): Promise<void> {
   const list = getStoredManifests();
   const cleanId = manifest.orderId.trim();
+
+  // Clear any past deletion tombstone for this orderId so new entry saves clean
+  const deletedSet = getDeletedManifestIds();
+  if (deletedSet.has(cleanId.toLowerCase())) {
+    deletedSet.delete(cleanId.toLowerCase());
+    try {
+      localStorage.setItem(STORAGE_KEY_DELETED_MANIFESTS, JSON.stringify(Array.from(deletedSet)));
+    } catch {}
+  }
+
   const index = list.findIndex((m) => m.orderId.trim().toLowerCase() === cleanId.toLowerCase());
 
   if (index >= 0) {
@@ -82,7 +153,7 @@ export async function saveOrderManifest(manifest: OrderManifest): Promise<void> 
 
   // Sync to remote Apps Script backend if available
   try {
-    requestApi('saveOrderManifest', { manifest }).catch((err) => {
+    requestApi('saveOrderManifest', { manifest: { ...manifest, orderId: cleanId } }).catch((err) => {
       console.warn('Remote manifest sync warning:', err);
     });
   } catch (_) {}
@@ -90,20 +161,27 @@ export async function saveOrderManifest(manifest: OrderManifest): Promise<void> 
 
 export async function saveMultipleManifests(manifests: OrderManifest[]): Promise<number> {
   const list = getStoredManifests();
+  const map = new Map<string, OrderManifest>();
+  list.forEach((m) => map.set(m.orderId.trim().toLowerCase(), m));
+
+  const deletedSet = getDeletedManifestIds();
   let addedCount = 0;
 
   for (const item of manifests) {
     const cleanId = item.orderId.trim();
-    const index = list.findIndex((m) => m.orderId.trim().toLowerCase() === cleanId.toLowerCase());
-    if (index >= 0) {
-      list[index] = { ...item, orderId: cleanId };
-    } else {
-      list.push({ ...item, orderId: cleanId });
-      addedCount++;
-    }
+    if (!cleanId) continue;
+    const lower = cleanId.toLowerCase();
+    deletedSet.delete(lower);
+    map.set(lower, { ...item, orderId: cleanId });
+    addedCount++;
   }
 
-  saveStoredManifests(list);
+  try {
+    localStorage.setItem(STORAGE_KEY_DELETED_MANIFESTS, JSON.stringify(Array.from(deletedSet)));
+  } catch {}
+
+  const updated = Array.from(map.values());
+  saveStoredManifests(updated);
 
   // Sync batch
   try {
@@ -152,6 +230,9 @@ export async function updateManifestStatus(
 
 export function deleteManifest(orderId: string): void {
   const cleanId = orderId.trim();
+  if (!cleanId) return;
+
+  recordDeletedManifestId(cleanId);
   const list = getStoredManifests().filter((m) => m.orderId.trim().toLowerCase() !== cleanId.toLowerCase());
   saveStoredManifests(list);
 
@@ -164,6 +245,8 @@ export function deleteManifest(orderId: string): void {
 
 /**
  * Robust Barcode / GTIN / GSIN Normalizer:
+ * - Strips AIM symbology identifiers (e.g. "]C1", "]e0", "]d2", "]Q3", "]E0", "]A0", "]I0", "]G1")
+ * - Strips GS1 parenthesized / raw application identifiers (e.g. "(01)08901234567890" or "0108901234567890")
  * - Fixes Excel scientific notation (e.g. "8.901234567890E+12" -> "8901234567890")
  * - Preserves leading zeros (e.g. "0123456789012")
  * - Strips quotes, whitespace, control characters, trailing ".0"
@@ -171,6 +254,20 @@ export function deleteManifest(orderId: string): void {
 export function normalizeBarcode(input: any): string {
   if (input === null || input === undefined) return '';
   let str = String(input).trim().replace(/^["']|["']$/g, '');
+
+  // Strip AIM symbology identifiers (e.g. "]C1", "]e0", "]d2", "]Q3", "]E0", "]A0", "]I0", "]G1")
+  str = str.replace(/^\][A-Za-z0-9]{2}/, '');
+
+  // Strip GS1 parenthesized application identifier e.g. "(01)08901234567890"
+  const gs1ParenMatch = str.match(/^\(01\)(\d{12,14})/);
+  if (gs1ParenMatch) {
+    str = gs1ParenMatch[1];
+  }
+
+  // Strip GS1 raw "01" application identifier if 16 digits e.g. "0108901234567890" -> "08901234567890"
+  if (/^01\d{14}$/.test(str)) {
+    str = str.substring(2);
+  }
 
   // Strip trailing .0 from float conversion
   if (/\.0+$/.test(str)) {
@@ -187,8 +284,41 @@ export function normalizeBarcode(input: any): string {
     } catch (_) {}
   }
 
-  // Remove any spaces or invisible characters
-  return str.replace(/[\s\u200B-\u200D\uFEFF]/g, '').trim();
+  // Remove any spaces, carriage returns, tabs, or invisible characters
+  return str.replace(/[\s\u200B-\u200D\uFEFF\r\n\t]/g, '').trim();
+}
+
+/**
+ * Compare two barcodes or SKUs with ultra-high tolerance:
+ * - Exact match (case-insensitive)
+ * - Match without leading zeros (e.g. 08901234567890 vs 8901234567890)
+ * - Match without punctuation / hyphens (e.g. SKU-123 vs SKU123)
+ * - UPC-A to EAN-13 padding (12 digits vs 13 digits with leading zero)
+ */
+export function isBarcodeEqual(codeA: any, codeB: any): boolean {
+  if (!codeA || !codeB) return false;
+  const a = normalizeBarcode(codeA).toUpperCase();
+  const b = normalizeBarcode(codeB).toUpperCase();
+  if (!a || !b) return false;
+
+  // 1. Direct match
+  if (a === b) return true;
+
+  // 2. Ignore leading zeros (e.g. 08901234567890 vs 8901234567890)
+  const aNoZero = a.replace(/^0+/, '');
+  const bNoZero = b.replace(/^0+/, '');
+  if (aNoZero && bNoZero && aNoZero === bNoZero) return true;
+
+  // 3. UPC-A (12 digits) padded to EAN-13 (13 digits)
+  if (a.length === 12 && '0' + a === b) return true;
+  if (b.length === 12 && '0' + b === a) return true;
+
+  // 4. Strip hyphens, underscores, slashes, spaces
+  const aCleanAlpha = a.replace(/[-_.\s/\\#]/g, '');
+  const bCleanAlpha = b.replace(/[-_.\s/\\#]/g, '');
+  if (aCleanAlpha && bCleanAlpha && aCleanAlpha === bCleanAlpha) return true;
+
+  return false;
 }
 
 export function getStoredGtinCatalog(): GtinCatalogProduct[] {
@@ -199,10 +329,11 @@ export function getStoredGtinCatalog(): GtinCatalogProduct[] {
     }
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
-      // Filter out any legacy dummy sample data
+      const deletedSet = getDeletedGtinCodes();
+      // Filter out any deleted items and legacy dummy sample data
       const cleaned = parsed.filter((p) => {
         const gtin = normalizeBarcode(p.gtin);
-        return gtin && !SAMPLE_GTIN_SET.has(gtin);
+        return gtin && !SAMPLE_GTIN_SET.has(gtin) && !deletedSet.has(gtin.toLowerCase());
       });
       return cleaned;
     }
@@ -214,8 +345,13 @@ export function getStoredGtinCatalog(): GtinCatalogProduct[] {
 
 export function saveStoredGtinCatalog(catalog: GtinCatalogProduct[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY_GTIN_CATALOG, JSON.stringify(catalog));
-    window.dispatchEvent(new CustomEvent('vms_gtin_catalog_updated', { detail: { count: catalog.length } }));
+    const deletedSet = getDeletedGtinCodes();
+    const cleaned = catalog.filter((p) => {
+      const gtin = normalizeBarcode(p.gtin);
+      return gtin && !SAMPLE_GTIN_SET.has(gtin) && !deletedSet.has(gtin.toLowerCase());
+    });
+    localStorage.setItem(STORAGE_KEY_GTIN_CATALOG, JSON.stringify(cleaned));
+    window.dispatchEvent(new CustomEvent('vms_gtin_catalog_updated', { detail: { count: cleaned.length } }));
   } catch (e) {
     console.warn('Could not save GTIN catalog:', e);
   }
@@ -226,12 +362,12 @@ export function findProductInCatalog(query: string): GtinCatalogProduct | null {
   const clean = query.trim().toUpperCase();
   const catalog = getStoredGtinCatalog();
 
-  // 1. Exact GTIN match
-  const byGtin = catalog.find((p) => p.gtin.trim().toUpperCase() === clean);
+  // 1. Exact or tolerant GTIN match
+  const byGtin = catalog.find((p) => isBarcodeEqual(p.gtin, clean));
   if (byGtin) return byGtin;
 
-  // 2. Exact SKU match
-  const bySku = catalog.find((p) => p.sku.trim().toUpperCase() === clean);
+  // 2. Exact or tolerant SKU match
+  const bySku = catalog.find((p) => isBarcodeEqual(p.sku, clean) || p.sku.trim().toUpperCase() === clean);
   if (bySku) return bySku;
 
   // 3. Exact Product Name match
@@ -282,6 +418,8 @@ export function searchCatalog(query: string, maxResults = 500): GtinCatalogProdu
       const name = (p.productName || '').toUpperCase();
       const short = (p.shortName || '').toUpperCase();
       return (
+        isBarcodeEqual(gtin, clean) ||
+        isBarcodeEqual(sku, clean) ||
         gtin.includes(clean) ||
         sku.includes(clean) ||
         name.includes(clean) ||
@@ -300,6 +438,15 @@ export async function addOrUpdateGtinProduct(product: GtinCatalogProduct): Promi
   const cleanGtin = normalizeBarcode(product.gtin);
   if (!cleanGtin) return;
 
+  // Clear any past deletion tombstone for this GTIN
+  const deletedSet = getDeletedGtinCodes();
+  if (deletedSet.has(cleanGtin.toLowerCase())) {
+    deletedSet.delete(cleanGtin.toLowerCase());
+    try {
+      localStorage.setItem(STORAGE_KEY_DELETED_GTINS, JSON.stringify(Array.from(deletedSet)));
+    } catch {}
+  }
+
   const normalizedProd: GtinCatalogProduct = {
     ...product,
     gtin: cleanGtin,
@@ -308,7 +455,7 @@ export async function addOrUpdateGtinProduct(product: GtinCatalogProduct): Promi
     shortName: product.shortName ? product.shortName.trim() : product.productName || cleanGtin,
   };
 
-  const index = catalog.findIndex((p) => normalizeBarcode(p.gtin) === cleanGtin);
+  const index = catalog.findIndex((p) => isBarcodeEqual(p.gtin, cleanGtin));
 
   if (index >= 0) {
     catalog[index] = { ...catalog[index], ...normalizedProd };
@@ -327,8 +474,9 @@ export async function deleteGtinProduct(gtin: string): Promise<boolean> {
   const clean = normalizeBarcode(gtin);
   if (!clean) return false;
 
+  recordDeletedGtinCode(clean);
   const catalog = getStoredGtinCatalog();
-  const filtered = catalog.filter((p) => normalizeBarcode(p.gtin) !== clean);
+  const filtered = catalog.filter((p) => !isBarcodeEqual(p.gtin, clean));
   saveStoredGtinCatalog(filtered);
 
   try {
@@ -340,11 +488,17 @@ export async function deleteGtinProduct(gtin: string): Promise<boolean> {
 
 export async function deleteMultipleGtinProducts(gtins: string[]): Promise<number> {
   if (!Array.isArray(gtins) || gtins.length === 0) return 0;
-  const cleanSet = new Set(gtins.map((g) => normalizeBarcode(g)).filter(Boolean));
-  if (cleanSet.size === 0) return 0;
+  const cleanList = gtins.map((g) => normalizeBarcode(g)).filter(Boolean);
+  if (cleanList.length === 0) return 0;
+
+  cleanList.forEach((g) => recordDeletedGtinCode(g));
+  const cleanSet = new Set(cleanList);
 
   const catalog = getStoredGtinCatalog();
-  const filtered = catalog.filter((p) => !cleanSet.has(normalizeBarcode(p.gtin)));
+  const filtered = catalog.filter((p) => {
+    const normalized = normalizeBarcode(p.gtin);
+    return !cleanSet.has(normalized);
+  });
   const removedCount = catalog.length - filtered.length;
   saveStoredGtinCatalog(filtered);
 
@@ -359,10 +513,14 @@ export async function importGtinCatalog(products: GtinCatalogProduct[]): Promise
   const catalog = getStoredGtinCatalog();
   let newCount = 0;
   const cleanedProducts: GtinCatalogProduct[] = [];
+  const deletedSet = getDeletedGtinCodes();
 
   for (const item of products) {
     const cleanGtin = normalizeBarcode(item.gtin);
     if (!cleanGtin) continue;
+
+    // If item was previously deleted, un-tombstone it on explicit import/sync
+    deletedSet.delete(cleanGtin.toLowerCase());
 
     const normalizedItem: GtinCatalogProduct = {
       ...item,
@@ -374,7 +532,7 @@ export async function importGtinCatalog(products: GtinCatalogProduct[]): Promise
 
     cleanedProducts.push(normalizedItem);
 
-    const index = catalog.findIndex((p) => normalizeBarcode(p.gtin) === cleanGtin);
+    const index = catalog.findIndex((p) => isBarcodeEqual(p.gtin, cleanGtin));
     if (index >= 0) {
       catalog[index] = { ...catalog[index], ...normalizedItem };
     } else {
@@ -382,6 +540,10 @@ export async function importGtinCatalog(products: GtinCatalogProduct[]): Promise
       newCount++;
     }
   }
+
+  try {
+    localStorage.setItem(STORAGE_KEY_DELETED_GTINS, JSON.stringify(Array.from(deletedSet)));
+  } catch {}
 
   saveStoredGtinCatalog(catalog);
 
@@ -412,7 +574,8 @@ export async function syncGtinWithMasterSheet(): Promise<{
 
     if (res && res.success && Array.isArray(res.catalog)) {
       if (res.catalog.length > 0) {
-        // Merge or replace with cloud catalog
+        const deletedSet = getDeletedGtinCodes();
+        // Merge with cloud catalog, excluding locally deleted tombstones
         const catalog = getStoredGtinCatalog();
         const map = new Map<string, GtinCatalogProduct>();
         // Add existing local
@@ -420,7 +583,9 @@ export async function syncGtinWithMasterSheet(): Promise<{
         // Overwrite with master cloud sheet
         res.catalog.forEach((p) => {
           const g = normalizeBarcode(p.gtin);
-          if (g) map.set(g, { ...p, gtin: g });
+          if (g && !deletedSet.has(g.toLowerCase())) {
+            map.set(g, { ...p, gtin: g });
+          }
         });
         const merged = Array.from(map.values());
         saveStoredGtinCatalog(merged);
@@ -592,13 +757,19 @@ export async function syncManifestsWithCloud(): Promise<{ success: boolean; mani
   try {
     const res = await requestApi<{ success: boolean; manifests?: OrderManifest[]; error?: string }>('getOrderManifests', {});
     if (res && res.success && Array.isArray(res.manifests)) {
+      const deletedSet = getDeletedManifestIds();
       if (res.manifests.length > 0) {
-        // Merge cloud manifests with local manifests
+        // Merge cloud manifests with local manifests, skipping deleted tombstones
         const local = getStoredManifests();
         const map = new Map<string, OrderManifest>();
-        local.forEach((m) => map.set(m.orderId.toUpperCase(), m));
+        local.forEach((m) => {
+          const id = m.orderId.toUpperCase();
+          if (!deletedSet.has(id.toLowerCase())) {
+            map.set(id, m);
+          }
+        });
         res.manifests.forEach((m) => {
-          if (m.orderId) {
+          if (m.orderId && !deletedSet.has(m.orderId.toLowerCase())) {
             map.set(m.orderId.toUpperCase(), m);
           }
         });
