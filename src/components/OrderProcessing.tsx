@@ -37,6 +37,8 @@ import {
   getStoredGtinCatalog,
   addOrUpdateGtinProduct,
   findProductByGtin,
+  findProductInCatalog,
+  searchCatalog,
   getGtinSheetConfig,
   saveGtinSheetConfig,
   syncGtinFromGoogleSheet,
@@ -88,6 +90,12 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
       imageUrl: ''
     }
   ]);
+
+  // Active suggestions dropdown state for item entry
+  const [activeSuggestion, setActiveSuggestion] = useState<{
+    rowIndex: number;
+    field: 'gtin' | 'sku' | 'productName';
+  } | null>(null);
 
   // --- External GTIN Google Sheet Sync Modal / Settings State ---
   const [isSyncModalOpen, setIsSyncModalOpen] = useState<boolean>(false);
@@ -177,15 +185,27 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
       const updated = [...prev];
       const target = { ...updated[index], [field]: value };
 
-      // If user typed/selected SKU or GTIN, attempt auto-filling details from GTIN catalog
-      if (field === 'gtin' || field === 'sku') {
-        const found = findProductByGtin(value);
+      // Multi-directional Auto-Fill:
+      // If user types or changes Product Name, SKU, or GTIN, look up match in GTIN catalog!
+      if (field === 'gtin' || field === 'sku' || field === 'productName' || field === 'shortName') {
+        const found = findProductInCatalog(value);
         if (found) {
-          target.gtin = found.gtin;
-          target.sku = found.sku;
-          target.productName = found.productName;
-          target.shortName = found.shortName;
-          if (found.imageUrl) target.imageUrl = found.imageUrl;
+          // If match found, auto-fill all other fields and image!
+          if (found.gtin && (field === 'productName' || field === 'sku' || !target.gtin)) {
+            target.gtin = found.gtin;
+          }
+          if (found.sku && (field === 'productName' || field === 'gtin' || !target.sku)) {
+            target.sku = found.sku;
+          }
+          if (found.productName && field !== 'productName') {
+            target.productName = found.productName;
+          }
+          if (found.shortName && field !== 'shortName') {
+            target.shortName = found.shortName;
+          }
+          if (found.imageUrl) {
+            target.imageUrl = found.imageUrl;
+          }
         }
       }
 
@@ -199,14 +219,48 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
       const updated = [...prev];
       updated[index] = {
         ...updated[index],
-        gtin: product.gtin,
-        sku: product.sku,
-        productName: product.productName,
-        shortName: product.shortName,
-        imageUrl: product.imageUrl || ''
+        gtin: product.gtin || updated[index].gtin || '',
+        sku: product.sku || updated[index].sku || '',
+        productName: product.productName || updated[index].productName || '',
+        shortName: product.shortName || product.productName || updated[index].shortName || '',
+        imageUrl: product.imageUrl || updated[index].imageUrl || ''
       };
       return updated;
     });
+    setActiveSuggestion(null);
+  };
+
+  const handleFieldBlur = (index: number, field: 'gtin' | 'sku' | 'productName') => {
+    setTimeout(() => {
+      setActiveSuggestion((curr) => (curr?.rowIndex === index && curr?.field === field ? null : curr));
+    }, 220);
+
+    // Auto-fill on blur if a matching catalog product is detected
+    const currentItem = orderItems[index];
+    if (currentItem) {
+      const val = field === 'productName' ? currentItem.productName : field === 'sku' ? currentItem.sku : currentItem.gtin;
+      if (val && val.trim()) {
+        const found = findProductInCatalog(val.trim());
+        if (found) {
+          handleSelectProductFromCatalog(index, found);
+        }
+      }
+    }
+  };
+
+  const handleAutoAssignBarcode = (index: number) => {
+    const random10 = Math.floor(1000000000 + Math.random() * 9000000000);
+    const generatedGtin = `890${random10}`;
+    setOrderItems((prev) => {
+      const updated = [...prev];
+      updated[index] = {
+        ...updated[index],
+        gtin: generatedGtin,
+        sku: updated[index].sku || `SKU-${Date.now().toString().slice(-6)}`
+      };
+      return updated;
+    });
+    onShowToast(`Auto-assigned Barcode: ${generatedGtin}`, 'info');
   };
 
   // Submit Order Manifest Pre-Entry
@@ -223,22 +277,41 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
       return;
     }
 
-    // Validate item lines
+    // Validate item lines: Product Name, SKU, and GTIN Barcode are ALL COMPULSORY!
+    // Entering any one auto-fetches the others, but all three must be present so packer can verify.
     const validItems: ManifestItem[] = [];
     for (let i = 0; i < orderItems.length; i++) {
       const it = orderItems[i];
-      if (!it.gtin.trim() && !it.sku.trim()) {
-        onShowToast(`Line ${i + 1}: Please enter a GTIN Barcode or SKU`, 'error');
+      if (!it.productName.trim()) {
+        onShowToast(`Line ${i + 1}: Product Name is compulsory (enter name or pick from catalog)`, 'error');
+        return;
+      }
+      if (!it.sku.trim()) {
+        onShowToast(`Line ${i + 1}: SKU / Item Code is compulsory (enter SKU or auto-fill from name)`, 'error');
+        return;
+      }
+      if (!it.gtin.trim()) {
+        onShowToast(`Line ${i + 1}: GTIN / Barcode is compulsory so the packer can scan and verify the item!`, 'error');
         return;
       }
       validItems.push({
         id: 'item-' + (i + 1) + '-' + Date.now(),
-        sku: it.sku.trim() || it.gtin.trim(),
-        productName: it.productName.trim() || it.sku.trim() || `Product ${i + 1}`,
-        shortName: it.shortName.trim() || it.productName.trim() || it.sku.trim(),
-        gtin: it.gtin.trim() || it.sku.trim(),
+        sku: it.sku.trim().toUpperCase(),
+        productName: it.productName.trim(),
+        shortName: it.shortName.trim() || it.productName.trim(),
+        gtin: it.gtin.trim().toUpperCase(),
         quantity: Math.max(1, Math.round(Number(it.quantity) || 1)),
         scannedCount: 0,
+        imageUrl: it.imageUrl.trim() || undefined
+      });
+
+      // Auto-save/preserve this product in the GTIN Catalog for future orders!
+      addOrUpdateGtinProduct({
+        gtin: it.gtin.trim().toUpperCase(),
+        sku: it.sku.trim().toUpperCase(),
+        productName: it.productName.trim(),
+        shortName: it.shortName.trim() || it.productName.trim(),
+        category: 'General',
         imageUrl: it.imageUrl.trim() || undefined
       });
     }
@@ -709,7 +782,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                   Products in This Order (Multi-Item Supported)
                 </label>
                 <span className="text-[11px] text-slate-400">
-                  Select from GTIN catalog or type barcode/SKU to auto-fill product details &amp; image.
+                  Product Name, SKU, and Barcode are all compulsory for packer scan verification.
                 </span>
               </div>
               <button
@@ -720,6 +793,19 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                 <Plus className="w-3.5 h-3.5 text-indigo-600" />
                 <span>Add Another Product</span>
               </button>
+            </div>
+
+            {/* Smart 1-Step Auto-Fill Helper Banner */}
+            <div className="bg-gradient-to-r from-indigo-50/90 via-purple-50/70 to-slate-50 border border-indigo-200/90 rounded-2xl p-3 text-xs text-indigo-950 flex items-start gap-2.5 shadow-2xs">
+              <Sparkles className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+              <div className="space-y-0.5">
+                <span className="font-bold text-indigo-900 block">
+                  Smart 1-Field Auto-Fill: Enter ANY 1 detail (Product Name, SKU, or Barcode) — the system automatically fetches &amp; fills the other two!
+                </span>
+                <span className="text-[11px] text-slate-600 block">
+                  All 3 details (Product Name, SKU, and Barcode) are compulsory so the packing operator can verify the physical item and scan its exact barcode.
+                </span>
+              </div>
             </div>
 
             <div className="space-y-3">
@@ -769,61 +855,192 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                       )}
                     </div>
 
-                    {/* GTIN Barcode / EAN */}
-                    <div className="sm:col-span-3">
-                      <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                        GTIN / Barcode <span className="text-red-500">*</span>
+                    {/* Product Name / Short Name (Auto-Fills GTIN & SKU) */}
+                    <div className="sm:col-span-4 relative">
+                      <label className="block text-[11px] font-bold text-slate-700 mb-0.5 flex items-center justify-between">
+                        <span>
+                          Product Name <span className="text-red-500">*</span>
+                        </span>
+                        <span className="text-[10px] text-indigo-600 font-medium">Auto-fills SKU &amp; GTIN</span>
+                      </label>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          required
+                          value={item.productName}
+                          onFocus={() => setActiveSuggestion({ rowIndex: index, field: 'productName' })}
+                          onBlur={() => handleFieldBlur(index, 'productName')}
+                          onChange={(e) => {
+                            handleItemFieldChange(index, 'productName', e.target.value);
+                            setActiveSuggestion({ rowIndex: index, field: 'productName' });
+                          }}
+                          placeholder="Type product name (e.g. Navy Oxford)..."
+                          className="w-full pl-8 pr-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-semibold text-slate-900 focus:outline-none focus:border-indigo-500 shadow-inner"
+                        />
+                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      </div>
+
+                      {/* Dropdown Suggestions for Product Name */}
+                      {activeSuggestion?.rowIndex === index && activeSuggestion?.field === 'productName' && (
+                        <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-indigo-200 rounded-xl shadow-xl z-30 max-h-52 overflow-y-auto divide-y divide-slate-100 animate-fade-in">
+                          <div className="px-3 py-1 bg-indigo-50 text-[10px] font-mono text-indigo-700 font-bold sticky top-0 flex items-center justify-between">
+                            <span>Catalog Suggestions</span>
+                            <span>Click to Auto-Fill All</span>
+                          </div>
+                          {(searchCatalog(item.productName || '', 6).length > 0
+                            ? searchCatalog(item.productName || '', 6)
+                            : gtinCatalog.slice(0, 5)
+                          ).map((catItem) => (
+                            <div
+                              key={catItem.gtin || catItem.sku}
+                              onMouseDown={() => handleSelectProductFromCatalog(index, catItem)}
+                              className="px-3 py-2 hover:bg-indigo-50/70 flex items-center gap-2.5 transition cursor-pointer"
+                            >
+                              {catItem.imageUrl ? (
+                                <img src={catItem.imageUrl} alt="" className="w-7 h-7 rounded-lg object-contain bg-slate-50 border border-slate-200 p-0.5 shrink-0" />
+                              ) : (
+                                <div className="w-7 h-7 rounded-lg bg-slate-100 text-slate-400 flex items-center justify-center shrink-0">
+                                  <ShoppingBag className="w-3.5 h-3.5" />
+                                </div>
+                              )}
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs font-bold text-slate-900 truncate">
+                                  {catItem.shortName || catItem.productName}
+                                </div>
+                                <div className="text-[10px] text-slate-500 font-mono flex items-center gap-2">
+                                  <span>SKU: {catItem.sku || 'N/A'}</span>
+                                  <span>•</span>
+                                  <span>GTIN: {catItem.gtin || 'None'}</span>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* SKU / Item Code */}
+                    <div className="sm:col-span-3 relative">
+                      <label className="block text-[11px] font-bold text-slate-700 mb-0.5 flex items-center justify-between">
+                        <span>
+                          SKU / Item Code <span className="text-red-500">*</span>
+                        </span>
+                        <span className="text-[10px] text-indigo-600 font-medium">Auto-fills</span>
                       </label>
                       <input
                         type="text"
                         required
-                        value={item.gtin}
-                        onChange={(e) => handleItemFieldChange(index, 'gtin', e.target.value)}
-                        placeholder="Scan or type GTIN..."
-                        className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900 focus:outline-none focus:border-indigo-500"
+                        value={item.sku}
+                        onFocus={() => setActiveSuggestion({ rowIndex: index, field: 'sku' })}
+                        onBlur={() => handleFieldBlur(index, 'sku')}
+                        onChange={(e) => {
+                          handleItemFieldChange(index, 'sku', e.target.value);
+                          setActiveSuggestion({ rowIndex: index, field: 'sku' });
+                        }}
+                        placeholder="e.g. SKU-SHIRT-BLUE"
+                        className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-indigo-500 uppercase shadow-inner"
                       />
+
+                      {/* Dropdown Suggestions for SKU */}
+                      {activeSuggestion?.rowIndex === index && activeSuggestion?.field === 'sku' && (
+                        <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-indigo-200 rounded-xl shadow-xl z-30 max-h-52 overflow-y-auto divide-y divide-slate-100 animate-fade-in">
+                          <div className="px-3 py-1 bg-indigo-50 text-[10px] font-mono text-indigo-700 font-bold sticky top-0 flex items-center justify-between">
+                            <span>Catalog SKUs</span>
+                            <span>Click to Auto-Fill</span>
+                          </div>
+                          {(searchCatalog(item.sku || '', 6).length > 0
+                            ? searchCatalog(item.sku || '', 6)
+                            : gtinCatalog.slice(0, 5)
+                          ).map((catItem) => (
+                            <div
+                              key={catItem.sku || catItem.gtin}
+                              onMouseDown={() => handleSelectProductFromCatalog(index, catItem)}
+                              className="px-3 py-2 hover:bg-indigo-50/70 flex items-center gap-2 transition cursor-pointer"
+                            >
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs font-bold text-indigo-700 font-mono truncate">{catItem.sku}</div>
+                                <div className="text-[10px] text-slate-500 truncate">{catItem.shortName || catItem.productName}</div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
-                    {/* SKU & Product Name */}
-                    <div className="sm:col-span-4 space-y-1.5">
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-600 mb-0.5">
-                          SKU / Item Code
-                        </label>
-                        <input
-                          type="text"
-                          value={item.sku}
-                          onChange={(e) => handleItemFieldChange(index, 'sku', e.target.value)}
-                          placeholder="e.g. SKU-SHIRT-BLUE"
-                          className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-indigo-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-600 mb-0.5">
-                          Product Name / Short Name
-                        </label>
-                        <input
-                          type="text"
-                          value={item.productName}
-                          onChange={(e) => handleItemFieldChange(index, 'productName', e.target.value)}
-                          placeholder="e.g. Navy Oxford Shirt (L)"
-                          className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-indigo-500"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Quantity Stepper */}
-                    <div className="sm:col-span-3">
-                      <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                        Required Quantity <span className="text-red-500">*</span>
+                    {/* GTIN Barcode / EAN (Compulsory for Packer Verification) */}
+                    <div className="sm:col-span-3 relative">
+                      <label className="block text-[11px] font-bold text-slate-700 mb-0.5 flex items-center justify-between">
+                        <span>
+                          GTIN / Barcode <span className="text-red-500">*</span>
+                        </span>
+                        <span className="text-[10px] text-indigo-600 font-medium">Auto-fills</span>
                       </label>
-                      <div className="flex items-center gap-2">
+                      <div className="relative">
+                        <input
+                          type="text"
+                          required
+                          value={item.gtin}
+                          onFocus={() => setActiveSuggestion({ rowIndex: index, field: 'gtin' })}
+                          onBlur={() => handleFieldBlur(index, 'gtin')}
+                          onChange={(e) => {
+                            handleItemFieldChange(index, 'gtin', e.target.value);
+                            setActiveSuggestion({ rowIndex: index, field: 'gtin' });
+                          }}
+                          placeholder="Scan or type barcode..."
+                          className="w-full pl-8 pr-14 py-2 bg-white border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900 focus:outline-none focus:border-indigo-500 shadow-inner"
+                        />
+                        <Barcode className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <button
+                          type="button"
+                          onClick={() => handleAutoAssignBarcode(index)}
+                          className="absolute right-1.5 top-1/2 -translate-y-1/2 px-1.5 py-0.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[9px] font-mono font-bold rounded-md border border-indigo-200 transition cursor-pointer"
+                          title="Generate a 13-digit GTIN barcode for custom/new products"
+                        >
+                          + Auto
+                        </button>
+                      </div>
+
+                      {/* Dropdown Suggestions for GTIN */}
+                      {activeSuggestion?.rowIndex === index && activeSuggestion?.field === 'gtin' && (
+                        <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-indigo-200 rounded-xl shadow-xl z-30 max-h-52 overflow-y-auto divide-y divide-slate-100 animate-fade-in">
+                          <div className="px-3 py-1 bg-indigo-50 text-[10px] font-mono text-indigo-700 font-bold sticky top-0 flex items-center justify-between">
+                            <span>Catalog Barcodes</span>
+                            <span>Click to Auto-Fill</span>
+                          </div>
+                          {(searchCatalog(item.gtin || '', 6).length > 0
+                            ? searchCatalog(item.gtin || '', 6)
+                            : gtinCatalog.slice(0, 5)
+                          ).map((catItem) => (
+                            <div
+                              key={catItem.gtin || catItem.sku}
+                              onMouseDown={() => handleSelectProductFromCatalog(index, catItem)}
+                              className="px-3 py-2 hover:bg-indigo-50/70 flex items-center gap-2 transition cursor-pointer"
+                            >
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs font-bold text-slate-900 font-mono truncate">{catItem.gtin}</div>
+                                <div className="text-[10px] text-slate-500 truncate">{catItem.shortName || catItem.productName}</div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Quantity and Secondary Line Details */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                    {/* Required Quantity Stepper */}
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs font-bold text-slate-700">
+                        Required Quantity:
+                      </label>
+                      <div className="flex items-center gap-1.5">
                         <button
                           type="button"
                           onClick={() =>
                             handleItemFieldChange(index, 'quantity', Math.max(1, item.quantity - 1))
                           }
-                          className="w-8 h-8 rounded-lg bg-white border border-slate-300 text-slate-700 font-bold hover:bg-slate-100 flex items-center justify-center cursor-pointer"
+                          className="w-7 h-7 rounded-lg bg-white border border-slate-300 text-slate-700 font-bold hover:bg-slate-100 flex items-center justify-center cursor-pointer shadow-2xs"
                         >
                           -
                         </button>
@@ -835,12 +1052,12 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                           onChange={(e) =>
                             handleItemFieldChange(index, 'quantity', Math.max(1, parseInt(e.target.value) || 1))
                           }
-                          className="w-14 text-center py-1 bg-white border border-slate-300 rounded-lg text-sm font-mono font-black text-slate-900"
+                          className="w-12 text-center py-1 bg-white border border-slate-300 rounded-lg text-xs font-mono font-black text-slate-900"
                         />
                         <button
                           type="button"
                           onClick={() => handleItemFieldChange(index, 'quantity', item.quantity + 1)}
-                          className="w-8 h-8 rounded-lg bg-white border border-slate-300 text-slate-700 font-bold hover:bg-slate-100 flex items-center justify-center cursor-pointer"
+                          className="w-7 h-7 rounded-lg bg-white border border-slate-300 text-slate-700 font-bold hover:bg-slate-100 flex items-center justify-center cursor-pointer shadow-2xs"
                         >
                           +
                         </button>

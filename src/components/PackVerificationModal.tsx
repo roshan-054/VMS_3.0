@@ -153,14 +153,19 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
     setLastScannedCode(cleanScan);
     setScannedHistory((prev) => [cleanScan, ...prev.slice(0, 19)]);
 
-    // Check if this GTIN or SKU matches any item in the order
+    // Check if this GTIN or SKU or Name matches any item in the order
     const matchIndex = items.findIndex((it) => {
-      const itGtin = it.gtin.trim().toUpperCase();
-      const itSku = it.sku.trim().toUpperCase();
+      const itGtin = (it.gtin || '').trim().toUpperCase();
+      const itSku = (it.sku || '').trim().toUpperCase();
+      const itName = (it.productName || '').trim().toUpperCase();
+      const itShort = (it.shortName || '').trim().toUpperCase();
       return (
-        itGtin === cleanScan ||
-        itSku === cleanScan ||
-        itGtin.replace(/^0+/, '') === cleanScan.replace(/^0+/, '')
+        (itGtin && itGtin === cleanScan) ||
+        (itSku && itSku === cleanScan) ||
+        (itGtin && itGtin.replace(/^0+/, '') === cleanScan.replace(/^0+/, '')) ||
+        (itName && itName === cleanScan) ||
+        (itShort && itShort === cleanScan) ||
+        (itName && cleanScan.length >= 4 && itName.includes(cleanScan))
       );
     });
 
@@ -252,6 +257,44 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
     const code = gtinInput.trim();
     setGtinInput('');
     processGtinScan(code);
+  };
+
+  const handleManualVerifyItem = (targetIndex: number) => {
+    const targetItem = items[targetIndex];
+    if (!targetItem || targetItem.scannedCount >= targetItem.quantity) return;
+
+    playAudioFeedback('success');
+    setMismatchError(null);
+
+    const updatedItems = [...items];
+    updatedItems[targetIndex] = {
+      ...targetItem,
+      scannedCount: targetItem.scannedCount + 1,
+    };
+    setItems(updatedItems);
+    onShowToast(`✓ Verified: ${targetItem.shortName || targetItem.productName} (${updatedItems[targetIndex].scannedCount}/${targetItem.quantity})`, 'success');
+
+    const allDone = updatedItems.every((it) => it.scannedCount >= it.quantity);
+    if (allDone) {
+      setIsFullyVerified(true);
+      playAudioFeedback('celebrate');
+      logPackVerification({
+        timestamp: new Date().toISOString(),
+        orderId: manifest.orderId,
+        platform: manifest.platform,
+        assignedPacker: manifest.assignedPackerName,
+        verifiedByPacker: currentUser?.name || 'Packer',
+        packerEmail: currentUser?.email || 'packer@ops.local',
+        processedBy: manifest.processedByName,
+        status: 'MATCHED',
+        totalRequired: updatedItems.reduce((s, it) => s + it.quantity, 0),
+        totalScanned: updatedItems.reduce((s, it) => s + it.scannedCount, 0),
+        itemsSummary: updatedItems.map((it) => `${it.shortName}: ${it.scannedCount}/${it.quantity}`).join(', '),
+        scannedGtinsLog: [...scannedHistory, targetItem.gtin || targetItem.sku || 'MANUAL'],
+        durationSeconds: Math.round((Date.now() - startTimeRef.current) / 1000),
+        notes: 'Items verified (includes manual verification)',
+      });
+    }
   };
 
   const handleProceedToRecord = () => {
@@ -481,18 +524,18 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
                   </div>
 
                   <div className="text-xs text-slate-400 font-mono truncate">
-                    SKU: <span className="text-slate-200">{item.sku}</span>
+                    SKU: <span className="text-slate-200">{item.sku || 'N/A'}</span>
                   </div>
 
                   <div className="flex items-center gap-2 pt-0.5">
                     <span className="text-[11px] font-mono bg-slate-800 px-2 py-0.5 rounded text-indigo-300 border border-slate-700">
-                      GTIN: {item.gtin}
+                      {item.gtin ? `GTIN: ${item.gtin}` : 'GTIN: Optional (Verify by SKU/Click)'}
                     </span>
                   </div>
                 </div>
 
-                {/* Quantity Progress Indicator */}
-                <div className="text-right shrink-0 space-y-1">
+                {/* Quantity Progress Indicator & Action */}
+                <div className="text-right shrink-0 space-y-1.5 flex flex-col items-end">
                   <div
                     className={`text-lg font-mono font-black ${
                       isItemDone ? 'text-emerald-400' : 'text-slate-200'
@@ -500,15 +543,27 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
                   >
                     {item.scannedCount} / {item.quantity}
                   </div>
-                  <span
-                    className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase ${
-                      isItemDone
-                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50'
-                        : 'bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse'
-                    }`}
-                  >
-                    {isItemDone ? 'Verified' : 'Needs Scan'}
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase ${
+                        isItemDone
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50'
+                          : 'bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse'
+                      }`}
+                    >
+                      {isItemDone ? 'Verified' : 'Needs Scan'}
+                    </span>
+                    {!isItemDone && (
+                      <button
+                        type="button"
+                        onClick={() => handleManualVerifyItem(idx)}
+                        className="px-2 py-0.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-[10px] font-bold rounded-lg transition cursor-pointer shadow-xs"
+                        title="Verify item manually (e.g. if item lacks barcode)"
+                      >
+                        Verify +1
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             );

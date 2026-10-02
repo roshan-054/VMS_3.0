@@ -223,25 +223,78 @@ export function saveStoredGtinCatalog(catalog: GtinCatalogProduct[]): void {
   }
 }
 
-export function findProductByGtin(gtinOrSku: string): GtinCatalogProduct | null {
-  if (!gtinOrSku) return null;
-  const clean = gtinOrSku.trim().toUpperCase();
+export function findProductInCatalog(query: string): GtinCatalogProduct | null {
+  if (!query || !query.trim()) return null;
+  const clean = query.trim().toUpperCase();
   const catalog = getStoredGtinCatalog();
 
-  // 1. Direct GTIN match
+  // 1. Exact GTIN match
   const byGtin = catalog.find((p) => p.gtin.trim().toUpperCase() === clean);
   if (byGtin) return byGtin;
 
-  // 2. Direct SKU match
+  // 2. Exact SKU match
   const bySku = catalog.find((p) => p.sku.trim().toUpperCase() === clean);
   if (bySku) return bySku;
 
-  // 3. Fallback: match without leading zero or check barcode variations
+  // 3. Exact Product Name match
+  const byName = catalog.find((p) => (p.productName || '').trim().toUpperCase() === clean);
+  if (byName) return byName;
+
+  // 4. Exact Short Name match
+  const byShortName = catalog.find((p) => (p.shortName || '').trim().toUpperCase() === clean);
+  if (byShortName) return byShortName;
+
+  // 5. Fallback: match GTIN without leading zeros
   const noLeadingZero = clean.replace(/^0+/, '');
-  const altMatch = catalog.find((p) => p.gtin.replace(/^0+/, '') === noLeadingZero);
-  if (altMatch) return altMatch;
+  if (noLeadingZero.length >= 4) {
+    const altMatch = catalog.find((p) => p.gtin.replace(/^0+/, '') === noLeadingZero);
+    if (altMatch) return altMatch;
+  }
+
+  // 6. Substring / Prefix match on Product Name or Short Name if query length >= 3
+  if (clean.length >= 3) {
+    const prefixMatch = catalog.find((p) => {
+      const name = (p.productName || '').toUpperCase();
+      const short = (p.shortName || '').toUpperCase();
+      const sku = (p.sku || '').toUpperCase();
+      return name.startsWith(clean) || short.startsWith(clean) || sku.startsWith(clean);
+    });
+    if (prefixMatch) return prefixMatch;
+
+    const containsMatch = catalog.find((p) => {
+      const name = (p.productName || '').toUpperCase();
+      const short = (p.shortName || '').toUpperCase();
+      return name.includes(clean) || short.includes(clean);
+    });
+    if (containsMatch) return containsMatch;
+  }
 
   return null;
+}
+
+export function searchCatalog(query: string, maxResults = 8): GtinCatalogProduct[] {
+  if (!query || !query.trim()) return [];
+  const clean = query.trim().toUpperCase();
+  const catalog = getStoredGtinCatalog();
+
+  return catalog
+    .filter((p) => {
+      const gtin = (p.gtin || '').toUpperCase();
+      const sku = (p.sku || '').toUpperCase();
+      const name = (p.productName || '').toUpperCase();
+      const short = (p.shortName || '').toUpperCase();
+      return (
+        gtin.includes(clean) ||
+        sku.includes(clean) ||
+        name.includes(clean) ||
+        short.includes(clean)
+      );
+    })
+    .slice(0, maxResults);
+}
+
+export function findProductByGtin(gtinOrSkuOrName: string): GtinCatalogProduct | null {
+  return findProductInCatalog(gtinOrSkuOrName);
 }
 
 export async function addOrUpdateGtinProduct(product: GtinCatalogProduct): Promise<void> {
