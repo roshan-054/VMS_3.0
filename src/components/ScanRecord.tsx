@@ -58,12 +58,16 @@ interface ScanRecordProps {
   onQueueUpdated: () => void;
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
   currentUser: User | null;
+  initialOrderId?: string | null;
+  onClearInitialOrderId?: () => void;
 }
 
 export const ScanRecord: React.FC<ScanRecordProps> = ({
   onQueueUpdated,
   onShowToast,
   currentUser,
+  initialOrderId,
+  onClearInitialOrderId,
 }) => {
   const [orderId, setOrderId] = useState('');
   const [recordingType, setRecordingType] = useState<RecordingType>('Forward');
@@ -132,6 +136,27 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   const [unregisteredOrderWarning, setUnregisteredOrderWarning] = useState<{
     orderId: string;
   } | null>(null);
+
+  // Handle initialOrderId passed when starting packing from Manifest queue or Order Processing tab
+  useEffect(() => {
+    if (initialOrderId && initialOrderId.trim()) {
+      const clean = cleanBarcode(initialOrderId);
+      if (clean) {
+        setOrderId(clean);
+        detectPlatformAndType(clean);
+        const manifest = getManifestByOrderId(clean);
+        if (manifest) {
+          setActiveManifest(manifest);
+          setVerifiedOrderItems(null);
+          setIsPackVerificationOpen(true);
+          onShowToast(`Loaded Order ${clean}. Please scan product barcodes to verify items.`, 'info');
+        } else {
+          onShowToast(`Loaded Order ${clean}`, 'info');
+        }
+        onClearInitialOrderId?.();
+      }
+    }
+  }, [initialOrderId]);
 
   const checkAndOpenPackVerification = (scannedOrderId: string): boolean => {
     const clean = scannedOrderId.trim().toUpperCase();
@@ -1761,9 +1786,10 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       const cleaned = cleanBarcode(orderId);
-                      if (cleaned && cleaned !== orderId) {
+                      if (cleaned) {
                         setOrderId(cleaned);
                         detectPlatformAndType(cleaned);
+                        checkAndOpenPackVerification(cleaned);
                       }
                     }
                   }}
@@ -1774,6 +1800,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                       if (cleaned) {
                         setOrderId(cleaned);
                         detectPlatformAndType(cleaned);
+                        checkAndOpenPackVerification(cleaned);
                         onShowToast(`Scanned / Pasted Order: ${cleaned}`, 'info');
                         e.preventDefault();
                       }

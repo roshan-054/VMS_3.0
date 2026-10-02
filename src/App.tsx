@@ -95,6 +95,7 @@ export function App() {
   const [pendingManifestCount, setPendingManifestCount] = useState<number>(() => {
     return getStoredManifests().filter((m) => m.status === 'Pending').length;
   });
+  const [targetOrderIdToPack, setTargetOrderIdToPack] = useState<string | null>(null);
   const [isClearingCache, setIsClearingCache] = useState(false);
   const [isCacheClearModalOpen, setIsCacheClearModalOpen] = useState(false);
   const [toastInfo, setToastInfo] = useState<{
@@ -525,6 +526,8 @@ export function App() {
               onQueueUpdated={refreshQueueBadge}
               onShowToast={showToast}
               currentUser={currentUser}
+              initialOrderId={targetOrderIdToPack}
+              onClearInitialOrderId={() => setTargetOrderIdToPack(null)}
             />
           )}
 
@@ -532,6 +535,10 @@ export function App() {
             <OrderProcessing
               currentUser={currentUser}
               onShowToast={showToast}
+              onStartPackingOrder={(orderIdToPack) => {
+                setTargetOrderIdToPack(orderIdToPack);
+                setActiveTab('record');
+              }}
             />
           )}
 

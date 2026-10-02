@@ -55,17 +55,23 @@ import {
   extractSpreadsheetId
 } from '../lib/manifestStorage';
 import { requestApi } from '../lib/api';
+import { isAdmin } from '../lib/permissions';
 
 interface OrderProcessingProps {
   currentUser: User | null;
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
+  onStartPackingOrder?: (orderId: string, manifest: OrderManifest) => void;
 }
 
 export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   currentUser,
-  onShowToast
+  onShowToast,
+  onStartPackingOrder
 }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'entry' | 'manifest' | 'gtin' | 'audit'>('entry');
+  const isUserAdmin = isAdmin(currentUser);
+  const [activeSubTab, setActiveSubTab] = useState<'entry' | 'manifest' | 'gtin' | 'audit'>(() =>
+    isUserAdmin ? 'entry' : 'manifest'
+  );
   const [manifests, setManifests] = useState<OrderManifest[]>(() => getStoredManifests());
   const [gtinCatalog, setGtinCatalog] = useState<GtinCatalogProduct[]>(() => getStoredGtinCatalog());
   const [verificationLogs, setVerificationLogs] = useState<PackVerificationLog[]>(() => getStoredVerificationLogs());
@@ -115,7 +121,9 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
   // --- Search & Filters for Manifest List ---
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [packerFilter, setPackerFilter] = useState<string>('ALL');
+  const [packerFilter, setPackerFilter] = useState<string>(() =>
+    isUserAdmin ? 'ALL' : (currentUser?.email || 'ALL')
+  );
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [platformFilter, setPlatformFilter] = useState<string>('ALL');
 
@@ -919,38 +927,40 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
           </div>
         </div>
 
-        {/* Quick Top Actions */}
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            disabled={isSyncingMasterSheet}
-            onClick={handleSyncMasterSheet}
-            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-            title="Sync products with Master Google Sheet (Branding Tab Reference)"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isSyncingMasterSheet ? 'animate-spin' : ''}`} />
-            <span>{isSyncingMasterSheet ? 'Syncing...' : 'Sync Master Google Sheet'}</span>
-          </button>
+        {/* Quick Top Actions (Admin Only) */}
+        {isUserAdmin && (
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={isSyncingMasterSheet}
+              onClick={handleSyncMasterSheet}
+              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              title="Sync products with Master Google Sheet (Branding Tab Reference)"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncingMasterSheet ? 'animate-spin' : ''}`} />
+              <span>{isSyncingMasterSheet ? 'Syncing...' : 'Sync Master Google Sheet'}</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={handleOpenBulkManualModal}
-            className="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl border border-indigo-200 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
-            title="Add multiple products manually or paste directly from Excel/Sheets"
-          >
-            <Layers className="w-3.5 h-3.5 text-indigo-600" />
-            <span>Multi-Product / Excel Paste</span>
-          </button>
+            <button
+              type="button"
+              onClick={handleOpenBulkManualModal}
+              className="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl border border-indigo-200 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+              title="Add multiple products manually or paste directly from Excel/Sheets"
+            >
+              <Layers className="w-3.5 h-3.5 text-indigo-600" />
+              <span>Multi-Product / Excel Paste</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setIsAddProductModalOpen(true)}
-            className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
-          >
-            <Plus className="w-3.5 h-3.5 text-slate-600" />
-            <span>Add Single Product</span>
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={() => setIsAddProductModalOpen(true)}
+              className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+            >
+              <Plus className="w-3.5 h-3.5 text-slate-600" />
+              <span>Add Single Product</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Stats Summary Cards */}
@@ -986,18 +996,20 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
       {/* Sub-Tab Navigation Bar */}
       <div className="flex items-center gap-2 border-b border-slate-200 pb-2 overflow-x-auto select-none">
-        <button
-          type="button"
-          onClick={() => setActiveSubTab('entry')}
-          className={`px-4 py-2.5 rounded-xl font-bold text-xs transition flex items-center gap-2 cursor-pointer shrink-0 ${
-            activeSubTab === 'entry'
-              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
-              : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
-          }`}
-        >
-          <PackagePlus className="w-4 h-4" />
-          <span>New Order Entry &amp; Assign</span>
-        </button>
+        {isUserAdmin && (
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('entry')}
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs transition flex items-center gap-2 cursor-pointer shrink-0 ${
+              activeSubTab === 'entry'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
+            }`}
+          >
+            <PackagePlus className="w-4 h-4" />
+            <span>New Order Entry &amp; Assign</span>
+          </button>
+        )}
 
         <button
           type="button"
@@ -1009,21 +1021,23 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
           }`}
         >
           <Boxes className="w-4 h-4" />
-          <span>Manifest Queue ({manifests.length})</span>
+          <span>{isUserAdmin ? `Manifest Queue (${manifests.length})` : `My Assigned Orders (${filteredManifests.length})`}</span>
         </button>
 
-        <button
-          type="button"
-          onClick={() => setActiveSubTab('gtin')}
-          className={`px-4 py-2.5 rounded-xl font-bold text-xs transition flex items-center gap-2 cursor-pointer shrink-0 ${
-            activeSubTab === 'gtin'
-              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
-              : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
-          }`}
-        >
-          <Barcode className="w-4 h-4" />
-          <span>GTIN Barcode Catalog ({gtinCatalog.length})</span>
-        </button>
+        {isUserAdmin && (
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('gtin')}
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs transition flex items-center gap-2 cursor-pointer shrink-0 ${
+              activeSubTab === 'gtin'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
+            }`}
+          >
+            <Barcode className="w-4 h-4" />
+            <span>GTIN Barcode Catalog ({gtinCatalog.length})</span>
+          </button>
+        )}
 
         <button
           type="button"
@@ -1039,8 +1053,8 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         </button>
       </div>
 
-      {/* SUB-TAB 1: ORDER ENTRY FORM */}
-      {activeSubTab === 'entry' && (
+      {/* SUB-TAB 1: ORDER ENTRY FORM (Admin Only) */}
+      {isUserAdmin && activeSubTab === 'entry' && (
         <form onSubmit={handleSaveOrder} className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs space-y-6">
           <div className="border-b border-slate-100 pb-4 flex items-center justify-between">
             <div>
@@ -1614,15 +1628,40 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                         </span>
                       </div>
 
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteManifest(m.id, m.orderId)}
-                          className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg transition cursor-pointer"
-                          title="Delete from manifest"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {/* Start Packing / Verification Button */}
+                        {!isPacked ? (
+                          <button
+                            type="button"
+                            onClick={() => onStartPackingOrder && onStartPackingOrder(m.orderId, m)}
+                            className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer shadow-emerald-600/20"
+                            title="Start packing this order & verify barcodes via live camera"
+                          >
+                            <Boxes className="w-3.5 h-3.5" />
+                            <span>Start Packing This Order</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => onStartPackingOrder && onStartPackingOrder(m.orderId, m)}
+                            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer"
+                            title="Re-verify or re-record packing"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>Re-verify / Re-pack</span>
+                          </button>
+                        )}
+
+                        {isUserAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteManifest(m.id, m.orderId)}
+                            className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg transition cursor-pointer"
+                            title="Delete from manifest"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                     </div>
 
@@ -1719,8 +1758,8 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         </div>
       )}
 
-      {/* SUB-TAB 3: GTIN BARCODE CATALOG */}
-      {activeSubTab === 'gtin' && (
+      {/* SUB-TAB 3: GTIN BARCODE CATALOG (Admin Only) */}
+      {isUserAdmin && activeSubTab === 'gtin' && (
         <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs space-y-4">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div>
