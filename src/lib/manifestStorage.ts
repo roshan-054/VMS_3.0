@@ -62,15 +62,15 @@ export function saveStoredManifests(manifests: OrderManifest[]): void {
 
 export function getManifestByOrderId(orderId: string): OrderManifest | null {
   if (!orderId) return null;
-  const clean = orderId.trim().toUpperCase();
+  const clean = orderId.trim().toLowerCase();
   const list = getStoredManifests();
-  return list.find((m) => m.orderId.trim().toUpperCase() === clean) || null;
+  return list.find((m) => m.orderId.trim().toLowerCase() === clean) || null;
 }
 
 export async function saveOrderManifest(manifest: OrderManifest): Promise<void> {
   const list = getStoredManifests();
-  const cleanId = manifest.orderId.trim().toUpperCase();
-  const index = list.findIndex((m) => m.orderId.trim().toUpperCase() === cleanId);
+  const cleanId = manifest.orderId.trim();
+  const index = list.findIndex((m) => m.orderId.trim().toLowerCase() === cleanId.toLowerCase());
 
   if (index >= 0) {
     list[index] = { ...manifest, orderId: cleanId };
@@ -93,8 +93,8 @@ export async function saveMultipleManifests(manifests: OrderManifest[]): Promise
   let addedCount = 0;
 
   for (const item of manifests) {
-    const cleanId = item.orderId.trim().toUpperCase();
-    const index = list.findIndex((m) => m.orderId.trim().toUpperCase() === cleanId);
+    const cleanId = item.orderId.trim();
+    const index = list.findIndex((m) => m.orderId.trim().toLowerCase() === cleanId.toLowerCase());
     if (index >= 0) {
       list[index] = { ...item, orderId: cleanId };
     } else {
@@ -120,8 +120,8 @@ export async function updateManifestStatus(
   packerDetails?: { name: string; email: string; videoDriveUrl?: string }
 ): Promise<void> {
   const list = getStoredManifests();
-  const cleanId = orderId.trim().toUpperCase();
-  const target = list.find((m) => m.orderId.trim().toUpperCase() === cleanId);
+  const cleanId = orderId.trim();
+  const target = list.find((m) => m.orderId.trim().toLowerCase() === cleanId.toLowerCase());
 
   if (target) {
     target.status = status;
@@ -151,8 +151,8 @@ export async function updateManifestStatus(
 }
 
 export function deleteManifest(orderId: string): void {
-  const cleanId = orderId.trim().toUpperCase();
-  const list = getStoredManifests().filter((m) => m.orderId.trim().toUpperCase() !== cleanId);
+  const cleanId = orderId.trim();
+  const list = getStoredManifests().filter((m) => m.orderId.trim().toLowerCase() !== cleanId.toLowerCase());
   saveStoredManifests(list);
 
   try {
@@ -270,10 +270,10 @@ export function findProductInCatalog(query: string): GtinCatalogProduct | null {
   return null;
 }
 
-export function searchCatalog(query: string, maxResults = 8): GtinCatalogProduct[] {
-  if (!query || !query.trim()) return [];
-  const clean = query.trim().toUpperCase();
+export function searchCatalog(query: string, maxResults = 500): GtinCatalogProduct[] {
   const catalog = getStoredGtinCatalog();
+  if (!query || !query.trim()) return catalog.slice(0, maxResults);
+  const clean = query.trim().toUpperCase();
 
   return catalog
     .filter((p) => {

@@ -1008,35 +1008,62 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   // Filtered Manifests List
   const filteredManifests = useMemo(() => {
     return manifests.filter((m) => {
+      const q = searchQuery.trim().toLowerCase();
       const matchSearch =
-        !searchQuery.trim() ||
-        m.orderId.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        m.assignedPackerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        m.items.some(
-          (it) =>
-            it.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            it.productName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            it.gtin.toLowerCase().includes(searchQuery.toLowerCase())
-        );
+        !q ||
+        (m.orderId && m.orderId.toLowerCase().includes(q)) ||
+        (m.assignedPackerName && m.assignedPackerName.toLowerCase().includes(q)) ||
+        (m.assignedPackerEmail && m.assignedPackerEmail.toLowerCase().includes(q)) ||
+        (m.processedByName && m.processedByName.toLowerCase().includes(q)) ||
+        (m.platform && m.platform.toLowerCase().includes(q)) ||
+        (m.status && m.status.toLowerCase().includes(q)) ||
+        (m.notes && m.notes.toLowerCase().includes(q)) ||
+        (m.items &&
+          m.items.some(
+            (it) =>
+              (it.sku && it.sku.toLowerCase().includes(q)) ||
+              (it.productName && it.productName.toLowerCase().includes(q)) ||
+              (it.gtin && it.gtin.toLowerCase().includes(q)) ||
+              (it.shortName && it.shortName.toLowerCase().includes(q))
+          ));
 
-      const matchPacker = packerFilter === 'ALL' || m.assignedPackerEmail === packerFilter;
-      const matchStatus = statusFilter === 'ALL' || m.status === statusFilter;
-      const matchPlatform = platformFilter === 'ALL' || m.platform === platformFilter;
+      // Packer Access Control:
+      // - Admin accounts can view ALL orders or filter by any specific packer
+      // - Standard packer accounts only see orders assigned to their account email
+      const userEmail = (currentUser?.email || '').trim().toLowerCase();
+      const matchPacker = isUserAdmin
+        ? packerFilter === 'ALL' || !packerFilter || (m.assignedPackerEmail && m.assignedPackerEmail.toLowerCase() === packerFilter.toLowerCase())
+        : (m.assignedPackerEmail && m.assignedPackerEmail.toLowerCase() === userEmail);
+
+      const mStatus = (m.status || 'Pending').toLowerCase();
+      const sFilter = statusFilter.toLowerCase();
+      const matchStatus =
+        statusFilter === 'ALL' ||
+        !statusFilter ||
+        mStatus === sFilter ||
+        (sFilter === 'packed' && (mStatus === 'completed' || mStatus === 'packed')) ||
+        (sFilter === 'completed' && (mStatus === 'packed' || mStatus === 'completed'));
+
+      const matchPlatform =
+        platformFilter === 'ALL' ||
+        !platformFilter ||
+        (m.platform && m.platform.toLowerCase() === platformFilter.toLowerCase());
 
       return matchSearch && matchPacker && matchStatus && matchPlatform;
     });
-  }, [manifests, searchQuery, packerFilter, statusFilter, platformFilter]);
+  }, [manifests, searchQuery, packerFilter, statusFilter, platformFilter, isUserAdmin, currentUser]);
 
   // Statistics Summary
   const stats = useMemo(() => {
     const total = manifests.length;
-    const pending = manifests.filter((m) => m.status === 'Pending').length;
-    const packed = manifests.filter((m) => m.status === 'Packed').length;
+    const pending = manifests.filter((m) => (m.status || 'Pending') === 'Pending').length;
+    const inProgress = manifests.filter((m) => m.status === 'In Progress').length;
+    const packed = manifests.filter((m) => m.status === 'Packed' || (m.status as string) === 'Completed').length;
     const totalItems = manifests.reduce(
-      (acc, m) => acc + m.items.reduce((s, it) => s + it.quantity, 0),
+      (acc, m) => acc + (m.items || []).reduce((s, it) => s + (it.quantity || 1), 0),
       0
     );
-    return { total, pending, packed, totalItems };
+    return { total, pending, inProgress, packed, totalItems };
   }, [manifests]);
 
   return (
@@ -1153,7 +1180,11 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
           }`}
         >
           <Boxes className="w-4 h-4" />
-          <span>{isUserAdmin ? `Manifest Queue (${manifests.length})` : `My Assigned Orders (${filteredManifests.length})`}</span>
+          <span>
+            {isUserAdmin
+              ? `Manifest Orders (${stats.total} Total • ${stats.pending} Pending)`
+              : `My Assigned Orders (${filteredManifests.length})`}
+          </span>
         </button>
 
         {isUserAdmin && (
@@ -1406,15 +1437,12 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
                       {/* Dropdown Suggestions for Product Name */}
                       {activeSuggestion?.rowIndex === index && activeSuggestion?.field === 'productName' && (
-                        <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-indigo-200 rounded-xl shadow-xl z-30 max-h-52 overflow-y-auto divide-y divide-slate-100 animate-fade-in">
-                          <div className="px-3 py-1 bg-indigo-50 text-[10px] font-mono text-indigo-700 font-bold sticky top-0 flex items-center justify-between">
-                            <span>Catalog Suggestions</span>
+                        <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-indigo-200 rounded-xl shadow-xl z-30 max-h-72 overflow-y-auto divide-y divide-slate-100 animate-fade-in">
+                          <div className="px-3 py-1.5 bg-indigo-50 text-[10px] font-mono text-indigo-700 font-bold sticky top-0 flex items-center justify-between border-b border-indigo-100 shadow-2xs z-10">
+                            <span>Catalog Products ({searchCatalog(item.productName || '').length} available)</span>
                             <span>Click to Auto-Fill All</span>
                           </div>
-                          {(searchCatalog(item.productName || '', 6).length > 0
-                            ? searchCatalog(item.productName || '', 6)
-                            : gtinCatalog.slice(0, 5)
-                          ).map((catItem) => (
+                          {searchCatalog(item.productName || '').map((catItem) => (
                             <div
                               key={catItem.gtin || catItem.sku}
                               onMouseDown={() => handleSelectProductFromCatalog(index, catItem)}
@@ -1439,6 +1467,11 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                               </div>
                             </div>
                           ))}
+                          {searchCatalog(item.productName || '').length === 0 && (
+                            <div className="p-3 text-center text-xs text-slate-400 font-medium">
+                              No matching products in catalog.
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1467,15 +1500,12 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
                       {/* Dropdown Suggestions for SKU */}
                       {activeSuggestion?.rowIndex === index && activeSuggestion?.field === 'sku' && (
-                        <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-indigo-200 rounded-xl shadow-xl z-30 max-h-52 overflow-y-auto divide-y divide-slate-100 animate-fade-in">
-                          <div className="px-3 py-1 bg-indigo-50 text-[10px] font-mono text-indigo-700 font-bold sticky top-0 flex items-center justify-between">
-                            <span>Catalog SKUs</span>
+                        <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-indigo-200 rounded-xl shadow-xl z-30 max-h-72 overflow-y-auto divide-y divide-slate-100 animate-fade-in">
+                          <div className="px-3 py-1.5 bg-indigo-50 text-[10px] font-mono text-indigo-700 font-bold sticky top-0 flex items-center justify-between border-b border-indigo-100 shadow-2xs z-10">
+                            <span>Catalog SKUs ({searchCatalog(item.sku || '').length} available)</span>
                             <span>Click to Auto-Fill</span>
                           </div>
-                          {(searchCatalog(item.sku || '', 6).length > 0
-                            ? searchCatalog(item.sku || '', 6)
-                            : gtinCatalog.slice(0, 5)
-                          ).map((catItem) => (
+                          {searchCatalog(item.sku || '').map((catItem) => (
                             <div
                               key={catItem.sku || catItem.gtin}
                               onMouseDown={() => handleSelectProductFromCatalog(index, catItem)}
@@ -1487,6 +1517,11 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                               </div>
                             </div>
                           ))}
+                          {searchCatalog(item.sku || '').length === 0 && (
+                            <div className="p-3 text-center text-xs text-slate-400 font-medium">
+                              No matching SKUs in catalog.
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1518,15 +1553,12 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
                       {/* Dropdown Suggestions for GTIN */}
                       {activeSuggestion?.rowIndex === index && activeSuggestion?.field === 'gtin' && (
-                        <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-indigo-200 rounded-xl shadow-xl z-30 max-h-52 overflow-y-auto divide-y divide-slate-100 animate-fade-in">
-                          <div className="px-3 py-1 bg-indigo-50 text-[10px] font-mono text-indigo-700 font-bold sticky top-0 flex items-center justify-between">
-                            <span>Catalog Barcodes</span>
+                        <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-indigo-200 rounded-xl shadow-xl z-30 max-h-72 overflow-y-auto divide-y divide-slate-100 animate-fade-in">
+                          <div className="px-3 py-1.5 bg-indigo-50 text-[10px] font-mono text-indigo-700 font-bold sticky top-0 flex items-center justify-between border-b border-indigo-100 shadow-2xs z-10">
+                            <span>Catalog Barcodes ({searchCatalog(item.gtin || '').length} available)</span>
                             <span>Click to Auto-Fill</span>
                           </div>
-                          {(searchCatalog(item.gtin || '', 6).length > 0
-                            ? searchCatalog(item.gtin || '', 6)
-                            : gtinCatalog.slice(0, 5)
-                          ).map((catItem) => (
+                          {searchCatalog(item.gtin || '').map((catItem) => (
                             <div
                               key={catItem.gtin || catItem.sku}
                               onMouseDown={() => handleSelectProductFromCatalog(index, catItem)}
@@ -1538,6 +1570,11 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                               </div>
                             </div>
                           ))}
+                          {searchCatalog(item.gtin || '').length === 0 && (
+                            <div className="p-3 text-center text-xs text-slate-400 font-medium">
+                              No matching barcodes in catalog.
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1639,12 +1676,14 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
             <div>
               <h2 className="text-base font-black text-slate-900 tracking-tight flex items-center gap-2">
                 <span>Manifest Order Queue</span>
-                <span className="text-xs font-mono bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full font-bold">
-                  {filteredManifests.length} Orders
+                <span className="text-xs font-mono bg-indigo-50 text-indigo-700 px-2.5 py-0.5 rounded-full font-bold border border-indigo-200">
+                  {filteredManifests.length} of {manifests.length} Orders
                 </span>
               </h2>
               <p className="text-xs text-slate-400">
-                All pre-entered orders waiting for physical GTIN scan and video packing.
+                {isUserAdmin
+                  ? 'All pre-entered orders across all operators waiting for physical GTIN scan and video packing.'
+                  : 'Orders assigned to your workstation waiting for physical GTIN barcode scan and video packing.'}
               </p>
             </div>
 
@@ -1655,57 +1694,139 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search Order ID, SKU, Packer..."
-                className="w-full pl-9 pr-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:border-indigo-500"
+                className="w-full pl-9 pr-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:border-indigo-500 shadow-inner"
               />
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
           </div>
 
-          {/* Filters Bar */}
+          {/* Quick Status Filter Chips */}
           <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-100">
-            <div className="flex items-center gap-1.5 text-xs text-slate-500 font-bold">
-              <Filter className="w-3.5 h-3.5" />
-              <span>Filter:</span>
+            <button
+              type="button"
+              onClick={() => setStatusFilter('ALL')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                statusFilter === 'ALL'
+                  ? 'bg-slate-900 text-white shadow-xs'
+                  : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+              }`}
+            >
+              <span>All Orders</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-white/20">
+                {stats.total}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setStatusFilter('Pending')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                statusFilter === 'Pending'
+                  ? 'bg-amber-600 text-white shadow-xs'
+                  : 'bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/60'
+              }`}
+            >
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+              <span>Pending Packing</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-amber-900/20">
+                {stats.pending}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setStatusFilter('Packed')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                statusFilter === 'Packed'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200/60'
+              }`}
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>Packed &amp; Verified</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-emerald-900/20">
+                {stats.packed}
+              </span>
+            </button>
+
+            {stats.inProgress > 0 && (
+              <button
+                type="button"
+                onClick={() => setStatusFilter('In Progress')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  statusFilter === 'In Progress'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200/60'
+                }`}
+              >
+                <span>In Progress</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-blue-900/20">
+                  {stats.inProgress}
+                </span>
+              </button>
+            )}
+
+            {/* Secondary Select Dropdown Filters */}
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              {/* Packer Filter (Admin Only) */}
+              {isUserAdmin && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] text-slate-400 font-bold">Packer:</span>
+                  <select
+                    value={packerFilter}
+                    onChange={(e) => setPackerFilter(e.target.value)}
+                    className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 cursor-pointer focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="ALL">All Packers</option>
+                    {availablePackers.map((u) => (
+                      <option key={u.email} value={u.email}>
+                        {u.name} ({u.email})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* Platform Filter */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] text-slate-400 font-bold">Platform:</span>
+                <select
+                  value={platformFilter}
+                  onChange={(e) => setPlatformFilter(e.target.value)}
+                  className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 cursor-pointer focus:outline-none focus:border-indigo-500"
+                >
+                  <option value="ALL">All Platforms</option>
+                  <option value="Amazon">Amazon</option>
+                  <option value="D2C">D2C</option>
+                  <option value="JioMart">JioMart</option>
+                  <option value="Custom">Custom</option>
+                </select>
+              </div>
+
+              {(statusFilter !== 'ALL' || (isUserAdmin && packerFilter !== 'ALL') || platformFilter !== 'ALL' || searchQuery) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStatusFilter('ALL');
+                    if (isUserAdmin) setPackerFilter('ALL');
+                    setPlatformFilter('ALL');
+                    setSearchQuery('');
+                  }}
+                  className="text-xs text-indigo-600 hover:text-indigo-800 font-bold underline cursor-pointer"
+                >
+                  Reset Filters
+                </button>
+              )}
             </div>
-
-            {/* Status Filter */}
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 cursor-pointer"
-            >
-              <option value="ALL">All Statuses</option>
-              <option value="Pending">Pending</option>
-              <option value="In Progress">In Progress</option>
-              <option value="Packed">Packed</option>
-            </select>
-
-            {/* Packer Filter */}
-            <select
-              value={packerFilter}
-              onChange={(e) => setPackerFilter(e.target.value)}
-              className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 cursor-pointer"
-            >
-              <option value="ALL">All Packers</option>
-              {registeredUsers.map((u) => (
-                <option key={u.email} value={u.email}>
-                  {u.name}
-                </option>
-              ))}
-            </select>
-
-            {/* Platform Filter */}
-            <select
-              value={platformFilter}
-              onChange={(e) => setPlatformFilter(e.target.value)}
-              className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 cursor-pointer"
-            >
-              <option value="ALL">All Platforms</option>
-              <option value="Amazon">Amazon</option>
-              <option value="D2C">D2C</option>
-              <option value="JioMart">JioMart</option>
-              <option value="Custom">Custom</option>
-            </select>
           </div>
 
           {/* Manifest Items List */}
