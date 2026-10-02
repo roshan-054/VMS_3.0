@@ -10,9 +10,6 @@ import {
   Wifi,
   WifiOff,
   Zap,
-  Play,
-  StopCircle,
-  Crosshair,
   Barcode,
   RotateCcw,
   Sparkles,
@@ -181,16 +178,16 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
                     const vCenterY = vHeight / 2;
                     const vCenterX = vWidth / 2;
 
-                    // Narrow aperture filter: vertical center must fall within ±18% of video height
-                    // This restricts detection specifically to the narrow aiming slit
-                    const narrowApertureBarcodes = barcodes.filter((b: any) => {
+                    // Aperture filter: vertical center must fall within ±26% of video height
+                    // This matches the comfortable wider aiming reticle window
+                    const apertureBarcodes = barcodes.filter((b: any) => {
                       const box = b.boundingBox;
                       if (!box || typeof box.y !== 'number' || typeof box.height !== 'number') return true;
                       const bCenterY = box.y + box.height / 2;
-                      return Math.abs(bCenterY - vCenterY) <= vHeight * 0.18;
+                      return Math.abs(bCenterY - vCenterY) <= vHeight * 0.26;
                     });
 
-                    const candidateList = narrowApertureBarcodes.length > 0 ? narrowApertureBarcodes : barcodes;
+                    const candidateList = apertureBarcodes.length > 0 ? apertureBarcodes : barcodes;
 
                     // Sort candidates by proximity to exact laser center
                     candidateList.sort((a: any, b: any) => {
@@ -320,6 +317,13 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
     await handleBarcodeScanned(code, 'MANUAL_ENTRY');
   };
 
+  const handleReconnect = () => {
+    setStatusMessage('Reconnecting to workstation…');
+    sharedScannerSync.reconnect();
+    sharedScannerSync.pairInstant();
+    sharedScannerSync.pollHttpEvents();
+  };
+
   const handlePairSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const clean = pinInput.replace(/\D/g, '').slice(0, 4);
@@ -431,12 +435,33 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
+          {/* Reconnect Button */}
+          <button
+            type="button"
+            onClick={handleReconnect}
+            className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-[11px] font-bold rounded-xl border border-blue-400/40 flex items-center gap-1.5 transition cursor-pointer shadow-xs"
+            title="Reconnect with Workstation"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            <span>Reconnect</span>
+          </button>
+
+          {/* Camera Flip Button */}
+          <button
+            type="button"
+            onClick={handleToggleFacingMode}
+            className="p-2 bg-slate-900 border border-slate-700 hover:border-slate-500 text-slate-200 active:scale-95 rounded-xl transition cursor-pointer"
+            title="Flip Camera (Front / Back)"
+          >
+            <SwitchCamera className="w-4 h-4" />
+          </button>
+
           {hasTorch && (
             <button
               type="button"
               onClick={handleToggleTorch}
-              className={`p-2 rounded-xl border text-xs font-bold transition ${
+              className={`p-2 rounded-xl border text-xs font-bold transition cursor-pointer ${
                 isTorchOn
                   ? 'bg-amber-400 text-slate-950 border-amber-300 shadow-md shadow-amber-400/20'
                   : 'bg-slate-900 border-slate-700 text-slate-300'
@@ -449,17 +474,9 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
 
           <button
             type="button"
-            onClick={handleToggleFacingMode}
-            className="p-2 bg-slate-900 border border-slate-700 text-slate-300 rounded-xl"
-            title="Switch Camera"
-          >
-            <SwitchCamera className="w-4 h-4" />
-          </button>
-
-          <button
-            type="button"
             onClick={() => setIsPaired(false)}
-            className="px-2.5 py-1.5 bg-slate-800 text-slate-300 text-[11px] font-bold rounded-lg border border-slate-700"
+            className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-bold rounded-lg border border-slate-700 cursor-pointer"
+            title="Change Station PIN"
           >
             PIN
           </button>
@@ -486,42 +503,42 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
           className="absolute inset-0 w-full h-full object-cover"
         />
 
-        {/* Real-time Aiming Reticle & Narrow High-Accuracy Laser Targeting Window */}
+        {/* Real-time Aiming Reticle & Wider Laser Targeting Window */}
         <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center">
           {/* Top high-contrast shading */}
-          <div className="w-full flex-1 bg-black/60 backdrop-blur-[1px]" />
+          <div className="w-full flex-1 bg-black/60 backdrop-blur-[0.5px]" />
 
-          {/* Narrow Laser Scan Window (Engineered for crisp 1D/2D isolation) */}
-          <div className="w-full flex items-center justify-center py-1.5 shrink-0">
+          {/* Comfortable Wider Laser Scan Window */}
+          <div className="w-full flex items-center justify-center py-2 shrink-0">
             <div
-              className={`w-[82%] max-w-[310px] h-14 sm:h-16 relative rounded-lg border-2 transition-all duration-200 flex items-center justify-center shadow-[0_0_40px_rgba(0,0,0,0.9)] ${
+              className={`w-[90%] max-w-[360px] h-20 sm:h-24 relative rounded-xl border-2 transition-all duration-200 flex items-center justify-center shadow-[0_0_40px_rgba(0,0,0,0.9)] ${
                 isRecentScan
                   ? 'border-emerald-400 bg-emerald-500/30 scale-102 ring-4 ring-emerald-500/40'
                   : 'border-white/70 bg-black/20'
               }`}
             >
               {/* Industrial Aiming Corner Brackets */}
-              <div className="absolute -top-1 -left-1 w-4 h-4 border-t-2 border-l-2 border-emerald-400 rounded-tl-xs" />
-              <div className="absolute -top-1 -right-1 w-4 h-4 border-t-2 border-r-2 border-emerald-400 rounded-tr-xs" />
-              <div className="absolute -bottom-1 -left-1 w-4 h-4 border-b-2 border-l-2 border-emerald-400 rounded-bl-xs" />
-              <div className="absolute -bottom-1 -right-1 w-4 h-4 border-b-2 border-r-2 border-emerald-400 rounded-br-xs" />
+              <div className="absolute -top-1 -left-1 w-5 h-5 border-t-2 border-l-2 border-emerald-400 rounded-tl-sm" />
+              <div className="absolute -top-1 -right-1 w-5 h-5 border-t-2 border-r-2 border-emerald-400 rounded-tr-sm" />
+              <div className="absolute -bottom-1 -left-1 w-5 h-5 border-b-2 border-l-2 border-emerald-400 rounded-bl-sm" />
+              <div className="absolute -bottom-1 -right-1 w-5 h-5 border-b-2 border-r-2 border-emerald-400 rounded-br-sm" />
 
               {/* Ultra-Crisp Red Laser Scanning Line */}
               <div className="absolute inset-x-2 h-0.5 bg-gradient-to-r from-red-500/0 via-red-500 to-red-500/0 shadow-[0_0_14px_rgba(239,68,68,1)] animate-pulse" />
 
               {/* Center Alignment Guide Marks */}
-              <div className="absolute inset-y-1/2 left-1.5 w-2 border-t-2 border-emerald-400/80" />
-              <div className="absolute inset-y-1/2 right-1.5 w-2 border-t-2 border-emerald-400/80" />
+              <div className="absolute inset-y-1/2 left-2 w-2 border-t-2 border-emerald-400/80" />
+              <div className="absolute inset-y-1/2 right-2 w-2 border-t-2 border-emerald-400/80" />
 
               {/* Precision Badge Note */}
-              <div className="absolute -bottom-3 left-1/2 -translate-x-1/2 bg-slate-950/95 backdrop-blur-xs text-[9px] font-mono font-bold px-2 py-0.5 rounded-full border border-white/20 text-slate-200 whitespace-nowrap shadow-md">
-                Align 1 Barcode inside Red Line
+              <div className="absolute -bottom-3 left-1/2 -translate-x-1/2 bg-slate-950/95 backdrop-blur-xs text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full border border-white/20 text-slate-200 whitespace-nowrap shadow-md">
+                Align Barcode inside Red Line
               </div>
             </div>
           </div>
 
           {/* Bottom high-contrast shading */}
-          <div className="w-full flex-1 bg-black/60 backdrop-blur-[1px]" />
+          <div className="w-full flex-1 bg-black/60 backdrop-blur-[0.5px]" />
         </div>
 
         {/* Success Scan Popup Banner */}
@@ -545,47 +562,8 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
         )}
       </div>
 
-      {/* Station Remote Control Action Bar */}
-      <div className="bg-slate-950/95 backdrop-blur-md border-t border-slate-800 p-3 sm:p-4 space-y-3 shrink-0 z-30">
-        {/* Remote Action Buttons */}
-        <div className="grid grid-cols-3 gap-2">
-          <button
-            type="button"
-            onClick={() => {
-              sharedScannerSync.transmitRemoteCommand('START_RECORDING');
-              setStatusMessage('Triggered START recording on station');
-            }}
-            className="py-2.5 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-black text-xs rounded-xl shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer"
-          >
-            <Play className="w-3.5 h-3.5 fill-white" />
-            <span>START REC</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              sharedScannerSync.transmitRemoteCommand('STOP_RECORDING');
-              setStatusMessage('Triggered STOP recording on station');
-            }}
-            className="py-2.5 bg-red-600 hover:bg-red-500 active:scale-95 text-white font-black text-xs rounded-xl shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer"
-          >
-            <StopCircle className="w-3.5 h-3.5 fill-white" />
-            <span>STOP REC</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              sharedScannerSync.transmitRemoteCommand('TRIGGER_FOCUS');
-              setStatusMessage('Triggered lens auto-focus on station');
-            }}
-            className="py-2.5 bg-amber-600 hover:bg-amber-500 active:scale-95 text-white font-black text-xs rounded-xl shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer"
-          >
-            <Crosshair className="w-3.5 h-3.5" />
-            <span>REFOCUS</span>
-          </button>
-        </div>
-
+      {/* Clean Scanner Control Bar (Manual Barcode Entry & Status Only) */}
+      <div className="bg-slate-950/95 backdrop-blur-md border-t border-slate-800 p-3 sm:p-4 space-y-2.5 shrink-0 z-30">
         {/* Manual Keyboard Barcode Entry (Fallback if barcode is ripped/damaged) */}
         <form onSubmit={handleSendManual} className="flex items-center gap-2">
           <input
@@ -593,12 +571,12 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
             value={manualCode}
             onChange={(e) => setManualCode(e.target.value)}
             placeholder="Type Order ID if barcode is damaged..."
-            className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+            className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
           />
           <button
             type="submit"
             disabled={!manualCode.trim()}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 active:scale-95 text-white font-bold text-xs rounded-xl transition flex items-center gap-1.5 cursor-pointer disabled:opacity-40 shrink-0"
+            className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 active:scale-95 text-white font-bold text-xs rounded-xl transition flex items-center gap-1.5 cursor-pointer disabled:opacity-40 shrink-0 shadow-sm"
           >
             <Send className="w-3.5 h-3.5" />
             <span>Send</span>
@@ -607,7 +585,7 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
 
         {/* Scan History / Status pill */}
         <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono pt-1 border-t border-slate-900">
-          <span className="truncate max-w-[200px]">
+          <span className="truncate max-w-[220px]">
             {lastScannedBarcode ? `Last: ${lastScannedBarcode}` : statusMessage}
           </span>
           <span>Scans: {scannedHistory.length}</span>
