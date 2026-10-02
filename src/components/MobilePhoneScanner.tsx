@@ -58,6 +58,10 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
   const [lastScanSuccessTime, setLastScanSuccessTime] = useState<number>(0);
   const [isScanLocked, setIsScanLocked] = useState<boolean>(false);
   const [cooldownSeconds, setCooldownSeconds] = useState<number>(0);
+  const [scanMode, setScanMode] = useState<'single' | 'auto'>(() => {
+    const saved = localStorage.getItem('vms_phone_scan_mode');
+    return saved === 'auto' ? 'auto' : 'single';
+  });
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -372,22 +376,38 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
   const triggerConfirmedScan = (code: string, format: string) => {
     isLockedRef.current = true;
     setIsScanLocked(true);
-    setCooldownSeconds(3);
     lastScannedCodeRef.current = code;
     lastScannedTimeRef.current = Date.now();
 
     handleBarcodeScanned(code, format);
 
-    if (lockTimerRef.current) clearInterval(lockTimerRef.current);
-    let remaining = 3;
-    lockTimerRef.current = setInterval(() => {
-      remaining -= 1;
-      if (remaining <= 0) {
-        unlockScanner();
-      } else {
-        setCooldownSeconds(remaining);
-      }
-    }, 1000);
+    if (lockTimerRef.current) {
+      clearInterval(lockTimerRef.current);
+      lockTimerRef.current = null;
+    }
+
+    if (scanMode === 'auto') {
+      setCooldownSeconds(4);
+      let remaining = 4;
+      lockTimerRef.current = setInterval(() => {
+        remaining -= 1;
+        if (remaining <= 0) {
+          unlockScanner();
+        } else {
+          setCooldownSeconds(remaining);
+        }
+      }, 1000);
+    } else {
+      // Single-scan mode (1-by-1): Stays locked permanently until operator taps "Scan Next Order"
+      setCooldownSeconds(0);
+    }
+  };
+
+  const handleToggleScanMode = () => {
+    const next = scanMode === 'single' ? 'auto' : 'single';
+    setScanMode(next);
+    localStorage.setItem('vms_phone_scan_mode', next);
+    setStatusMessage(next === 'single' ? 'Mode: 1-by-1 Strict Lock' : 'Mode: Auto-Scan (4s delay)');
   };
 
   const unlockScanner = () => {
@@ -608,6 +628,20 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
             </button>
           )}
 
+          {/* Scan Mode Toggle: 1-by-1 strict lock vs Auto 4s */}
+          <button
+            type="button"
+            onClick={handleToggleScanMode}
+            className={`px-2.5 py-1.5 rounded-xl text-[11px] font-mono font-bold border transition cursor-pointer flex items-center gap-1 shadow-xs ${
+              scanMode === 'single'
+                ? 'bg-emerald-950/90 border-emerald-500/80 text-emerald-300'
+                : 'bg-amber-950/90 border-amber-500/80 text-amber-300'
+            }`}
+            title="Switch Mode: 🔒 1-by-1 Strict Lock (Recommended for packing) vs ⏱️ Auto (4s delay)"
+          >
+            {scanMode === 'single' ? '🔒 1-by-1' : '⏱️ Auto 4s'}
+          </button>
+
           <button
             type="button"
             onClick={() => setIsPaired(false)}
@@ -648,17 +682,17 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
             </div>
           </div>
 
-          {/* Middle Scanning Row: Left Black + Central Clear Scan Window + Right Black */}
+          {/* Middle Scanning Row: Left Black + Narrow Central Clear Scan Window + Right Black */}
           <div className="w-full flex items-center justify-center shrink-0">
             {/* Left flank: 100% Solid Black */}
-            <div className="flex-1 h-48 sm:h-56 bg-black" />
+            <div className="flex-1 h-36 sm:h-42 bg-black" />
 
-            {/* Central High-Precision Clear Scan Window */}
+            {/* Central High-Precision Clear Scan Window (A bit narrower for focused barcode capture) */}
             <div
               ref={apertureRef}
-              className={`w-[90%] max-w-[420px] h-48 sm:h-56 relative rounded-2xl border-2 transition-all duration-200 flex items-center justify-center shrink-0 ${
+              className={`w-[82%] max-w-[340px] h-36 sm:h-42 relative rounded-2xl border-2 transition-all duration-200 flex items-center justify-center shrink-0 ${
                 isScanLocked
-                  ? 'border-emerald-400 bg-emerald-950/80 scale-[1.02] ring-4 ring-emerald-500/50'
+                  ? 'border-emerald-400 bg-emerald-950/85 scale-[1.02] ring-4 ring-emerald-500/50'
                   : isRecentScan
                   ? 'border-emerald-400 bg-emerald-500/25 scale-[1.02] ring-4 ring-emerald-500/50'
                   : 'border-white/90 bg-transparent'
@@ -670,15 +704,15 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
               }}
             >
               {isScanLocked ? (
-                /* Scan Locked Confirmation & Cooldown View */
-                <div className="absolute inset-0 z-20 flex flex-col items-center justify-center p-3 text-center pointer-events-auto rounded-2xl animate-fade-in">
-                  <div className="w-10 h-10 rounded-full bg-emerald-500/20 border border-emerald-400/80 flex items-center justify-center mb-1 shadow-[0_0_15px_rgba(52,211,153,0.5)]">
-                    <CheckCircle2 className="w-6 h-6 text-emerald-400" />
+                /* Scan Locked Confirmation & Safe Packing View */
+                <div className="absolute inset-0 z-20 flex flex-col items-center justify-center p-2.5 text-center pointer-events-auto rounded-2xl animate-fade-in bg-slate-950/90 backdrop-blur-xs">
+                  <div className="w-8 h-8 rounded-full bg-emerald-500/20 border border-emerald-400/80 flex items-center justify-center mb-0.5 shadow-[0_0_12px_rgba(52,211,153,0.5)]">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-400" />
                   </div>
-                  <div className="text-[10px] font-mono uppercase tracking-widest text-emerald-300 font-bold">
-                    Order Scanned &amp; Sent
+                  <div className="text-[10px] font-mono uppercase tracking-wider text-emerald-300 font-bold">
+                    {scanMode === 'single' ? 'Order Scanned • Paused' : 'Order Scanned & Sent'}
                   </div>
-                  <div className="text-sm font-mono font-black text-white tracking-wider truncate max-w-full my-1">
+                  <div className="text-sm font-mono font-black text-white tracking-wider truncate max-w-full my-0.5">
                     {lastScannedBarcode}
                   </div>
                   <button
@@ -687,7 +721,9 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
                     className="mt-1 px-4 py-1.5 bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-slate-950 font-bold font-mono text-xs rounded-xl shadow-lg flex items-center gap-1.5 cursor-pointer transition"
                   >
                     <Zap className="w-3.5 h-3.5 fill-current" />
-                    Scan Next Now {cooldownSeconds > 0 ? `(${cooldownSeconds}s)` : ''}
+                    {scanMode === 'single'
+                      ? 'Scan Next Order'
+                      : `Scan Next Now ${cooldownSeconds > 0 ? `(${cooldownSeconds}s)` : ''}`}
                   </button>
                 </div>
               ) : (
@@ -714,7 +750,7 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
             </div>
 
             {/* Right flank: 100% Solid Black */}
-            <div className="flex-1 h-48 sm:h-56 bg-black" />
+            <div className="flex-1 h-36 sm:h-42 bg-black" />
           </div>
 
           {/* Bottom Solid Black Mask */}

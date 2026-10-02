@@ -1043,6 +1043,8 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   startRecordingRef.current = startRecording;
   const stopRecordingRef = useRef(stopRecording);
   stopRecordingRef.current = stopRecording;
+  const lastStationBarcodeRef = useRef<string>('');
+  const lastStationBarcodeTimeRef = useRef<number>(0);
 
   // Real-time synchronization with Wireless Phone Barcode Scanner
   useEffect(() => {
@@ -1055,6 +1057,15 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
             onShowToast('Pairing QR code detected. Scanner is already connected!', 'info');
             return;
           }
+
+          // Anti-continuous scanning guard: ignore identical barcode received within 3.5 seconds
+          const now = Date.now();
+          if (cleaned === lastStationBarcodeRef.current && now - lastStationBarcodeTimeRef.current < 3500) {
+            return;
+          }
+          lastStationBarcodeRef.current = cleaned;
+          lastStationBarcodeTimeRef.current = now;
+
           setOrderId(cleaned);
           detectPlatformAndType(cleaned);
           onShowToast(`📱 Phone Scanned: ${cleaned} (${device || 'Mobile Phone'})`, 'success');
