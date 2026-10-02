@@ -30,7 +30,8 @@ import {
   CheckSquare,
   Square,
   LayoutGrid,
-  List
+  List,
+  Tag
 } from 'lucide-react';
 import { PlatformType, User, OrderManifest, ManifestItem, GtinCatalogProduct, PackVerificationLog } from '../types';
 import {
@@ -75,6 +76,12 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   const [activeSubTab, setActiveSubTab] = useState<'entry' | 'manifest' | 'gtin' | 'audit'>(() =>
     isUserAdmin ? 'entry' : 'manifest'
   );
+
+  useEffect(() => {
+    if (!isUserAdmin && (activeSubTab === 'entry' || activeSubTab === 'audit')) {
+      setActiveSubTab('manifest');
+    }
+  }, [isUserAdmin, activeSubTab]);
   const [manifests, setManifests] = useState<OrderManifest[]>(() => getStoredManifests());
   const [gtinCatalog, setGtinCatalog] = useState<GtinCatalogProduct[]>(() => getStoredGtinCatalog());
   const [verificationLogs, setVerificationLogs] = useState<PackVerificationLog[]>(() => getStoredVerificationLogs());
@@ -118,7 +125,8 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   // --- External GTIN Google Sheet Sync Modal / Settings State ---
   const [isSyncModalOpen, setIsSyncModalOpen] = useState<boolean>(false);
   const [gtinSheetInput, setGtinSheetInput] = useState<string>(() => getGtinSheetConfig().sheetIdOrUrl);
-  const [gtinSheetTab, setGtinSheetTab] = useState<string>(() => getGtinSheetConfig().tabName || 'Sheet1');
+  const [gtinSheetTab, setGtinSheetTab] = useState<string>(() => getGtinSheetConfig().tabName || 'GTINCatalog');
+  const [gtinSheetTagsInput, setGtinSheetTagsInput] = useState<string>(() => getGtinSheetConfig().tagsFilter || '');
   const [isSyncingSheet, setIsSyncingSheet] = useState<boolean>(false);
   const [sheetSyncResult, setSheetSyncResult] = useState<{ success?: boolean; msg?: string } | null>(null);
 
@@ -132,6 +140,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
   // --- GTIN Catalog Tab States ---
   const [gtinSearchQuery, setGtinSearchQuery] = useState<string>('');
+  const [selectedTagFilter, setSelectedTagFilter] = useState<string>('ALL');
   const [isSyncingMasterSheet, setIsSyncingMasterSheet] = useState<boolean>(false);
   const [isInitializingTabs, setIsInitializingTabs] = useState<boolean>(false);
   const [selectedGtins, setSelectedGtins] = useState<Set<string>>(new Set());
@@ -432,10 +441,11 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     ]);
   };
 
-  // Sync with user's separate GTIN Google Sheet (Advanced / Custom Sheet & Tab)
+  // Sync with user's separate GTIN Google Sheet (Advanced / Custom Sheet & Tab with multi-tag filter)
   const handlePerformGtinSync = async () => {
     const cleanInput = gtinSheetInput.trim();
     const cleanTab = gtinSheetTab.trim() || 'GTINCatalog';
+    const cleanTags = gtinSheetTagsInput.trim();
 
     setIsSyncingSheet(true);
     setSheetSyncResult(null);
@@ -443,14 +453,15 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     let res: { success: boolean; count: number; message: string };
 
     if (cleanInput) {
-      // User specified an external or custom Google Sheet ID/URL and Tab Name
-      res = await syncGtinFromGoogleSheet(cleanInput, cleanTab);
+      // User specified an external or custom Google Sheet ID/URL, Tab Name, and optional tag condition
+      res = await syncGtinFromGoogleSheet(cleanInput, cleanTab, cleanTags);
     } else {
       // User left sheet link empty -> sync with connected Master Google Sheet
-      res = await syncGtinWithMasterSheet();
+      res = await syncGtinWithMasterSheet(cleanTags);
       const updatedConfig: GtinSheetConfig = {
         sheetIdOrUrl: '',
         tabName: cleanTab,
+        tagsFilter: cleanTags,
         autoSync: true,
         lastSyncTime: new Date().toISOString(),
         totalSyncedItems: res.count
@@ -484,9 +495,9 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
       let res: { success: boolean; count: number; message: string };
 
       if (cfg.sheetIdOrUrl && cfg.sheetIdOrUrl.trim()) {
-        res = await syncGtinFromGoogleSheet(cfg.sheetIdOrUrl.trim(), cfg.tabName?.trim() || 'GTINCatalog');
+        res = await syncGtinFromGoogleSheet(cfg.sheetIdOrUrl.trim(), cfg.tabName?.trim() || 'GTINCatalog', cfg.tagsFilter);
       } else {
-        res = await syncGtinWithMasterSheet();
+        res = await syncGtinWithMasterSheet(cfg.tagsFilter);
       }
 
       if (res.success) {
@@ -1012,19 +1023,49 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     e.target.value = '';
   };
 
-  // Filtered GTIN Catalog for Display
+  // Unique Tags collected from GTIN Catalog
+  const availableTags = useMemo(() => {
+    const tagSet = new Set<string>();
+    gtinCatalog.forEach((p) => {
+      if (p.tag && p.tag.trim()) {
+        p.tag.split(',').forEach((t) => {
+          const clean = t.trim();
+          if (clean) tagSet.add(clean);
+        });
+      }
+      if (p.category && p.category.trim() && p.category !== 'General') {
+        tagSet.add(p.category.trim());
+      }
+    });
+    return Array.from(tagSet);
+  }, [gtinCatalog]);
+
+  // Filtered GTIN Catalog for Display (supports Search Query + Multi-Tag filter)
   const filteredGtinCatalog = useMemo(() => {
-    if (!gtinSearchQuery.trim()) return gtinCatalog;
+    let list = gtinCatalog;
+
+    // Filter by tag if selected
+    if (selectedTagFilter && selectedTagFilter !== 'ALL') {
+      const tagLower = selectedTagFilter.toLowerCase();
+      list = list.filter((p) => {
+        const itemTag = (p.tag || '').toLowerCase();
+        const itemCat = (p.category || '').toLowerCase();
+        return itemTag.includes(tagLower) || itemCat.includes(tagLower);
+      });
+    }
+
+    if (!gtinSearchQuery.trim()) return list;
     const clean = gtinSearchQuery.trim().toLowerCase();
-    return gtinCatalog.filter(
+    return list.filter(
       (p) =>
         p.gtin.toLowerCase().includes(clean) ||
         p.sku.toLowerCase().includes(clean) ||
         (p.productName && p.productName.toLowerCase().includes(clean)) ||
         (p.shortName && p.shortName.toLowerCase().includes(clean)) ||
-        (p.category && p.category.toLowerCase().includes(clean))
+        (p.category && p.category.toLowerCase().includes(clean)) ||
+        (p.tag && p.tag.toLowerCase().includes(clean))
     );
-  }, [gtinCatalog, gtinSearchQuery]);
+  }, [gtinCatalog, gtinSearchQuery, selectedTagFilter]);
 
   // Delete Manifest Row
   const handleDeleteManifest = (id: string, oId: string) => {
@@ -1035,9 +1076,41 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     }
   };
 
+  // User-Scoped Manifests (Strict Isolation):
+  // - Admin users see ALL manifests across all workstations & operators
+  // - Regular operators ONLY see and count manifests assigned to their own email/name
+  const userScopedManifests = useMemo(() => {
+    if (isUserAdmin) return manifests;
+
+    const userEmail = (currentUser?.email || '').trim().toLowerCase();
+    const userName = (currentUser?.name || '').trim().toLowerCase();
+
+    return manifests.filter((m) => {
+      const assignedEmail = (m.assignedPackerEmail || '').trim().toLowerCase();
+      const assignedName = (m.assignedPackerName || '').trim().toLowerCase();
+      const procEmail = ((m as any).processedByEmail || '').trim().toLowerCase();
+      const procName = (m.processedByName || '').trim().toLowerCase();
+      const opName = ((m as any).operator || '').trim().toLowerCase();
+
+      const matchByEmail = userEmail && (
+        assignedEmail === userEmail ||
+        procEmail === userEmail ||
+        opName === userEmail
+      );
+
+      const matchByName = userName && (
+        assignedName === userName ||
+        procName === userName ||
+        opName === userName
+      );
+
+      return matchByEmail || matchByName;
+    });
+  }, [manifests, isUserAdmin, currentUser]);
+
   // Filtered Manifests List
   const filteredManifests = useMemo(() => {
-    return manifests.filter((m) => {
+    return userScopedManifests.filter((m) => {
       const q = searchQuery.trim().toLowerCase();
       const matchSearch =
         !q ||
@@ -1057,13 +1130,10 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
               (it.shortName && it.shortName.toLowerCase().includes(q))
           ));
 
-      // Packer Access Control:
-      // - Admin accounts can view ALL orders or filter by any specific packer
-      // - Standard packer accounts only see orders assigned to their account email
-      const userEmail = (currentUser?.email || '').trim().toLowerCase();
+      // Packer Access Filter (for Admin viewing specific packer)
       const matchPacker = isUserAdmin
         ? packerFilter === 'ALL' || !packerFilter || (m.assignedPackerEmail && m.assignedPackerEmail.toLowerCase() === packerFilter.toLowerCase())
-        : (m.assignedPackerEmail && m.assignedPackerEmail.toLowerCase() === userEmail);
+        : true; // Already scoped for regular users
 
       const mStatus = (m.status || 'Pending').toLowerCase();
       const sFilter = statusFilter.toLowerCase();
@@ -1081,20 +1151,20 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
       return matchSearch && matchPacker && matchStatus && matchPlatform;
     });
-  }, [manifests, searchQuery, packerFilter, statusFilter, platformFilter, isUserAdmin, currentUser]);
+  }, [userScopedManifests, searchQuery, packerFilter, statusFilter, platformFilter, isUserAdmin]);
 
-  // Statistics Summary
+  // Statistics Summary (Accurately Scoped Per User)
   const stats = useMemo(() => {
-    const total = manifests.length;
-    const pending = manifests.filter((m) => (m.status || 'Pending') === 'Pending').length;
-    const inProgress = manifests.filter((m) => m.status === 'In Progress').length;
-    const packed = manifests.filter((m) => m.status === 'Packed' || (m.status as string) === 'Completed').length;
-    const totalItems = manifests.reduce(
+    const total = userScopedManifests.length;
+    const pending = userScopedManifests.filter((m) => (m.status || 'Pending') === 'Pending').length;
+    const inProgress = userScopedManifests.filter((m) => m.status === 'In Progress').length;
+    const packed = userScopedManifests.filter((m) => m.status === 'Packed' || (m.status as string) === 'Completed').length;
+    const totalItems = userScopedManifests.reduce(
       (acc, m) => acc + (m.items || []).reduce((s, it) => s + (it.quantity || 1), 0),
       0
     );
     return { total, pending, inProgress, packed, totalItems };
-  }, [manifests]);
+  }, [userScopedManifests]);
 
   return (
     <div className="flex-1 bg-slate-50 min-h-screen p-4 sm:p-6 lg:p-8 space-y-6">
@@ -1110,65 +1180,66 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                 Order Processing &amp; Pre-Pack Manifest
               </h1>
               <p className="text-xs text-slate-500">
-                Pre-enter order items, assign to packers, and verify physical GTIN barcodes before video packing.
+                {isUserAdmin
+                  ? 'Pre-enter order items, assign to packers, and manage the master GTIN barcode catalog.'
+                  : 'View your assigned orders and verify physical GTIN barcodes before video packing.'}
               </p>
             </div>
           </div>
         </div>
 
-        {/* Quick Top Actions */}
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Sync Google Sheet Button Group with Direct Settings / Tab Configuration */}
-          <div className="inline-flex rounded-xl shadow-xs overflow-hidden border border-emerald-700 bg-emerald-600">
+        {/* Quick Top Actions (Admin Only) */}
+        {isUserAdmin && (
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Sync Google Sheet Button Group with Direct Settings / Tab Configuration */}
+            <div className="inline-flex rounded-xl shadow-xs overflow-hidden border border-emerald-700 bg-emerald-600">
+              <button
+                type="button"
+                disabled={isSyncingMasterSheet || isSyncingSheet}
+                onClick={handleSyncMasterSheet}
+                className="px-3.5 py-2 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                title="Fetch and sync products from Google Sheet into GTIN Catalog"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingMasterSheet || isSyncingSheet ? 'animate-spin' : ''}`} />
+                <span>{isSyncingMasterSheet || isSyncingSheet ? 'Syncing...' : 'Sync GTIN Catalog'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const cfg = getGtinSheetConfig();
+                  setGtinSheetInput(cfg.sheetIdOrUrl);
+                  setGtinSheetTab(cfg.tabName || 'GTINCatalog');
+                  setGtinSheetTagsInput(cfg.tagsFilter || '');
+                  setIsSyncModalOpen(true);
+                }}
+                className="px-2.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white border-l border-emerald-500 transition cursor-pointer flex items-center gap-1 text-xs font-bold"
+                title="Change Google Sheet Link or Tab Name"
+              >
+                <Sliders className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Sheet &amp; Tab</span>
+              </button>
+            </div>
+
             <button
               type="button"
-              disabled={isSyncingMasterSheet || isSyncingSheet}
-              onClick={handleSyncMasterSheet}
-              className="px-3.5 py-2 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-              title="Fetch and sync products from Google Sheet into GTIN Catalog"
+              onClick={handleOpenBulkManualModal}
+              className="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl border border-indigo-200 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+              title="Add multiple products manually or paste directly from Excel/Sheets"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${isSyncingMasterSheet || isSyncingSheet ? 'animate-spin' : ''}`} />
-              <span>{isSyncingMasterSheet || isSyncingSheet ? 'Syncing...' : 'Sync GTIN Catalog'}</span>
+              <Layers className="w-3.5 h-3.5 text-indigo-600" />
+              <span>Multi-Product / Excel Paste</span>
             </button>
+
             <button
               type="button"
-              onClick={() => {
-                const cfg = getGtinSheetConfig();
-                setGtinSheetInput(cfg.sheetIdOrUrl);
-                setGtinSheetTab(cfg.tabName || 'GTINCatalog');
-                setIsSyncModalOpen(true);
-              }}
-              className="px-2.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white border-l border-emerald-500 transition cursor-pointer flex items-center gap-1 text-xs font-bold"
-              title="Change Google Sheet Link or Tab Name"
+              onClick={() => setIsAddProductModalOpen(true)}
+              className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
             >
-              <Sliders className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Sheet &amp; Tab</span>
+              <Plus className="w-3.5 h-3.5 text-slate-600" />
+              <span>Add Single Product</span>
             </button>
           </div>
-
-          {isUserAdmin && (
-            <>
-              <button
-                type="button"
-                onClick={handleOpenBulkManualModal}
-                className="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl border border-indigo-200 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                title="Add multiple products manually or paste directly from Excel/Sheets"
-              >
-                <Layers className="w-3.5 h-3.5 text-indigo-600" />
-                <span>Multi-Product / Excel Paste</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setIsAddProductModalOpen(true)}
-                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
-              >
-                <Plus className="w-3.5 h-3.5 text-slate-600" />
-                <span>Add Single Product</span>
-              </button>
-            </>
-          )}
-        </div>
+        )}
       </div>
 
       {/* Stats Summary Cards (Interactive Filters) */}
@@ -1271,7 +1342,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
           <span>
             {isUserAdmin
               ? `Manifest Orders (${stats.total} Total • ${stats.pending} Pending)`
-              : `My Assigned Orders (${filteredManifests.length})`}
+              : `My Assigned Orders (${stats.total} Total • ${stats.pending} Pending)`}
           </span>
         </button>
 
@@ -1288,18 +1359,20 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
           <span>GTIN Barcode Catalog ({gtinCatalog.length})</span>
         </button>
 
-        <button
-          type="button"
-          onClick={() => setActiveSubTab('audit')}
-          className={`px-4 py-2.5 rounded-xl font-bold text-xs transition flex items-center gap-2 cursor-pointer shrink-0 ${
-            activeSubTab === 'audit'
-              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
-              : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
-          }`}
-        >
-          <ShieldCheck className="w-4 h-4" />
-          <span>Pack Verification Audit Logs ({verificationLogs.length})</span>
-        </button>
+        {isUserAdmin && (
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('audit')}
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs transition flex items-center gap-2 cursor-pointer shrink-0 ${
+              activeSubTab === 'audit'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
+            }`}
+          >
+            <ShieldCheck className="w-4 h-4" />
+            <span>Pack Verification Audit Logs ({verificationLogs.length})</span>
+          </button>
+        )}
       </div>
 
       {/* SUB-TAB 1: ORDER ENTRY FORM (Admin Only) */}
@@ -2102,60 +2175,63 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
       {/* SUB-TAB 3: GTIN BARCODE CATALOG */}
       {activeSubTab === 'gtin' && (
         <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs space-y-4">
-          {/* Active Google Sheet Sync Status Bar */}
-          <div className="bg-gradient-to-r from-emerald-50 via-slate-50 to-indigo-50/40 border border-emerald-200/80 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-2xs">
-            <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-emerald-600/20">
-                <FileSpreadsheet className="w-5 h-5" />
-              </div>
-              <div className="space-y-0.5 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs font-bold text-slate-900">
-                    Active Sync Source:
-                  </span>
-                  <span className="text-xs font-mono font-bold bg-white px-2.5 py-0.5 rounded-lg border border-emerald-200 text-emerald-800 shadow-2xs truncate max-w-xs sm:max-w-md">
-                    {getGtinSheetConfig().sheetIdOrUrl
-                      ? getGtinSheetConfig().sheetIdOrUrl
-                      : 'Master Google Sheet'}
-                  </span>
-                  <span className="text-xs font-mono font-bold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-lg border border-indigo-200">
-                    Tab: {getGtinSheetConfig().tabName || 'GTINCatalog'}
-                  </span>
+          {/* Active Google Sheet Sync Status Bar (Admin Only) */}
+          {isUserAdmin && (
+            <div className="bg-gradient-to-r from-emerald-50 via-slate-50 to-indigo-50/40 border border-emerald-200/80 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-2xs">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-emerald-600/20">
+                  <FileSpreadsheet className="w-5 h-5" />
                 </div>
-                <p className="text-[11px] text-slate-500">
-                  Clicking <strong>Sync</strong> automatically fetches all products &amp; GTIN barcodes from this sheet and tab directly into your catalog.
-                </p>
+                <div className="space-y-0.5 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-bold text-slate-900">
+                      Active Sync Source:
+                    </span>
+                    <span className="text-xs font-mono font-bold bg-white px-2.5 py-0.5 rounded-lg border border-emerald-200 text-emerald-800 shadow-2xs truncate max-w-xs sm:max-w-md">
+                      {getGtinSheetConfig().sheetIdOrUrl
+                        ? getGtinSheetConfig().sheetIdOrUrl
+                        : 'Master Google Sheet'}
+                    </span>
+                    <span className="text-xs font-mono font-bold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-lg border border-indigo-200">
+                      Tab: {getGtinSheetConfig().tabName || 'GTINCatalog'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500">
+                    Clicking <strong>Sync Now</strong> automatically fetches all products &amp; GTIN barcodes from this sheet and tab directly into your catalog.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const cfg = getGtinSheetConfig();
+                    setGtinSheetInput(cfg.sheetIdOrUrl);
+                    setGtinSheetTab(cfg.tabName || 'GTINCatalog');
+                    setGtinSheetTagsInput(cfg.tagsFilter || '');
+                    setIsSyncModalOpen(true);
+                  }}
+                  className="px-3 py-2 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                  title="Change the Google Sheet link or tab name"
+                >
+                  <Sliders className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Change Sheet / Tab</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isSyncingMasterSheet || isSyncingSheet}
+                  onClick={handleSyncMasterSheet}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-emerald-600/20"
+                  title="Fetch latest data from configured Google Sheet & Tab"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingMasterSheet || isSyncingSheet ? 'animate-spin' : ''}`} />
+                  <span>{isSyncingMasterSheet || isSyncingSheet ? 'Fetching...' : 'Sync Now'}</span>
+                </button>
               </div>
             </div>
-
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={() => {
-                  const cfg = getGtinSheetConfig();
-                  setGtinSheetInput(cfg.sheetIdOrUrl);
-                  setGtinSheetTab(cfg.tabName || 'GTINCatalog');
-                  setIsSyncModalOpen(true);
-                }}
-                className="px-3 py-2 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                title="Change the Google Sheet link or tab name"
-              >
-                <Sliders className="w-3.5 h-3.5 text-indigo-600" />
-                <span>Change Sheet / Tab</span>
-              </button>
-
-              <button
-                type="button"
-                disabled={isSyncingMasterSheet || isSyncingSheet}
-                onClick={handleSyncMasterSheet}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-emerald-600/20"
-                title="Fetch latest data from configured Google Sheet & Tab"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingMasterSheet || isSyncingSheet ? 'animate-spin' : ''}`} />
-                <span>{isSyncingMasterSheet || isSyncingSheet ? 'Fetching...' : 'Sync Now'}</span>
-              </button>
-            </div>
-          </div>
+          )}
 
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pt-1">
             <div>
@@ -2170,72 +2246,120 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
               </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={handleOpenBulkManualModal}
-                className="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl border border-indigo-200 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                title="Paste from Excel / Google Sheets or add multiple product lines"
-              >
-                <Layers className="w-3.5 h-3.5 text-indigo-600" />
-                <span>Multi-Product / Excel Paste</span>
-              </button>
+            {/* Admin GTIN Management Actions */}
+            {isUserAdmin && (
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleOpenBulkManualModal}
+                  className="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl border border-indigo-200 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                  title="Paste from Excel / Google Sheets or add multiple product lines"
+                >
+                  <Layers className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Multi-Product / Excel Paste</span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => setIsAddProductModalOpen(true)}
-                className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add Product</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setIsAddProductModalOpen(true)}
+                  className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Product</span>
+                </button>
 
-              <label className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer shadow-2xs">
-                <Upload className="w-3.5 h-3.5 text-slate-600" />
-                <span>Upload CSV</span>
-                <input
-                  type="file"
-                  accept=".csv,.txt,.tsv"
-                  className="hidden"
-                  onChange={handleCsvUpload}
-                />
-              </label>
+                <label className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer shadow-2xs">
+                  <Upload className="w-3.5 h-3.5 text-slate-600" />
+                  <span>Upload CSV</span>
+                  <input
+                    type="file"
+                    accept=".csv,.txt,.tsv"
+                    className="hidden"
+                    onChange={handleCsvUpload}
+                  />
+                </label>
 
-              <button
-                type="button"
-                onClick={handleDownloadCsvTemplate}
-                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                title="Download Sample CSV Template"
-              >
-                <Download className="w-3.5 h-3.5 text-slate-600" />
-                <span>Template</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadCsvTemplate}
+                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                  title="Download Sample CSV Template"
+                >
+                  <Download className="w-3.5 h-3.5 text-slate-600" />
+                  <span>Template</span>
+                </button>
 
-              <button
-                type="button"
-                disabled={isInitializingTabs}
-                onClick={handleInitializeAllSheetTabs}
-                className="px-3 py-2 bg-purple-50 hover:bg-purple-100 text-purple-700 text-xs font-bold rounded-xl border border-purple-200 transition flex items-center gap-1.5 cursor-pointer shadow-2xs disabled:opacity-50"
-                title="Ensure all 11 tabs exist in your connected Google Sheet"
-              >
-                <CheckCircle2 className={`w-3.5 h-3.5 text-purple-600 ${isInitializingTabs ? 'animate-spin' : ''}`} />
-                <span>{isInitializingTabs ? 'Verifying Tabs...' : 'Verify Sheet Tabs'}</span>
-              </button>
+                <button
+                  type="button"
+                  disabled={isInitializingTabs}
+                  onClick={handleInitializeAllSheetTabs}
+                  className="px-3 py-2 bg-purple-50 hover:bg-purple-100 text-purple-700 text-xs font-bold rounded-xl border border-purple-200 transition flex items-center gap-1.5 cursor-pointer shadow-2xs disabled:opacity-50"
+                  title="Ensure all tabs exist in your connected Google Sheet"
+                >
+                  <CheckCircle2 className={`w-3.5 h-3.5 text-purple-600 ${isInitializingTabs ? 'animate-spin' : ''}`} />
+                  <span>{isInitializingTabs ? 'Verifying...' : 'Verify Tabs'}</span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => setIsSyncModalOpen(true)}
-                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                title="Connect custom or external Google Sheet"
-              >
-                <Sliders className="w-3.5 h-3.5 text-slate-500" />
-                <span>External Sheet</span>
-              </button>
-            </div>
+                <button
+                  type="button"
+                  onClick={() => setIsSyncModalOpen(true)}
+                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                  title="Connect custom or external Google Sheet"
+                >
+                  <Sliders className="w-3.5 h-3.5 text-slate-500" />
+                  <span>External Sheet</span>
+                </button>
+              </div>
+            )}
           </div>
 
-          {/* Search Bar & Multi-Select Action Toolbar */}
+          {/* Search Bar & Multi-Tag Filter Chips */}
           <div className="space-y-3">
+            {/* Multi-Tag Filter Chips */}
+            {availableTags.length > 0 && (
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 select-none">
+                <span className="text-[11px] font-bold text-slate-500 shrink-0 mr-1 flex items-center gap-1">
+                  <Tag className="w-3 h-3 text-slate-400" />
+                  Tags Filter:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedTagFilter('ALL')}
+                  className={`px-3 py-1 rounded-full text-xs font-bold transition shrink-0 cursor-pointer ${
+                    selectedTagFilter === 'ALL'
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  All ({gtinCatalog.length})
+                </button>
+                {availableTags.map((tag) => {
+                  const count = gtinCatalog.filter((p) => {
+                    const t = (p.tag || '').toLowerCase();
+                    const c = (p.category || '').toLowerCase();
+                    return t.includes(tag.toLowerCase()) || c.includes(tag.toLowerCase());
+                  }).length;
+                  return (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => setSelectedTagFilter(tag === selectedTagFilter ? 'ALL' : tag)}
+                      className={`px-3 py-1 rounded-full text-xs font-bold transition shrink-0 cursor-pointer flex items-center gap-1.5 ${
+                        selectedTagFilter === tag
+                          ? 'bg-indigo-600 text-white shadow-xs'
+                          : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200'
+                      }`}
+                    >
+                      <span>{tag}</span>
+                      <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${selectedTagFilter === tag ? 'bg-indigo-700 text-white' : 'bg-indigo-100 text-indigo-800'}`}>
+                        {count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
               {/* Search Bar */}
               <div className="relative flex-1">
@@ -2614,8 +2738,8 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         </div>
       )}
 
-      {/* SUB-TAB 4: PACK VERIFICATION AUDIT LOGS */}
-      {activeSubTab === 'audit' && (
+      {/* SUB-TAB 4: PACK VERIFICATION AUDIT LOGS (Admin Only) */}
+      {isUserAdmin && activeSubTab === 'audit' && (
         <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs space-y-4">
           <div>
             <h2 className="text-base font-black text-slate-900 tracking-tight flex items-center gap-2">
@@ -2766,18 +2890,17 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Sheet Tab Name <span className="text-red-500">*</span>
+                  Tag Condition Filter (Multi-Tag Support, Optional)
                 </label>
                 <input
                   type="text"
-                  required
-                  value={gtinSheetTab}
-                  onChange={(e) => setGtinSheetTab(e.target.value)}
-                  placeholder="e.g. GTINCatalog, Sheet1, or Products"
-                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500 shadow-inner"
+                  value={gtinSheetTagsInput}
+                  onChange={(e) => setGtinSheetTagsInput(e.target.value)}
+                  placeholder="e.g. Active-online, Summer2024, Apparel (comma-separated)"
+                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500 shadow-inner"
                 />
                 <span className="text-[10px] text-slate-400 mt-1 block">
-                  Default is <code>GTINCatalog</code> (or <code>Sheet1</code> for raw spreadsheets).
+                  {gtinSheetTagsInput.trim() ? `Filtering items by tags: [${gtinSheetTagsInput}]` : 'Empty = Fetch full master sheet data (100%)'}
                 </span>
               </div>
             </div>

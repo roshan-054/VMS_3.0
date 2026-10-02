@@ -165,6 +165,8 @@ export interface GtinCatalogProduct {
   shortName: string;
   imageUrl?: string;
   category?: string;
+  tag?: string; // e.g. "Active-online", "offline", etc.
+  cogs?: number | string;
   defaultQuantity?: number;
   notes?: string;
 }

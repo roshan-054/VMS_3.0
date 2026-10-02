@@ -4639,8 +4639,8 @@ function syncExternalGtinSheet_(p) {
 
   var headers = data[0].map(function(h) { return String(h || '').trim().toLowerCase(); });
 
-  // Intelligent column detection
-  var gtinIdx = -1, skuIdx = -1, nameIdx = -1, shortNameIdx = -1, imgIdx = -1, catIdx = -1;
+  // Intelligent column detection (matches "Product SKU", "GTIN Number", "Product Name", "Quantity", "COGS", "Tag", "Image")
+  var gtinIdx = -1, skuIdx = -1, nameIdx = -1, shortNameIdx = -1, imgIdx = -1, catIdx = -1, tagIdx = -1, cogsIdx = -1, qtyIdx = -1;
 
   for (var c = 0; c < headers.length; c++) {
     var h = headers[c];
@@ -4654,15 +4654,29 @@ function syncExternalGtinSheet_(p) {
       shortNameIdx = c;
     } else if (imgIdx === -1 && (h.indexOf('image') !== -1 || h.indexOf('photo') !== -1 || h.indexOf('picture') !== -1 || h.indexOf('img') !== -1 || h.indexOf('link') !== -1)) {
       imgIdx = c;
+    } else if (tagIdx === -1 && (h.indexOf('tag') !== -1 || h.indexOf('label') !== -1 || h.indexOf('status') !== -1)) {
+      tagIdx = c;
     } else if (catIdx === -1 && (h.indexOf('category') !== -1 || h.indexOf('department') !== -1 || h.indexOf('type') !== -1)) {
       catIdx = c;
+    } else if (cogsIdx === -1 && (h.indexOf('cogs') !== -1 || h.indexOf('cost') !== -1 || h.indexOf('price') !== -1 || h.indexOf('rate') !== -1)) {
+      cogsIdx = c;
+    } else if (qtyIdx === -1 && (h.indexOf('quantity') !== -1 || h.indexOf('qty') !== -1 || h.indexOf('pack') !== -1)) {
+      qtyIdx = c;
     }
   }
 
   // Fallbacks if not explicitly found by keywords
-  if (gtinIdx === -1) gtinIdx = 0; // Assume 1st column is GTIN
-  if (skuIdx === -1) skuIdx = 1 < headers.length ? 1 : 0;
+  if (gtinIdx === -1) gtinIdx = 1 < headers.length ? 1 : 0;
+  if (skuIdx === -1) skuIdx = 0;
   if (nameIdx === -1) nameIdx = 2 < headers.length ? 2 : skuIdx;
+
+  // Multi-tag filter list (if provided e.g. ["Active-online", "offline"])
+  var requestedTags = [];
+  if (p.tags && Array.isArray(p.tags)) {
+    requestedTags = p.tags.map(function(t) { return String(t || '').trim().toLowerCase(); }).filter(Boolean);
+  } else if (p.tag && typeof p.tag === 'string') {
+    requestedTags = String(p.tag).split(',').map(function(t) { return t.trim().toLowerCase(); }).filter(Boolean);
+  }
 
   var items = [];
   for (var r = 1; r < data.length; r++) {
@@ -4674,7 +4688,20 @@ function syncExternalGtinSheet_(p) {
     var rawName = nameIdx >= 0 ? String(row[nameIdx] || '').trim() : rawSku || rawGtin;
     var rawShort = shortNameIdx >= 0 && row[shortNameIdx] ? String(row[shortNameIdx]).trim() : rawName;
     var rawImg = imgIdx >= 0 ? String(row[imgIdx] || '').trim() : '';
-    var rawCat = catIdx >= 0 ? String(row[catIdx] || '').trim() : 'General';
+    var rawTag = tagIdx >= 0 ? String(row[tagIdx] || '').trim() : '';
+    var rawCat = catIdx >= 0 ? String(row[catIdx] || '').trim() : (rawTag || 'General');
+    var rawCogs = cogsIdx >= 0 ? row[cogsIdx] : '';
+    var rawQty = qtyIdx >= 0 ? Number(row[qtyIdx]) || 1 : 1;
+
+    // Apply tag condition if user specified tags
+    if (requestedTags.length > 0) {
+      var tagLower = (rawTag || '').toLowerCase();
+      var catLower = (rawCat || '').toLowerCase();
+      var matchedTag = requestedTags.some(function(rt) {
+        return tagLower.indexOf(rt) !== -1 || catLower.indexOf(rt) !== -1;
+      });
+      if (!matchedTag) continue;
+    }
 
     items.push({
       gtin: rawGtin,
@@ -4682,7 +4709,10 @@ function syncExternalGtinSheet_(p) {
       productName: rawName || rawSku,
       shortName: rawShort || rawName,
       imageUrl: rawImg,
-      category: rawCat
+      category: rawCat,
+      tag: rawTag,
+      cogs: rawCogs,
+      defaultQuantity: rawQty
     });
   }
 
@@ -4698,7 +4728,8 @@ function syncExternalGtinSheet_(p) {
     items: items,
     count: items.length,
     sheetTitle: extSpreadsheet.getName(),
-    tabName: extSheet.getName()
+    tabName: extSheet.getName(),
+    appliedTags: requestedTags
   };
 }
 

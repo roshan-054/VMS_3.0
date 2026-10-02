@@ -164,6 +164,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
   const [maxConcurrentInput, setMaxConcurrentInput] = useState<number>(getStoredMaxConcurrentUploads());
   const [gtinSyncSheetInput, setGtinSyncSheetInput] = useState<string>(() => getGtinSheetConfig().sheetIdOrUrl);
   const [gtinSyncTabInput, setGtinSyncTabInput] = useState<string>(() => getGtinSheetConfig().tabName || 'GTINCatalog');
+  const [gtinSyncTagsInput, setGtinSyncTagsInput] = useState<string>(() => getGtinSheetConfig().tagsFilter || '');
   const [isSyncingGtinFromAdmin, setIsSyncingGtinFromAdmin] = useState<boolean>(false);
   const [clearingCache, setClearingCache] = useState(false);
   const [testingHealth, setTestingHealth] = useState(false);
@@ -298,6 +299,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
     saveGtinSheetConfig({
       sheetIdOrUrl: gtinSyncSheetInput.trim(),
       tabName: gtinSyncTabInput.trim() || 'GTINCatalog',
+      tagsFilter: gtinSyncTagsInput.trim(),
       autoSync: true,
       lastSyncTime: new Date().toISOString()
     });
@@ -316,20 +318,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
     );
   };
 
-  const handleSyncGtinCatalogFromAdmin = async () => {
+  const handleSyncGtinCatalogFromAdmin = async (overrideTags?: string) => {
     setIsSyncingGtinFromAdmin(true);
     try {
       const cleanInput = gtinSyncSheetInput.trim();
       const cleanTab = gtinSyncTabInput.trim() || 'GTINCatalog';
+      const effectiveTags = typeof overrideTags === 'string' ? overrideTags.trim() : gtinSyncTagsInput.trim();
       let res: { success: boolean; count: number; message: string };
 
       if (cleanInput) {
-        res = await syncGtinFromGoogleSheet(cleanInput, cleanTab);
+        res = await syncGtinFromGoogleSheet(cleanInput, cleanTab, effectiveTags);
       } else {
-        res = await syncGtinWithMasterSheet();
+        res = await syncGtinWithMasterSheet(effectiveTags);
         saveGtinSheetConfig({
           sheetIdOrUrl: '',
           tabName: cleanTab,
+          tagsFilter: effectiveTags,
           autoSync: true,
           lastSyncTime: new Date().toISOString(),
           totalSyncedItems: res.count
@@ -343,6 +347,30 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
       }
     } catch (err: any) {
       onShowToast(err?.message || 'GTIN Catalog sync failed', 'error');
+    } finally {
+      setIsSyncingGtinFromAdmin(false);
+    }
+  };
+
+  const handleSyncGtinOnlyCatalog = async () => {
+    setIsSyncingGtinFromAdmin(true);
+    try {
+      const res = await syncGtinWithMasterSheet();
+      saveGtinSheetConfig({
+        sheetIdOrUrl: '',
+        tabName: 'GTINCatalog',
+        tagsFilter: '',
+        autoSync: true,
+        lastSyncTime: new Date().toISOString(),
+        totalSyncedItems: res.count
+      });
+      if (res.success) {
+        onShowToast(`GTINCatalog tab synced! Total: ${res.count} products.`, 'success');
+      } else {
+        onShowToast(res.message, 'error');
+      }
+    } catch (err: any) {
+      onShowToast(err?.message || 'Sync failed', 'error');
     } finally {
       setIsSyncingGtinFromAdmin(false);
     }
@@ -1054,26 +1082,40 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
 
               {/* 3. GTIN Barcode Catalog Google Sheet & Tab Link */}
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
-                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-3">
                   <div className="flex items-center gap-2">
                     <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-xs">
                       3
                     </div>
                     <div>
                       <h4 className="text-xs font-bold text-slate-900">GTIN Catalog Google Sheet &amp; Tab Sync</h4>
-                      <p className="text-[11px] text-slate-500">Configure master or separate product spreadsheet link and tab name</p>
+                      <p className="text-[11px] text-slate-500">Configure master or separate product spreadsheet, tab name, and tag conditions</p>
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={handleSyncGtinCatalogFromAdmin}
-                    disabled={isSyncingGtinFromAdmin}
-                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-xs shadow-emerald-600/20"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncingGtinFromAdmin ? 'animate-spin' : ''}`} />
-                    <span>{isSyncingGtinFromAdmin ? 'Syncing...' : 'Sync Catalog Now'}</span>
-                  </button>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {/* Dedicated Button: Sync only GTINCatalog tab from Master Sheet */}
+                    <button
+                      type="button"
+                      onClick={handleSyncGtinOnlyCatalog}
+                      disabled={isSyncingGtinFromAdmin}
+                      className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-xs shadow-emerald-700/20"
+                      title="Directly synchronize only the GTINCatalog tab from Master Google Sheet"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isSyncingGtinFromAdmin ? 'animate-spin' : ''}`} />
+                      <span>Sync GTINCatalog Tab Only</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleSyncGtinCatalogFromAdmin()}
+                      disabled={isSyncingGtinFromAdmin}
+                      className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-xs shadow-emerald-600/20"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isSyncingGtinFromAdmin ? 'animate-spin' : ''}`} />
+                      <span>{isSyncingGtinFromAdmin ? 'Syncing...' : 'Fetch Catalog'}</span>
+                    </button>
+                  </div>
                 </div>
 
                 <div className="space-y-3">
@@ -1108,22 +1150,87 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                     </p>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                      Sheet Tab Name
-                    </label>
-                    <input
-                      type="text"
-                      disabled={disableSettings}
-                      value={gtinSyncTabInput}
-                      onChange={(e) => setGtinSyncTabInput(e.target.value)}
-                      placeholder="e.g. GTINCatalog, Sheet1, or Products"
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
-                    />
-                    <p className="text-[11px] text-slate-400 mt-1">
-                      Tab inside the spreadsheet containing your products. Default: <code>GTINCatalog</code>.
-                    </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                        Sheet Tab Name
+                      </label>
+                      <input
+                        type="text"
+                        disabled={disableSettings}
+                        value={gtinSyncTabInput}
+                        onChange={(e) => setGtinSyncTabInput(e.target.value)}
+                        placeholder="e.g. GTINCatalog, Sheet1, or Products"
+                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
+                      />
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        Tab inside spreadsheet. Default: <code>GTINCatalog</code>.
+                      </p>
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="block text-xs font-semibold text-slate-700">
+                          Condition / Tag Filter (Multi-Tag Support)
+                        </label>
+                        {gtinSyncTagsInput && (
+                          <button
+                            type="button"
+                            onClick={() => setGtinSyncTagsInput('')}
+                            className="text-[11px] text-rose-600 hover:underline font-medium cursor-pointer"
+                          >
+                            Clear (Fetch All)
+                          </button>
+                        )}
+                      </div>
+                      <input
+                        type="text"
+                        disabled={disableSettings}
+                        value={gtinSyncTagsInput}
+                        onChange={(e) => setGtinSyncTagsInput(e.target.value)}
+                        placeholder="e.g. Active-online, Summer2024, Apparel (comma-separated)"
+                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
+                      />
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        {gtinSyncTagsInput.trim()
+                          ? `Only products with tags matching: "${gtinSyncTagsInput}" will be fetched.`
+                          : 'Empty: Full master sheet data (100%) will be fetched.'}
+                      </p>
+                    </div>
                   </div>
+
+                  {/* Multi-Tag Badges Preview if typed */}
+                  {gtinSyncTagsInput.trim() && (
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex flex-wrap items-center gap-1.5">
+                      <span className="text-[11px] font-bold text-slate-600 mr-1">Active Tag Condition:</span>
+                      {gtinSyncTagsInput
+                        .split(',')
+                        .map((t) => t.trim())
+                        .filter(Boolean)
+                        .map((tag, idx) => (
+                          <span
+                            key={idx}
+                            className="inline-flex items-center gap-1 bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs px-2.5 py-0.5 rounded-full font-semibold"
+                          >
+                            <span>{tag}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const list = gtinSyncTagsInput
+                                  .split(',')
+                                  .map((t) => t.trim())
+                                  .filter(Boolean);
+                                list.splice(idx, 1);
+                                setGtinSyncTagsInput(list.join(', '));
+                              }}
+                              className="text-indigo-400 hover:text-indigo-800 cursor-pointer text-xs"
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                    </div>
+                  )}
                 </div>
               </div>
 
