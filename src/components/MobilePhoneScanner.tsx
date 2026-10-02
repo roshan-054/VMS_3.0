@@ -185,15 +185,25 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
                     const vCenterY = vHeight / 2;
                     const vCenterX = vWidth / 2;
 
-                    // Aperture filter: vertical center must fall within ±40% of video height (wide generous scanning area)
+                    // Aperture filter: barcode MUST fall inside the central clear scanning window (not in the blacked-out rest area)
                     const apertureBarcodes = barcodes.filter((b: any) => {
                       const box = b.boundingBox;
                       if (!box || typeof box.y !== 'number' || typeof box.height !== 'number') return true;
                       const bCenterY = box.y + box.height / 2;
-                      return Math.abs(bCenterY - vCenterY) <= vHeight * 0.40;
+                      const bCenterX = (typeof box.x === 'number' && typeof box.width === 'number') ? (box.x + box.width / 2) : vCenterX;
+                      // Strictly match the clear unmasked aperture box (central 44% vertically, 90% horizontally)
+                      const inVerticalBounds = Math.abs(bCenterY - vCenterY) <= vHeight * 0.22;
+                      const inHorizontalBounds = Math.abs(bCenterX - vCenterX) <= vWidth * 0.45;
+                      return inVerticalBounds && inHorizontalBounds;
                     });
 
-                    const candidateList = apertureBarcodes.length > 0 ? apertureBarcodes : barcodes;
+                    // Avoid unwanted / missed scans: strictly ignore barcodes outside the clear aperture window
+                    if (apertureBarcodes.length === 0) {
+                      barcodeAnimRef.current = requestAnimationFrame(scanLoop);
+                      return;
+                    }
+
+                    const candidateList = apertureBarcodes;
 
                     // Sort candidates by proximity to exact laser center
                     candidateList.sort((a: any, b: any) => {
@@ -238,6 +248,21 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
           videoRef.current!,
           (result: any, _err: any) => {
             if (result && isMounted) {
+              // Ensure barcode points are inside the central aperture window (not in blacked-out rest area)
+              try {
+                const pts = typeof result.getResultPoints === 'function' ? result.getResultPoints() : (result.resultPoints || []);
+                if (pts && pts.length > 0 && videoRef.current) {
+                  const vH = videoRef.current.videoHeight || 1080;
+                  const vW = videoRef.current.videoWidth || 1920;
+                  const avgY = pts.reduce((sum: number, p: any) => sum + (typeof p.getY === 'function' ? p.getY() : (p.y || 0)), 0) / pts.length;
+                  const avgX = pts.reduce((sum: number, p: any) => sum + (typeof p.getX === 'function' ? p.getX() : (p.x || 0)), 0) / pts.length;
+                  if (Math.abs(avgY - vH / 2) > vH * 0.22 || Math.abs(avgX - vW / 2) > vW * 0.45) {
+                    // Barcode was detected in the blacked out rest area - ignore to avoid unwanted scan
+                    return;
+                  }
+                }
+              } catch (_) {}
+
               const text = (typeof result.getText === 'function' ? result.getText() : String(result.text || '')).trim();
               const now = Date.now();
 
@@ -509,25 +534,38 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
           className="absolute inset-0 w-full h-full object-cover"
         />
 
-        {/* Real-time Aiming Reticle & Wide Laser Targeting Window */}
-        <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center">
-          {/* Top subtle shading */}
-          <div className="w-full flex-1 bg-black/40 backdrop-blur-[0.5px]" />
+        {/* Real-time Aiming Reticle with 100% Blackout Mask for Rest Area to prevent unwanted scans */}
+        <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center z-10">
+          {/* Top Solid Black Mask */}
+          <div className="w-full flex-1 bg-black flex flex-col items-center justify-end pb-3">
+            <div className="text-[10px] font-mono tracking-wider font-semibold text-slate-300 uppercase bg-slate-900/95 px-3 py-1 rounded-full border border-slate-700/80 shadow-md">
+              Position Barcode in Clear Box
+            </div>
+          </div>
 
-          {/* Comfortable Wide Laser Scan Window */}
-          <div className="w-full flex items-center justify-center py-2 shrink-0">
+          {/* Middle Scanning Row: Left Black + Central Clear Scan Window + Right Black */}
+          <div className="w-full flex items-center justify-center shrink-0">
+            {/* Left flank: 100% Solid Black */}
+            <div className="flex-1 h-48 sm:h-56 bg-black" />
+
+            {/* Central High-Precision Clear Scan Window */}
             <div
-              className={`w-[94%] max-w-[460px] h-48 sm:h-56 relative rounded-2xl border-2 transition-all duration-200 flex items-center justify-center shadow-[0_0_50px_rgba(0,0,0,0.85)] ${
+              className={`w-[90%] max-w-[420px] h-48 sm:h-56 relative rounded-2xl border-2 transition-all duration-200 flex items-center justify-center shrink-0 ${
                 isRecentScan
-                  ? 'border-emerald-400 bg-emerald-500/25 scale-102 ring-4 ring-emerald-500/40'
-                  : 'border-white/80 bg-black/15'
+                  ? 'border-emerald-400 bg-emerald-500/25 scale-[1.02] ring-4 ring-emerald-500/50'
+                  : 'border-white/90 bg-transparent'
               }`}
+              style={{
+                boxShadow: isRecentScan
+                  ? '0 0 0 9999px #000000, 0 0 35px rgba(52, 211, 153, 0.9)'
+                  : '0 0 0 9999px #000000',
+              }}
             >
               {/* Industrial Aiming Corner Brackets */}
-              <div className="absolute -top-1.5 -left-1.5 w-6 h-6 border-t-3 border-l-3 border-emerald-400 rounded-tl-md" />
-              <div className="absolute -top-1.5 -right-1.5 w-6 h-6 border-t-3 border-r-3 border-emerald-400 rounded-tr-md" />
-              <div className="absolute -bottom-1.5 -left-1.5 w-6 h-6 border-b-3 border-l-3 border-emerald-400 rounded-bl-md" />
-              <div className="absolute -bottom-1.5 -right-1.5 w-6 h-6 border-b-3 border-r-3 border-emerald-400 rounded-br-md" />
+              <div className="absolute -top-1.5 -left-1.5 w-6 h-6 border-t-3 border-l-3 border-emerald-400 rounded-tl-md shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+              <div className="absolute -top-1.5 -right-1.5 w-6 h-6 border-t-3 border-r-3 border-emerald-400 rounded-tr-md shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+              <div className="absolute -bottom-1.5 -left-1.5 w-6 h-6 border-b-3 border-l-3 border-emerald-400 rounded-bl-md shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+              <div className="absolute -bottom-1.5 -right-1.5 w-6 h-6 border-b-3 border-r-3 border-emerald-400 rounded-br-md shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
 
               {/* Ultra-Crisp Red Laser Scanning Line */}
               <div className="absolute inset-x-3 h-0.5 bg-gradient-to-r from-red-500/10 via-red-500 to-red-500/10 shadow-[0_0_16px_rgba(239,68,68,1)] animate-pulse" />
@@ -537,14 +575,22 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
               <div className="absolute inset-y-1/2 right-2.5 w-3 border-t-2 border-emerald-400/90" />
 
               {/* Precision Badge Note */}
-              <div className="absolute -bottom-3.5 left-1/2 -translate-x-1/2 bg-slate-950/95 backdrop-blur-xs text-[10px] font-mono font-bold px-3 py-0.5 rounded-full border border-white/20 text-slate-200 whitespace-nowrap shadow-md">
-                Align Barcode inside Frame
+              <div className="absolute -bottom-3.5 left-1/2 -translate-x-1/2 bg-slate-950 text-[10px] font-mono font-bold px-3 py-0.5 rounded-full border border-slate-700 text-slate-200 whitespace-nowrap shadow-md">
+                Align Barcode Here
               </div>
             </div>
+
+            {/* Right flank: 100% Solid Black */}
+            <div className="flex-1 h-48 sm:h-56 bg-black" />
           </div>
 
-          {/* Bottom subtle shading */}
-          <div className="w-full flex-1 bg-black/40 backdrop-blur-[0.5px]" />
+          {/* Bottom Solid Black Mask */}
+          <div className="w-full flex-1 bg-black flex flex-col items-center justify-start pt-3">
+            <div className="text-[10px] font-mono text-slate-400 flex items-center gap-1.5 bg-slate-900/95 px-3 py-1 rounded-full border border-slate-700/80 shadow-md">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              Rest area blacked out • Unwanted scans blocked
+            </div>
+          </div>
         </div>
 
         {/* Success Scan Popup Banner */}
