@@ -564,15 +564,9 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
                   
                   <div className="flex items-center gap-1.5">
                     {!isItemDone ? (
-                      <button
-                        type="button"
-                        onClick={() => applyItemMatch(idx, item.gtin || item.sku || 'MANUAL')}
-                        className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-bold rounded-lg text-[11px] flex items-center gap-1 transition shadow-xs cursor-pointer"
-                        title="Click to manually verify 1 unit of this item"
-                      >
-                        <Plus className="w-3 h-3" />
-                        <span>+1 Verify</span>
-                      </button>
+                      <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase bg-amber-500/20 text-amber-300 border border-amber-500/50">
+                        Pending Scan
+                      </span>
                     ) : (
                       <span className="inline-block px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/50">
                         Verified
