@@ -36,9 +36,10 @@ import {
   Shield,
   XCircle,
   Sliders,
-  Zap
+  Zap,
+  Boxes
 } from 'lucide-react';
-import { PlatformType, RecordingType, QueueItem } from '../types';
+import { PlatformType, RecordingType, QueueItem, OrderManifest, ManifestItem, User } from '../types';
 import { dbPutQueue, getStoredMaxVideoSizeMb } from '../lib/storage';
 import { requestApi, normalizeOrderId, checkDuplicate } from '../lib/api';
 import { triggerUploadWorker } from '../lib/uploadWorker';
@@ -46,11 +47,17 @@ import { sharedAiFocusEngine, FocusMode, FocusState } from '../lib/aiFocusEngine
 import { AiVideoFocusModal } from './AiVideoFocusModal';
 import { PhoneScannerModal } from './PhoneScannerModal';
 import { sharedScannerSync } from '../lib/phoneScannerSync';
+import {
+  getManifestByOrderId,
+  updateManifestStatus,
+  getVerificationSettings
+} from '../lib/manifestStorage';
+import { PackVerificationModal } from './PackVerificationModal';
 
 interface ScanRecordProps {
   onQueueUpdated: () => void;
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
-  currentUser: { name: string; email: string; role: string } | null;
+  currentUser: User | null;
 }
 
 export const ScanRecord: React.FC<ScanRecordProps> = ({
@@ -117,6 +124,34 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   } | null>(null);
   const [isCheckingDup, setIsCheckingDup] = useState(false);
   const [allowBypassDuplicate, setAllowBypassDuplicate] = useState(false);
+
+  // Pre-Pack Manifest & Physical GTIN Barcode Verification
+  const [activeManifest, setActiveManifest] = useState<OrderManifest | null>(null);
+  const [isPackVerificationOpen, setIsPackVerificationOpen] = useState<boolean>(false);
+  const [verifiedOrderItems, setVerifiedOrderItems] = useState<ManifestItem[] | null>(null);
+  const [unregisteredOrderWarning, setUnregisteredOrderWarning] = useState<{
+    orderId: string;
+  } | null>(null);
+
+  const checkAndOpenPackVerification = (scannedOrderId: string): boolean => {
+    const clean = scannedOrderId.trim().toUpperCase();
+    if (!clean) return false;
+
+    const manifest = getManifestByOrderId(clean);
+    if (manifest) {
+      setActiveManifest(manifest);
+      setVerifiedOrderItems(null);
+      setIsPackVerificationOpen(true);
+      return true;
+    } else {
+      const settings = getVerificationSettings();
+      if (settings.enforceManifestCheck) {
+        setUnregisteredOrderWarning({ orderId: clean });
+        return true;
+      }
+    }
+    return false;
+  };
 
   // Debounced duplicate checker that distinguishes Forward from Return
   useEffect(() => {
@@ -488,6 +523,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
           if (cleaned) {
             setOrderId(cleaned);
             detectPlatformAndType(cleaned);
+            checkAndOpenPackVerification(cleaned);
             onShowToast(`Scanned Order: ${cleaned}`, 'success');
             barcodeBufferRef.current = '';
             e.preventDefault();
@@ -847,6 +883,15 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       return;
     }
 
+    // PRE-PACK MANIFEST VERIFICATION GUARD: Ensure physical product GTINs are verified before recording starts
+    const targetManifest = activeManifest || getManifestByOrderId(orderId.trim());
+    if (targetManifest && !verifiedOrderItems) {
+      setActiveManifest(targetManifest);
+      setIsPackVerificationOpen(true);
+      onShowToast(`Please scan and verify product GTINs for Order ${targetManifest.orderId} first`, 'info');
+      return;
+    }
+
     // STRICT DUPLICATE GUARD: Block recording if duplicate detected and bypass not checked
     if (duplicateStatus && duplicateStatus.hasSameTypeDup && duplicateStatus.checkedOrder === orderId.trim() && !bypassDuplicateRef.current) {
       const activePacker = (duplicateStatus.existingRecord as any)?.packerEmail;
@@ -1029,6 +1074,21 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
         type: 'success',
       });
 
+      // Update manifest status to 'Packed' if this order was in the manifest
+      if (orderId.trim()) {
+        updateManifestStatus(
+          orderId.trim(),
+          'Packed',
+          verifiedOrderItems || undefined,
+          {
+            name: currentUser?.name || 'Packer',
+            email: currentUser?.email || 'packer@ops.local',
+          }
+        );
+      }
+      setVerifiedOrderItems(null);
+      setActiveManifest(null);
+
       // Clear for next order
       setOrderId('');
     } catch (err: any) {
@@ -1068,6 +1128,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
 
           setOrderId(cleaned);
           detectPlatformAndType(cleaned);
+          checkAndOpenPackVerification(cleaned);
           onShowToast(`📱 Phone Scanned: ${cleaned} (${device || 'Mobile Phone'})`, 'success');
         }
       },
@@ -1729,6 +1790,82 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                   </button>
                 )}
               </div>
+
+              {/* Pre-Pack Manifest & Verification Status Card */}
+              {orderId.trim() && (
+                <div className="mt-2">
+                  {activeManifest ? (
+                    <div
+                      className={`p-2.5 rounded-xl border flex items-center justify-between text-xs transition ${
+                        verifiedOrderItems
+                          ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+                          : 'bg-indigo-50 border-indigo-200 text-indigo-950'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        {verifiedOrderItems ? (
+                          <div className="w-7 h-7 rounded-lg bg-emerald-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+                            <CheckCircle2 className="w-4 h-4" />
+                          </div>
+                        ) : (
+                          <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                            <Boxes className="w-4 h-4" />
+                          </div>
+                        )}
+
+                        <div>
+                          <div className="font-bold flex items-center gap-1.5">
+                            <span>
+                              {verifiedOrderItems
+                                ? '✓ All Product GTINs Verified'
+                                : `Pre-Pack Manifest: ${activeManifest.items.length} Products`}
+                            </span>
+                            <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-white/80 border border-slate-200">
+                              {activeManifest.platform}
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-slate-500 font-mono block">
+                            Assigned to: <span className="font-bold text-slate-700">{activeManifest.assignedPackerName}</span> • By: {activeManifest.processedByName}
+                          </span>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setIsPackVerificationOpen(true)}
+                        className={`px-3 py-1.5 rounded-xl font-bold text-xs shadow-xs transition cursor-pointer shrink-0 ${
+                          verifiedOrderItems
+                            ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                            : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/20'
+                        }`}
+                      >
+                        {verifiedOrderItems ? 'Re-verify' : 'Verify Physical GTINs'}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="p-2 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between text-xs text-slate-500">
+                      <span className="text-[11px] font-mono">
+                        ℹ️ Order not in pre-pack manifest
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const found = getManifestByOrderId(orderId.trim());
+                          if (found) {
+                            setActiveManifest(found);
+                            setIsPackVerificationOpen(true);
+                          } else {
+                            onShowToast(`No manifest pre-entered for ${orderId.trim()}`, 'info');
+                          }
+                        }}
+                        className="text-[11px] text-indigo-600 font-bold hover:underline cursor-pointer"
+                      >
+                        Check Manifest
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Recording Type */}
@@ -1900,6 +2037,76 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
         onClose={() => setIsPhoneScannerModalOpen(false)}
         onShowToast={onShowToast}
       />
+
+      {/* Pre-Pack Manifest & Physical GTIN Barcode Verification Modal */}
+      {isPackVerificationOpen && activeManifest && (
+        <PackVerificationModal
+          manifest={activeManifest}
+          currentUser={currentUser}
+          onVerifiedAndProceed={(verified) => {
+            setVerifiedOrderItems(verified);
+            setIsPackVerificationOpen(false);
+            onShowToast(`✓ Order ${activeManifest.orderId} verified! Starting packing recording…`, 'success');
+            // Auto start recording now that items are verified
+            if (!isRecording) {
+              startRecording();
+            }
+          }}
+          onCancel={() => {
+            setIsPackVerificationOpen(false);
+            setActiveManifest(null);
+            setOrderId('');
+          }}
+          onShowToast={onShowToast}
+        />
+      )}
+
+      {/* Unregistered Order Warning Modal (if order is not in manifest) */}
+      {unregisteredOrderWarning && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-fade-in select-none">
+          <div className="w-full max-w-md bg-slate-900 border-2 border-amber-500 rounded-3xl p-6 text-white space-y-4 shadow-2xl">
+            <div className="w-14 h-14 rounded-2xl bg-amber-500/20 border border-amber-500 text-amber-400 flex items-center justify-center mx-auto">
+              <AlertTriangle className="w-7 h-7" />
+            </div>
+
+            <div className="text-center space-y-1">
+              <h3 className="text-lg font-black text-white">Order Not in Pre-Pack Manifest</h3>
+              <p className="text-xs text-slate-300">
+                Order <span className="font-mono font-bold text-amber-400">{unregisteredOrderWarning.orderId}</span> has not been pre-entered by the processing team with product details and assigned packer.
+              </p>
+            </div>
+
+            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] text-slate-400 font-mono space-y-1">
+              <div>● Operator: {currentUser?.name || 'Packer'}</div>
+              <div>● Status: Unregistered in manifest</div>
+            </div>
+
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setUnregisteredOrderWarning(null);
+                  setOrderId('');
+                }}
+                className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl cursor-pointer"
+              >
+                Cancel &amp; Wait for Entry
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setUnregisteredOrderWarning(null);
+                  onShowToast('Proceeding with unverified order packing', 'info');
+                }}
+                className="flex-1 py-2.5 bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs rounded-xl cursor-pointer shadow-md"
+              >
+                Proceed Unverified
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

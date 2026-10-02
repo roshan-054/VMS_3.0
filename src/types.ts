@@ -126,3 +126,64 @@ export interface AnalyticsData {
   latestRecordingTimeToday?: string;
   avgDailyWrapUpTime?: string;
 }
+
+export interface ManifestItem {
+  id: string;
+  sku: string;
+  productName: string;
+  shortName: string;
+  gtin: string; // Barcode / EAN / UPC for physical scan verification
+  quantity: number; // Required quantity to pack
+  scannedCount: number; // Currently scanned count by packer
+  imageUrl?: string;
+}
+
+export type ManifestStatus = 'Pending' | 'In Progress' | 'Packed' | 'Cancelled';
+
+export interface OrderManifest {
+  id: string;
+  orderId: string;
+  platform: PlatformType;
+  assignedPackerName: string;
+  assignedPackerEmail: string;
+  processedByName: string;
+  processedByEmail: string;
+  processedAt: string; // ISO string
+  items: ManifestItem[];
+  status: ManifestStatus;
+  notes?: string;
+  packedAt?: string;
+  packedByName?: string;
+  packedByEmail?: string;
+  videoDriveUrl?: string;
+}
+
+export interface GtinCatalogProduct {
+  gtin: string; // Barcode (EAN-13, Code 128, UPC, etc.)
+  sku: string; // Product Code / SKU
+  productName: string;
+  shortName: string;
+  imageUrl?: string;
+  category?: string;
+  defaultQuantity?: number;
+  notes?: string;
+}
+
+export interface PackVerificationLog {
+  timestamp: string;
+  orderId: string;
+  platform: string;
+  assignedPacker: string;
+  verifiedByPacker: string;
+  packerEmail: string;
+  processedBy: string;
+  status: 'MATCHED' | 'MISMATCH' | 'UNASSIGNED' | 'OVER_PACK';
+  totalRequired: number;
+  totalScanned: number;
+  itemsSummary: string; // Stringified summary of items & quantities
+  scannedGtinsLog: string[];
+  durationSeconds: number;
+  videoDriveUrl?: string;
+  notes?: string;
+}
+

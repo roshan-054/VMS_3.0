@@ -34,6 +34,9 @@ const CONFIG = {
   SECURITY_LOG_SHEET: 'SecurityLog',
   BRANDING_SHEET: 'Branding',
   TRASH_LOG_SHEET: 'TrashLog',
+  ORDER_MANIFEST_SHEET: 'OrderManifest',
+  PACK_VERIFICATION_LOG_SHEET: 'PackVerificationLog',
+  GTIN_CATALOG_SHEET: 'GTINCatalog',
 
   // Limits
   MAX_VIDEO_BYTES: 1024 * 1024 * 1024 * 5, // 5 GB
@@ -112,6 +115,16 @@ function doPost(e) {
       case 'scannerPair': return output_(handleScannerPair_(p));
       case 'scannerPoll': return output_(handleScannerPoll_(p));
       case 'scannerBroadcast': return output_(handleScannerBroadcast_(p));
+      case 'saveOrderManifest': return output_(saveOrderManifest_(p));
+      case 'saveOrderManifestsBatch': return output_(saveOrderManifestsBatch_(p));
+      case 'getOrderManifests': return output_(getOrderManifests_(p));
+      case 'updateManifestStatus': return output_(updateManifestStatus_(p));
+      case 'deleteOrderManifest': return output_(deleteOrderManifest_(p));
+      case 'logPackVerification': return output_(logPackVerification_(p));
+      case 'getPackVerificationLogs': return output_(getPackVerificationLogs_(p));
+      case 'getGtinCatalog': return output_(getGtinCatalog_(p));
+      case 'saveGtinCatalogBatch': return output_(saveGtinCatalogBatch_(p));
+      case 'syncExternalGtinSheet': return output_(syncExternalGtinSheet_(p));
       default: return output_({success:false, error:'Unknown action: '+a});
     }
   } catch(err) {
@@ -476,7 +489,10 @@ function setupSystem() {
     [CONFIG.UPLOAD_LOG_SHEET,['Timestamp','Order ID','Platform','Packer Email','File Name','File Size','Upload ID','Stage','Progress','Drive File ID','Status','Error','Recording Type','Source','Queue Job ID']],
     [CONFIG.SECURITY_LOG_SHEET,['Timestamp','Email','Action','Result','Details']],
     [CONFIG.BRANDING_SHEET,['Setting Key','Setting Value','Last Updated','Description']],
-    [CONFIG.TRASH_LOG_SHEET,['Timestamp','Order ID','Platform','Recording Type','Action','Original Sheet','Drive File ID','Playback URL','Cleaned By','Details']]
+    [CONFIG.TRASH_LOG_SHEET,['Timestamp','Order ID','Platform','Recording Type','Action','Original Sheet','Drive File ID','Playback URL','Cleaned By','Details']],
+    [CONFIG.ORDER_MANIFEST_SHEET,['Timestamp','Order ID','Platform','Assigned Packer Name','Assigned Packer Email','Processed By Name','Processed By Email','Total Items Count','Items Detail JSON','Status','Notes','Packed At','Packed By Name','Video Drive Link']],
+    [CONFIG.PACK_VERIFICATION_LOG_SHEET,['Timestamp','Order ID','Platform','Assigned Packer','Verified By Packer','Packer Email','Processed By','Status','Total Required Items','Total Scanned Items','Items Summary','Scanned GTINs Log','Duration Seconds','Drive Video URL']],
+    [CONFIG.GTIN_CATALOG_SHEET,['Timestamp','GTIN','SKU','Product Name','Short Name','Category','Image URL','Default Quantity','Notes']]
   ];
   specs.forEach(([name,headers])=>{
     let sh=ss.getSheetByName(name);
@@ -4203,5 +4219,401 @@ function handleScannerBroadcast_(p) {
   
   return { success: true, stationId: 'station-' + stationId, timestamp: now };
 }
+
+// ==========================================
+// VMS 3.0 ORDER MANIFEST & GTIN SYNC ENGINE
+// ==========================================
+
+function getManifestSheet_() {
+  return sheet_(CONFIG.ORDER_MANIFEST_SHEET);
+}
+
+function getVerificationLogSheet_() {
+  return sheet_(CONFIG.PACK_VERIFICATION_LOG_SHEET);
+}
+
+function getGtinCatalogSheet_() {
+  return sheet_(CONFIG.GTIN_CATALOG_SHEET);
+}
+
+function saveOrderManifest_(p) {
+  var manifest = p.manifest || {};
+  if (!manifest.orderId) {
+    return { success: false, error: 'Order ID is required' };
+  }
+  var sh = getManifestSheet_();
+  var orderId = String(manifest.orderId).trim().toUpperCase();
+  var data = sh.getDataRange().getValues();
+  var targetRow = -1;
+
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][1] || '').trim().toUpperCase() === orderId) {
+      targetRow = i + 1;
+      break;
+    }
+  }
+
+  var now = new Date();
+  var itemsJson = JSON.stringify(manifest.items || []);
+  var totalItems = 0;
+  if (Array.isArray(manifest.items)) {
+    for (var k = 0; k < manifest.items.length; k++) {
+      totalItems += Number(manifest.items[k].quantity || 1);
+    }
+  }
+
+  var rowValues = [
+    now,
+    orderId,
+    manifest.platform || 'Amazon',
+    manifest.assignedPackerName || '',
+    manifest.assignedPackerEmail || '',
+    manifest.processedByName || '',
+    manifest.processedByEmail || '',
+    totalItems,
+    itemsJson,
+    manifest.status || 'Pending',
+    manifest.notes || '',
+    manifest.packedAt || '',
+    manifest.packedByName || '',
+    manifest.videoDriveUrl || ''
+  ];
+
+  if (targetRow > 0) {
+    sh.getRange(targetRow, 1, 1, rowValues.length).setValues([rowValues]);
+  } else {
+    sh.appendRow(rowValues);
+  }
+
+  return { success: true, orderId: orderId, updated: targetRow > 0 };
+}
+
+function saveOrderManifestsBatch_(p) {
+  var manifests = p.manifests || [];
+  if (!Array.isArray(manifests) || manifests.length === 0) {
+    return { success: false, error: 'Manifests array is required' };
+  }
+  var count = 0;
+  for (var i = 0; i < manifests.length; i++) {
+    if (manifests[i] && manifests[i].orderId) {
+      saveOrderManifest_({ manifest: manifests[i] });
+      count++;
+    }
+  }
+  return { success: true, count: count };
+}
+
+function getOrderManifests_(p) {
+  var sh = getManifestSheet_();
+  var data = sh.getDataRange().getValues();
+  var manifests = [];
+
+  for (var i = 1; i < data.length; i++) {
+    var r = data[i];
+    var orderId = String(r[1] || '').trim();
+    if (!orderId) continue;
+
+    var items = [];
+    try {
+      if (r[8]) items = JSON.parse(r[8]);
+    } catch (_) {}
+
+    manifests.push({
+      id: 'm-' + i,
+      orderId: orderId,
+      platform: r[2] || 'Amazon',
+      assignedPackerName: r[3] || '',
+      assignedPackerEmail: r[4] || '',
+      processedByName: r[5] || '',
+      processedByEmail: r[6] || '',
+      processedAt: r[0] ? new Date(r[0]).toISOString() : '',
+      items: items,
+      status: r[9] || 'Pending',
+      notes: r[10] || '',
+      packedAt: r[11] || '',
+      packedByName: r[12] || '',
+      videoDriveUrl: r[13] || ''
+    });
+  }
+
+  return { success: true, manifests: manifests };
+}
+
+function updateManifestStatus_(p) {
+  var orderId = String(p.orderId || '').trim().toUpperCase();
+  if (!orderId) return { success: false, error: 'Order ID is required' };
+
+  var sh = getManifestSheet_();
+  var data = sh.getDataRange().getValues();
+  var targetRow = -1;
+
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][1] || '').trim().toUpperCase() === orderId) {
+      targetRow = i + 1;
+      break;
+    }
+  }
+
+  if (targetRow > 0) {
+    if (p.status) sh.getRange(targetRow, 10).setValue(p.status);
+    if (p.items) sh.getRange(targetRow, 9).setValue(JSON.stringify(p.items));
+    if (p.packerDetails) {
+      if (p.packerDetails.name) sh.getRange(targetRow, 13).setValue(p.packerDetails.name);
+      if (p.packerDetails.videoDriveUrl) sh.getRange(targetRow, 14).setValue(p.packerDetails.videoDriveUrl);
+      if (p.status === 'Packed') sh.getRange(targetRow, 12).setValue(new Date().toISOString());
+    }
+    return { success: true, orderId: orderId };
+  }
+
+  return { success: false, error: 'Order ID not found in manifest' };
+}
+
+function deleteOrderManifest_(p) {
+  var orderId = String(p.orderId || '').trim().toUpperCase();
+  if (!orderId) return { success: false, error: 'Order ID required' };
+
+  var sh = getManifestSheet_();
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][1] || '').trim().toUpperCase() === orderId) {
+      sh.deleteRow(i + 1);
+      return { success: true, orderId: orderId };
+    }
+  }
+  return { success: false, error: 'Order not found' };
+}
+
+function logPackVerification_(p) {
+  var log = p.log || {};
+  if (!log.orderId) return { success: false, error: 'Order ID is required' };
+
+  var sh = getVerificationLogSheet_();
+  var now = new Date();
+
+  var row = [
+    now,
+    log.orderId,
+    log.platform || 'Amazon',
+    log.assignedPacker || '',
+    log.verifiedByPacker || '',
+    log.packerEmail || '',
+    log.processedBy || '',
+    log.status || 'MATCHED',
+    log.totalRequired || 0,
+    log.totalScanned || 0,
+    log.itemsSummary || '',
+    JSON.stringify(log.scannedGtinsLog || []),
+    log.durationSeconds || 0,
+    log.videoDriveUrl || ''
+  ];
+
+  sh.appendRow(row);
+  return { success: true, orderId: log.orderId };
+}
+
+function getPackVerificationLogs_(p) {
+  var sh = getVerificationLogSheet_();
+  var data = sh.getDataRange().getValues();
+  var logs = [];
+
+  for (var i = data.length - 1; i >= 1; i--) {
+    var r = data[i];
+    if (!r[1]) continue;
+    var scannedLog = [];
+    try {
+      if (r[11]) scannedLog = JSON.parse(r[11]);
+    } catch (_) {}
+
+    logs.push({
+      timestamp: r[0] ? new Date(r[0]).toISOString() : '',
+      orderId: r[1],
+      platform: r[2] || '',
+      assignedPacker: r[3] || '',
+      verifiedByPacker: r[4] || '',
+      packerEmail: r[5] || '',
+      processedBy: r[6] || '',
+      status: r[7] || 'MATCHED',
+      totalRequired: Number(r[8] || 0),
+      totalScanned: Number(r[9] || 0),
+      itemsSummary: r[10] || '',
+      scannedGtinsLog: scannedLog,
+      durationSeconds: Number(r[12] || 0),
+      videoDriveUrl: r[13] || ''
+    });
+  }
+
+  return { success: true, logs: logs };
+}
+
+function getGtinCatalog_(p) {
+  var sh = getGtinCatalogSheet_();
+  var data = sh.getDataRange().getValues();
+  var catalog = [];
+
+  for (var i = 1; i < data.length; i++) {
+    var r = data[i];
+    var gtin = String(r[1] || '').trim();
+    if (!gtin) continue;
+
+    catalog.push({
+      gtin: gtin,
+      sku: String(r[2] || '').trim(),
+      productName: String(r[3] || '').trim(),
+      shortName: String(r[4] || '').trim(),
+      category: String(r[5] || '').trim(),
+      imageUrl: String(r[6] || '').trim(),
+      defaultQuantity: Number(r[7] || 1),
+      notes: String(r[8] || '').trim()
+    });
+  }
+
+  return { success: true, catalog: catalog };
+}
+
+function saveGtinCatalogBatch_(p) {
+  var products = p.products || [];
+  if (!Array.isArray(products) || products.length === 0) {
+    return { success: false, error: 'Products array is required' };
+  }
+
+  var sh = getGtinCatalogSheet_();
+  var data = sh.getDataRange().getValues();
+  var existingMap = {};
+
+  for (var i = 1; i < data.length; i++) {
+    var g = String(data[i][1] || '').trim();
+    if (g) existingMap[g] = i + 1;
+  }
+
+  var now = new Date();
+  for (var j = 0; j < products.length; j++) {
+    var prod = products[j];
+    var gtin = String(prod.gtin || '').trim();
+    if (!gtin) continue;
+
+    var rowValues = [
+      now,
+      gtin,
+      prod.sku || '',
+      prod.productName || '',
+      prod.shortName || prod.productName || '',
+      prod.category || '',
+      prod.imageUrl || '',
+      prod.defaultQuantity || 1,
+      prod.notes || ''
+    ];
+
+    if (existingMap[gtin]) {
+      sh.getRange(existingMap[gtin], 1, 1, rowValues.length).setValues([rowValues]);
+    } else {
+      sh.appendRow(rowValues);
+      existingMap[gtin] = sh.getLastRow();
+    }
+  }
+
+  return { success: true, count: products.length };
+}
+
+/**
+ * Reads from a user's separate external Google Sheet containing GTIN barcodes!
+ * Automatically discovers columns: GTIN, SKU, Product Name, Short Name, Image URL.
+ */
+function syncExternalGtinSheet_(p) {
+  var sheetInput = String(p.gtinSheetId || '').trim();
+  if (!sheetInput) return { success: false, error: 'Google Sheet ID or URL is required' };
+
+  var match = sheetInput.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+  var cleanId = match ? match[1] : sheetInput;
+
+  var extSpreadsheet;
+  try {
+    extSpreadsheet = SpreadsheetApp.openById(cleanId);
+  } catch (err) {
+    return {
+      success: false,
+      error: 'Cannot open Google Sheet (' + cleanId + '). Ensure the spreadsheet is shared with access or the Apps Script service account: ' + err.message
+    };
+  }
+
+  var targetTabName = String(p.tabName || '').trim();
+  var extSheet = targetTabName ? extSpreadsheet.getSheetByName(targetTabName) : null;
+  if (!extSheet) {
+    extSheet = extSpreadsheet.getSheets()[0];
+  }
+
+  if (!extSheet) {
+    return { success: false, error: 'No sheet tabs found in spreadsheet' };
+  }
+
+  var data = extSheet.getDataRange().getValues();
+  if (data.length <= 1) {
+    return { success: true, items: [], count: 0, message: 'Google Sheet tab is empty' };
+  }
+
+  var headers = data[0].map(function(h) { return String(h || '').trim().toLowerCase(); });
+
+  // Intelligent column detection
+  var gtinIdx = -1, skuIdx = -1, nameIdx = -1, shortNameIdx = -1, imgIdx = -1, catIdx = -1;
+
+  for (var c = 0; c < headers.length; c++) {
+    var h = headers[c];
+    if (gtinIdx === -1 && (h.indexOf('gtin') !== -1 || h.indexOf('barcode') !== -1 || h.indexOf('ean') !== -1 || h.indexOf('upc') !== -1 || h === 'code')) {
+      gtinIdx = c;
+    } else if (skuIdx === -1 && (h.indexOf('sku') !== -1 || h.indexOf('item code') !== -1 || h.indexOf('product code') !== -1 || h.indexOf('style') !== -1 || h.indexOf('model') !== -1)) {
+      skuIdx = c;
+    } else if (nameIdx === -1 && (h.indexOf('product name') !== -1 || h.indexOf('product') !== -1 || h.indexOf('title') !== -1 || h.indexOf('item name') !== -1 || h.indexOf('description') !== -1)) {
+      nameIdx = c;
+    } else if (shortNameIdx === -1 && (h.indexOf('short') !== -1 || h.indexOf('display name') !== -1 || h.indexOf('nickname') !== -1)) {
+      shortNameIdx = c;
+    } else if (imgIdx === -1 && (h.indexOf('image') !== -1 || h.indexOf('photo') !== -1 || h.indexOf('picture') !== -1 || h.indexOf('img') !== -1 || h.indexOf('link') !== -1)) {
+      imgIdx = c;
+    } else if (catIdx === -1 && (h.indexOf('category') !== -1 || h.indexOf('department') !== -1 || h.indexOf('type') !== -1)) {
+      catIdx = c;
+    }
+  }
+
+  // Fallbacks if not explicitly found by keywords
+  if (gtinIdx === -1) gtinIdx = 0; // Assume 1st column is GTIN
+  if (skuIdx === -1) skuIdx = 1 < headers.length ? 1 : 0;
+  if (nameIdx === -1) nameIdx = 2 < headers.length ? 2 : skuIdx;
+
+  var items = [];
+  for (var r = 1; r < data.length; r++) {
+    var row = data[r];
+    var rawGtin = String(row[gtinIdx] || '').trim();
+    if (!rawGtin) continue;
+
+    var rawSku = skuIdx >= 0 ? String(row[skuIdx] || '').trim() : '';
+    var rawName = nameIdx >= 0 ? String(row[nameIdx] || '').trim() : rawSku || rawGtin;
+    var rawShort = shortNameIdx >= 0 && row[shortNameIdx] ? String(row[shortNameIdx]).trim() : rawName;
+    var rawImg = imgIdx >= 0 ? String(row[imgIdx] || '').trim() : '';
+    var rawCat = catIdx >= 0 ? String(row[catIdx] || '').trim() : 'General';
+
+    items.push({
+      gtin: rawGtin,
+      sku: rawSku || rawGtin,
+      productName: rawName || rawSku,
+      shortName: rawShort || rawName,
+      imageUrl: rawImg,
+      category: rawCat
+    });
+  }
+
+  // Also sync these items into the master spreadsheet GTINCatalog tab for unified offline/online access
+  try {
+    saveGtinCatalogBatch_({ products: items });
+  } catch (syncErr) {
+    console.warn('Could not mirror to internal GTIN catalog: ' + syncErr.message);
+  }
+
+  return {
+    success: true,
+    items: items,
+    count: items.length,
+    sheetTitle: extSpreadsheet.getName(),
+    tabName: extSheet.getName()
+  };
+}
+
 
 

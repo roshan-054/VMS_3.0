@@ -24,13 +24,16 @@ import {
   RefreshCw,
   Sparkles,
   Smartphone,
-  QrCode
+  QrCode,
+  PackagePlus
 } from 'lucide-react';
 import { User, QueueItem } from './types';
 import { getStoredToken, setStoredToken, dbGetAllQueue, getStoredAutoRefreshInterval, getStoredNightMode, setStoredNightMode, clearUserCache } from './lib/storage';
 import { getStoredBranding, subscribeBranding, applyFavicon, BrandingConfig } from './lib/branding';
+import { getStoredManifests } from './lib/manifestStorage';
 import { initUploadWorker } from './lib/uploadWorker';
 import { ScanRecord } from './components/ScanRecord';
+import { OrderProcessing } from './components/OrderProcessing';
 import { UploadQueue } from './components/UploadQueue';
 import { UploadLogs } from './components/UploadLogs';
 import { SearchOrders } from './components/SearchOrders';
@@ -82,13 +85,16 @@ export function App() {
   };
 
   const [activeTab, setActiveTab] = useState<
-    'record' | 'queue' | 'logs' | 'search' | 'reports' | 'analytics' | 'health' | 'admin'
+    'record' | 'processing' | 'queue' | 'logs' | 'search' | 'reports' | 'analytics' | 'health' | 'admin'
   >('record');
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isNightMode, setIsNightMode] = useState<boolean>(() => getStoredNightMode());
   const [pendingQueueCount, setPendingQueueCount] = useState(0);
+  const [pendingManifestCount, setPendingManifestCount] = useState<number>(() => {
+    return getStoredManifests().filter((m) => m.status === 'Pending').length;
+  });
   const [isClearingCache, setIsClearingCache] = useState(false);
   const [isCacheClearModalOpen, setIsCacheClearModalOpen] = useState(false);
   const [toastInfo, setToastInfo] = useState<{
@@ -197,14 +203,22 @@ export function App() {
       refreshQueueBadge();
     };
 
+    const handleManifestChange = () => {
+      const pending = getStoredManifests().filter((m) => m.status === 'Pending').length;
+      setPendingManifestCount(pending);
+    };
+
     window.addEventListener('ops_queue_updated', handleQueueChange);
+    window.addEventListener('vms_manifests_updated', handleManifestChange);
     refreshQueueBadge();
+    handleManifestChange();
     const intervalMs = getStoredAutoRefreshInterval() * 1000;
     const timer = setInterval(refreshQueueBadge, intervalMs);
 
     return () => {
       cleanupWorker();
       window.removeEventListener('ops_queue_updated', handleQueueChange);
+      window.removeEventListener('vms_manifests_updated', handleManifestChange);
       clearInterval(timer);
     };
   }, []);
@@ -259,6 +273,7 @@ export function App() {
 
   const navItems = [
     { id: 'record', label: 'Scan & Record', icon: Camera },
+    { id: 'processing', label: 'Order Processing', icon: PackagePlus, badge: pendingManifestCount },
     { id: 'queue', label: 'Upload Queue', icon: UploadCloud, badge: pendingQueueCount },
     { id: 'logs', label: 'Upload Logs', icon: FileClock },
     ...(canUserAccessSearch(currentUser) ? [{ id: 'search', label: 'Search Videos', icon: Search }] : []),
@@ -510,6 +525,13 @@ export function App() {
               onQueueUpdated={refreshQueueBadge}
               onShowToast={showToast}
               currentUser={currentUser}
+            />
+          )}
+
+          {activeTab === 'processing' && (
+            <OrderProcessing
+              currentUser={currentUser}
+              onShowToast={showToast}
             />
           )}
 
