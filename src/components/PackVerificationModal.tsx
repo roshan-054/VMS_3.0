@@ -259,44 +259,6 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
     processGtinScan(code);
   };
 
-  const handleManualVerifyItem = (targetIndex: number) => {
-    const targetItem = items[targetIndex];
-    if (!targetItem || targetItem.scannedCount >= targetItem.quantity) return;
-
-    playAudioFeedback('success');
-    setMismatchError(null);
-
-    const updatedItems = [...items];
-    updatedItems[targetIndex] = {
-      ...targetItem,
-      scannedCount: targetItem.scannedCount + 1,
-    };
-    setItems(updatedItems);
-    onShowToast(`✓ Verified: ${targetItem.shortName || targetItem.productName} (${updatedItems[targetIndex].scannedCount}/${targetItem.quantity})`, 'success');
-
-    const allDone = updatedItems.every((it) => it.scannedCount >= it.quantity);
-    if (allDone) {
-      setIsFullyVerified(true);
-      playAudioFeedback('celebrate');
-      logPackVerification({
-        timestamp: new Date().toISOString(),
-        orderId: manifest.orderId,
-        platform: manifest.platform,
-        assignedPacker: manifest.assignedPackerName,
-        verifiedByPacker: currentUser?.name || 'Packer',
-        packerEmail: currentUser?.email || 'packer@ops.local',
-        processedBy: manifest.processedByName,
-        status: 'MATCHED',
-        totalRequired: updatedItems.reduce((s, it) => s + it.quantity, 0),
-        totalScanned: updatedItems.reduce((s, it) => s + it.scannedCount, 0),
-        itemsSummary: updatedItems.map((it) => `${it.shortName}: ${it.scannedCount}/${it.quantity}`).join(', '),
-        scannedGtinsLog: [...scannedHistory, targetItem.gtin || targetItem.sku || 'MANUAL'],
-        durationSeconds: Math.round((Date.now() - startTimeRef.current) / 1000),
-        notes: 'Items verified (includes manual verification)',
-      });
-    }
-  };
-
   const handleProceedToRecord = () => {
     onVerifiedAndProceed(items);
   };
@@ -545,7 +507,7 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
                   </div>
                   <div className="flex items-center gap-1.5">
                     <span
-                      className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase ${
+                      className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase ${
                         isItemDone
                           ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50'
                           : 'bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse'
@@ -553,16 +515,6 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
                     >
                       {isItemDone ? 'Verified' : 'Needs Scan'}
                     </span>
-                    {!isItemDone && (
-                      <button
-                        type="button"
-                        onClick={() => handleManualVerifyItem(idx)}
-                        className="px-2 py-0.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-[10px] font-bold rounded-lg transition cursor-pointer shadow-xs"
-                        title="Verify item manually (e.g. if item lacks barcode)"
-                      >
-                        Verify +1
-                      </button>
-                    )}
                   </div>
                 </div>
               </div>

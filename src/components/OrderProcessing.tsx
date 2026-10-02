@@ -51,11 +51,13 @@ import {
   saveGtinSheetConfig,
   syncGtinFromGoogleSheet,
   syncGtinWithMasterSheet,
+  syncManifestsWithCloud,
+  syncVerificationLogsWithCloud,
   getStoredVerificationLogs,
   extractSpreadsheetId
 } from '../lib/manifestStorage';
 import { requestApi } from '../lib/api';
-import { isAdmin } from '../lib/permissions';
+import { isAdmin, isMasterAdmin } from '../lib/permissions';
 
 interface OrderProcessingProps {
   currentUser: User | null;
@@ -170,7 +172,15 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     }
   ]);
 
-  // Load registered users from API
+  // Filter registered users: ONLY user/packer role accounts (no Admin accounts in packer dropdown)
+  const availablePackers = useMemo(() => {
+    return registeredUsers.filter((u) => {
+      const isAdm = isAdmin(u) || isMasterAdmin(u) || u.role === 'Admin' || u.role === 'Master Admin';
+      return !isAdm && (u.status === 'Approved' || !u.status);
+    });
+  }, [registeredUsers]);
+
+  // Load registered users and sync live data from Master Sheet in real-time
   useEffect(() => {
     let isMounted = true;
     const loadUsers = async () => {
@@ -179,10 +189,16 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         const res = await requestApi<{ users: User[] }>('getUsers', {});
         if (isMounted && res && res.users && Array.isArray(res.users)) {
           setRegisteredUsers(res.users);
-          // Auto-select first active packer if not selected
-          const activePacker = res.users.find((u) => u.status === 'Approved' && u.email !== currentUser?.email);
-          if (activePacker && !assignedPackerEmail) {
-            setAssignedPackerEmail(activePacker.email);
+          // Auto-select first active standard user if not selected
+          const firstPacker = res.users.find(
+            (u) =>
+              (u.status === 'Approved' || !u.status) &&
+              u.role === 'User' &&
+              !isAdmin(u) &&
+              !isMasterAdmin(u)
+          );
+          if (firstPacker && !assignedPackerEmail) {
+            setAssignedPackerEmail(firstPacker.email);
           }
         }
       } catch (e) {
@@ -193,7 +209,24 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     };
     loadUsers();
 
-    // Listen to updates from other tabs
+    // Initial background real-time sync with Google Sheet
+    syncGtinWithMasterSheet().catch(() => {});
+    syncManifestsWithCloud().catch(() => {});
+    syncVerificationLogsWithCloud().catch(() => {});
+
+    // Periodic Real-Time Polling for live manifest creation and completion
+    const syncInterval = setInterval(() => {
+      syncManifestsWithCloud().catch(() => {});
+      syncVerificationLogsWithCloud().catch(() => {});
+    }, 10000);
+
+    const handleWindowFocus = () => {
+      syncManifestsWithCloud().catch(() => {});
+      syncVerificationLogsWithCloud().catch(() => {});
+    };
+    window.addEventListener('focus', handleWindowFocus);
+
+    // Listen to updates from other tabs / local actions
     const handleManifestUpdate = () => setManifests(getStoredManifests());
     const handleGtinUpdate = () => setGtinCatalog(getStoredGtinCatalog());
     const handleLogsUpdate = () => setVerificationLogs(getStoredVerificationLogs());
@@ -204,6 +237,8 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
     return () => {
       isMounted = false;
+      clearInterval(syncInterval);
+      window.removeEventListener('focus', handleWindowFocus);
       window.removeEventListener('vms_manifests_updated', handleManifestUpdate);
       window.removeEventListener('vms_gtin_catalog_updated', handleGtinUpdate);
       window.removeEventListener('vms_verification_logs_updated', handleLogsUpdate);
@@ -297,21 +332,6 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         }
       }
     }
-  };
-
-  const handleAutoAssignBarcode = (index: number) => {
-    const random10 = Math.floor(1000000000 + Math.random() * 9000000000);
-    const generatedGtin = `890${random10}`;
-    setOrderItems((prev) => {
-      const updated = [...prev];
-      updated[index] = {
-        ...updated[index],
-        gtin: generatedGtin,
-        sku: updated[index].sku || `SKU-${Date.now().toString().slice(-6)}`
-      };
-      return updated;
-    });
-    onShowToast(`Auto-assigned Barcode: ${generatedGtin}`, 'info');
   };
 
   // Submit Order Manifest Pre-Entry
@@ -738,14 +758,15 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         continue; // Skip empty rows
       }
 
-      // If GTIN is missing, auto-generate a valid barcode so it has an identifier
+      // Use provided barcode, or fallback to SKU if barcode not specified
       if (!cleanGtin) {
-        const random10 = Math.floor(1000000000 + Math.random() * 9000000000);
-        cleanGtin = `890${random10}`;
+        cleanGtin = r.sku.trim().toUpperCase();
       }
 
+      if (!cleanGtin) continue;
+
       const sku = (r.sku.trim() || cleanGtin).toUpperCase();
-      const name = r.productName.trim() || `Product ${cleanGtin}`;
+      const name = r.productName.trim() || `Product ${sku}`;
       const shortName = r.shortName.trim() || name;
 
       validProducts.push({
@@ -759,7 +780,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     }
 
     if (validProducts.length === 0) {
-      onShowToast('Please enter at least 1 valid product with GTIN Barcode, SKU, or Name.', 'error');
+      onShowToast('Please enter valid product rows with GTIN Barcode or SKU.', 'error');
       return;
     }
 
@@ -821,7 +842,9 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         const gtin = normalizeBarcode(rawGtin);
         if (!gtin && !cols[skuIdx] && !cols[nameIdx]) continue;
 
-        const effectiveGtin = gtin || `890${Math.floor(1000000000 + Math.random() * 9000000000)}`;
+        const effectiveGtin = gtin || (cols[skuIdx] ? cols[skuIdx].trim().toUpperCase() : '');
+        if (!effectiveGtin) continue;
+
         const sku = skuIdx >= 0 && cols[skuIdx] ? cols[skuIdx].trim().toUpperCase() : effectiveGtin;
         const name = nameIdx >= 0 && cols[nameIdx] ? cols[nameIdx].trim() : sku;
         const shortName = shortIdx >= 0 && cols[shortIdx] ? cols[shortIdx].trim() : name;
@@ -1134,7 +1157,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
               )}
             </div>
 
-            {/* Assigned Packer Selection */}
+            {/* Assigned Packer Selection (User Accounts Only) */}
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1.5">
                 Assign to Packer / Operator <span className="text-red-500">*</span>
@@ -1147,15 +1170,14 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                   className="w-full pl-3.5 pr-8 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:border-indigo-500 cursor-pointer shadow-inner"
                 >
                   <option value="">-- Choose Assigned Packer --</option>
-                  {registeredUsers.map((u) => (
+                  {availablePackers.map((u) => (
                     <option key={u.email} value={u.email}>
                       {u.name} ({u.email}) - {u.role}
                     </option>
                   ))}
-                  {/* Fallback to current user if no other users registered */}
-                  {currentUser && (
-                    <option value={currentUser.email}>
-                      {currentUser.name} (Myself / Current User)
+                  {availablePackers.length === 0 && (
+                    <option value="" disabled>
+                      No user accounts found. Please add a Packer in Admin &amp; Users.
                     </option>
                   )}
                 </select>
@@ -1380,17 +1402,9 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                             setActiveSuggestion({ rowIndex: index, field: 'gtin' });
                           }}
                           placeholder="Scan or type barcode..."
-                          className="w-full pl-8 pr-14 py-2 bg-white border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900 focus:outline-none focus:border-indigo-500 shadow-inner"
+                          className="w-full pl-8 pr-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900 focus:outline-none focus:border-indigo-500 shadow-inner"
                         />
                         <Barcode className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                        <button
-                          type="button"
-                          onClick={() => handleAutoAssignBarcode(index)}
-                          className="absolute right-1.5 top-1/2 -translate-y-1/2 px-1.5 py-0.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[9px] font-mono font-bold rounded-md border border-indigo-200 transition cursor-pointer"
-                          title="Generate a 13-digit GTIN barcode for custom/new products"
-                        >
-                          + Auto
-                        </button>
                       </div>
 
                       {/* Dropdown Suggestions for GTIN */}

@@ -615,6 +615,62 @@ export async function logPackVerification(log: PackVerificationLog): Promise<voi
   } catch (_) {}
 }
 
+/**
+ * Real-Time Cloud Sync: Fetch live manifest orders from Google Sheet ("Manifest_Orders" tab)
+ * Allows Admin and Packers to see real-time order creation, status changes, and completion.
+ */
+export async function syncManifestsWithCloud(): Promise<{ success: boolean; manifests?: OrderManifest[]; error?: string }> {
+  try {
+    const res = await requestApi<{ success: boolean; manifests?: OrderManifest[]; error?: string }>('getOrderManifests', {});
+    if (res && res.success && Array.isArray(res.manifests)) {
+      if (res.manifests.length > 0) {
+        // Merge cloud manifests with local manifests
+        const local = getStoredManifests();
+        const map = new Map<string, OrderManifest>();
+        local.forEach((m) => map.set(m.orderId.toUpperCase(), m));
+        res.manifests.forEach((m) => {
+          if (m.orderId) {
+            map.set(m.orderId.toUpperCase(), m);
+          }
+        });
+        const merged = Array.from(map.values());
+        saveStoredManifests(merged);
+        return { success: true, manifests: merged };
+      }
+    }
+    return { success: true, manifests: getStoredManifests() };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Manifest cloud sync error' };
+  }
+}
+
+/**
+ * Real-Time Cloud Sync: Fetch live pack verification logs from Google Sheet ("PackVerificationLog" tab)
+ */
+export async function syncVerificationLogsWithCloud(): Promise<{ success: boolean; logs?: PackVerificationLog[]; error?: string }> {
+  try {
+    const res = await requestApi<{ success: boolean; logs?: PackVerificationLog[]; error?: string }>('getPackVerificationLogs', {});
+    if (res && res.success && Array.isArray(res.logs)) {
+      if (res.logs.length > 0) {
+        const local = getStoredVerificationLogs();
+        const map = new Map<string, PackVerificationLog>();
+        local.forEach((l) => map.set(`${l.orderId}_${l.timestamp}`, l));
+        res.logs.forEach((l) => {
+          if (l.orderId) {
+            map.set(`${l.orderId}_${l.timestamp}`, l);
+          }
+        });
+        const merged = Array.from(map.values()).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        saveStoredVerificationLogs(merged);
+        return { success: true, logs: merged };
+      }
+    }
+    return { success: true, logs: getStoredVerificationLogs() };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Verification logs cloud sync error' };
+  }
+}
+
 // --- Verification Station Settings ---
 
 export function getVerificationSettings(): VerificationSettings {
