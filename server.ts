@@ -112,12 +112,13 @@ async function startServer() {
       });
     }
 
-    // 2. HTTP clients (active within last 25 seconds)
+    // 2. HTTP clients (active within last 4.5 seconds)
+    const activeHttpPhoneClientIds = new Set<string>();
     if (httpMap) {
       httpMap.forEach((entry, clientId) => {
-        if (now - entry.lastSeen < 25000) {
+        if (now - entry.lastSeen < 4500) {
           if (entry.role === 'phone') {
-            httpPhones++;
+            activeHttpPhoneClientIds.add(clientId);
             activePhoneDevices.add(entry.deviceName || 'Mobile Phone');
           } else {
             httpStations++;
@@ -128,8 +129,8 @@ async function startServer() {
       });
     }
 
-    const finalPhones = Math.max(wsPhones, httpPhones, activePhoneDevices.size);
-    const finalStations = Math.max(wsStations, httpStations);
+    const finalPhones = wsPhones > 0 ? wsPhones : activeHttpPhoneClientIds.size;
+    const finalStations = wsStations > 0 ? wsStations : httpStations;
 
     return {
       connectedPhones: finalPhones,

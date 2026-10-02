@@ -11,6 +11,7 @@
  */
 
 import { getStoredApiUrl } from './storage';
+import Peer, { type DataConnection } from 'peerjs';
 
 export function cleanStationPin(pin?: string): string {
   const digits = String(pin || '').replace(/\D/g, '').slice(0, 4);
@@ -40,6 +41,9 @@ export type RemoteCommandListener = (action: string, deviceName?: string) => voi
 
 class PhoneScannerSync {
   private ws: WebSocket | null = null;
+  private peer: Peer | null = null;
+  private peerConnections: Set<DataConnection> = new Set();
+  private stationPeerId: string = '';
   private stationId: string = '';
   private stationPin: string = '';
   private role: 'station' | 'phone' = 'station';
@@ -73,7 +77,12 @@ class PhoneScannerSync {
   private audioCtx: AudioContext | null = null;
 
   constructor() {
-    this.clientId = `client-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    let savedClientId = localStorage.getItem('vms_scanner_device_id');
+    if (!savedClientId) {
+      savedClientId = `dev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      localStorage.setItem('vms_scanner_device_id', savedClientId);
+    }
+    this.clientId = savedClientId;
     this.initStationCredentials();
     this.startHttpSyncLoop();
     this.connectWs();
@@ -129,12 +138,17 @@ class PhoneScannerSync {
     return this.stationId;
   }
 
+  public getStationPeerId(): string {
+    return this.stationPeerId;
+  }
+
   public getPairingUrl(targetPin?: string): string {
-    const pin = cleanStationPin(targetPin || this.stationPin);
+    const pin = cleanStationPin(targetPin || this.stationPin) || '5829';
     const origin = window.location.origin;
     const pathname = window.location.pathname || '/';
     const cleanPath = pathname.endsWith('/') ? pathname : `${pathname}/`;
-    return `${origin}${cleanPath}?scanner=mobile&pin=${pin}`;
+    const peerParam = this.stationPeerId ? `&peer=${encodeURIComponent(this.stationPeerId)}` : '';
+    return `${origin}${cleanPath}?scanner=mobile&pin=${pin}${peerParam}`;
   }
 
   /**
@@ -204,10 +218,12 @@ class PhoneScannerSync {
   public connectAsStation(onBarcode?: BarcodeListener, onStatus?: PhoneStatusListener) {
     this.role = 'station';
     this.deviceName = 'Packing Station';
-    this.stationPin = cleanStationPin(this.stationPin);
+    this.stationPin = cleanStationPin(this.stationPin) || '5829';
     this.stationId = cleanStationId(this.stationPin);
     if (onBarcode) this.onBarcode(onBarcode);
     if (onStatus) this.onPhoneStatus(onStatus);
+
+    this.initStationPeer();
 
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({
@@ -228,13 +244,15 @@ class PhoneScannerSync {
   /**
    * Connect as Mobile Phone Scanner
    */
-  public connectAsPhone(stationPin: string, phoneName: string = 'Mobile Phone') {
+  public connectAsPhone(stationPin: string, phoneName: string = 'Mobile Phone', targetPeerId?: string) {
     this.role = 'phone';
-    this.stationPin = cleanStationPin(stationPin);
+    this.stationPin = cleanStationPin(stationPin) || '5829';
     this.stationId = cleanStationId(this.stationPin);
     this.deviceName = phoneName;
     this.lastPolledTimestamp = Date.now() - 3000;
     this.lastStationSeenTime = Date.now();
+
+    this.initPhonePeer(this.stationPin, targetPeerId);
 
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({
@@ -250,6 +268,123 @@ class PhoneScannerSync {
 
     this.pairInstant();
     this.pollHttpEvents();
+  }
+
+  private initStationPeer() {
+    if (this.peer && !this.peer.destroyed) return;
+
+    const basePin = cleanStationPin(this.stationPin) || '5829';
+    const desiredId = `vms3-station-${basePin}`;
+    this.stationPeerId = desiredId;
+
+    try {
+      this.peer = new Peer(desiredId, {
+        debug: 0,
+      });
+
+      this.peer.on('open', (id) => {
+        this.stationPeerId = id;
+      });
+
+      this.peer.on('connection', (conn) => {
+        this.setupStationPeerConnection(conn);
+      });
+
+      this.peer.on('error', (err: any) => {
+        // If desired ID is busy, fallback to randomized unique ID
+        if (err?.type === 'unavailable-id') {
+          try { this.peer?.destroy(); } catch (e) {}
+          const fallbackId = `vms3-st-${basePin}-${Math.random().toString(36).slice(2, 6)}`;
+          this.stationPeerId = fallbackId;
+          this.peer = new Peer(fallbackId, { debug: 0 });
+          this.peer.on('open', (id) => {
+            this.stationPeerId = id;
+          });
+          this.peer.on('connection', (conn) => {
+            this.setupStationPeerConnection(conn);
+          });
+        }
+      });
+    } catch (e) {}
+  }
+
+  private setupStationPeerConnection(conn: DataConnection) {
+    conn.on('open', () => {
+      this.peerConnections.add(conn);
+      const devName = (conn.metadata && conn.metadata.deviceName) || 'Mobile Phone';
+      this.emitStatus(true, Math.max(1, this.peerConnections.size), devName);
+      try {
+        conn.send({ type: 'PONG', serverTime: Date.now() });
+      } catch (e) {}
+    });
+
+    conn.on('data', (data: any) => {
+      if (typeof data === 'object' && data !== null) {
+        this.handleIncomingMessage(data);
+      }
+    });
+
+    conn.on('close', () => {
+      this.peerConnections.delete(conn);
+      this.emitStatus(this.peerConnections.size > 0, this.peerConnections.size);
+    });
+
+    conn.on('error', () => {
+      this.peerConnections.delete(conn);
+      this.emitStatus(this.peerConnections.size > 0, this.peerConnections.size);
+    });
+  }
+
+  private initPhonePeer(stationPin: string, targetPeerId?: string) {
+    if (this.peer && !this.peer.destroyed) {
+      if (targetPeerId) {
+        this.connectPeerToStation(targetPeerId);
+      }
+      return;
+    }
+
+    try {
+      this.peer = new Peer({ debug: 0 });
+
+      this.peer.on('open', () => {
+        const dest = targetPeerId || `vms3-station-${cleanStationPin(stationPin) || '5829'}`;
+        this.connectPeerToStation(dest);
+      });
+
+      this.peer.on('error', (_e) => {
+        // Fallback handled by parallel WebSocket/HTTP polling
+      });
+    } catch (e) {}
+  }
+
+  private connectPeerToStation(destId: string) {
+    if (!this.peer || this.peer.destroyed) return;
+    try {
+      const conn = this.peer.connect(destId, {
+        metadata: { deviceName: this.deviceName, clientId: this.clientId },
+        reliable: true,
+      });
+
+      conn.on('open', () => {
+        this.peerConnections.clear();
+        this.peerConnections.add(conn);
+        this.emitStatus(true, 1, 'Packing Station');
+      });
+
+      conn.on('data', (data: any) => {
+        if (typeof data === 'object' && data !== null) {
+          this.handleIncomingMessage(data);
+        }
+      });
+
+      conn.on('close', () => {
+        this.peerConnections.delete(conn);
+      });
+
+      conn.on('error', () => {
+        this.peerConnections.delete(conn);
+      });
+    } catch (e) {}
   }
 
   /**
@@ -538,6 +673,23 @@ class PhoneScannerSync {
   }
 
   public reconnect() {
+    try {
+      this.peerConnections.forEach((c) => {
+        try { c.close(); } catch (e) {}
+      });
+      this.peerConnections.clear();
+      if (this.peer) {
+        try { this.peer.destroy(); } catch (e) {}
+        this.peer = null;
+      }
+    } catch (e) {}
+
+    if (this.role === 'station') {
+      this.initStationPeer();
+    } else {
+      this.initPhonePeer(this.stationPin);
+    }
+
     if (this.ws) {
       try { this.ws.close(); } catch (e) {}
       this.ws = null;
@@ -569,14 +721,23 @@ class PhoneScannerSync {
       timestamp: Date.now(),
     };
 
-    // 1. WebSocket instant relay
+    // 1. Direct WebRTC P2P transmission (<5ms, zero server dependency, works on GitHub/Vercel/Static)
+    this.peerConnections.forEach((conn) => {
+      if (conn.open) {
+        try {
+          conn.send(payload);
+        } catch (e) {}
+      }
+    });
+
+    // 2. WebSocket instant relay (when running with Node.js server)
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       try {
         this.ws.send(JSON.stringify({ ...payload, type: 'SCAN_BARCODE' }));
       } catch (e) {}
     }
 
-    // 2. HTTP broadcast backup
+    // 3. HTTP broadcast backup
     try {
       const res = await fetch('/api/scanner/broadcast', {
         method: 'POST',

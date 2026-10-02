@@ -1050,6 +1050,11 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       (barcode, _format, _platform, device) => {
         const cleaned = cleanBarcode(barcode);
         if (cleaned) {
+          // If the scanned code is the station pairing QR code itself, do not set as Order ID
+          if (cleaned.includes('scanner=mobile') || cleaned.includes('pin=') || cleaned.startsWith('http://') || cleaned.startsWith('https://')) {
+            onShowToast('Pairing QR code detected. Scanner is already connected!', 'info');
+            return;
+          }
           setOrderId(cleaned);
           detectPlatformAndType(cleaned);
           onShowToast(`📱 Phone Scanned: ${cleaned} (${device || 'Mobile Phone'})`, 'success');

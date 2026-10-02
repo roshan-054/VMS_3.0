@@ -52,9 +52,11 @@ export const PhoneScannerModal: React.FC<PhoneScannerModalProps> = ({
 
   const getResolvedPairingUrl = () => {
     const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const peerId = sharedScannerSync.getStationPeerId();
+    const peerParam = peerId ? `&peer=${encodeURIComponent(peerId)}` : '';
     if (isLocalhost && lanIp) {
       const port = window.location.port ? `:${window.location.port}` : '';
-      return `http://${lanIp}${port}/?scanner=mobile&pin=${stationPin}`;
+      return `http://${lanIp}${port}/?scanner=mobile&pin=${stationPin}${peerParam}`;
     }
     return sharedScannerSync.getPairingUrl(stationPin);
   };

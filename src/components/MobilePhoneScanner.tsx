@@ -85,7 +85,10 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
       ? 'Android'
       : 'Mobile Phone';
 
-    sharedScannerSync.connectAsPhone(effectivePin, phoneModel);
+    const urlParams = new URLSearchParams(window.location.search);
+    const peerFromUrl = urlParams.get('peer') || '';
+
+    sharedScannerSync.connectAsPhone(effectivePin, phoneModel, peerFromUrl);
     sharedScannerSync.pairInstant();
 
     const unsubStatus = sharedScannerSync.onPhoneStatus((connected, _count, _dev, ping) => {
