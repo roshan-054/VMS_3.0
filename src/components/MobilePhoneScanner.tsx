@@ -22,7 +22,8 @@ import {
   Check,
   Volume2,
   X,
-  Target
+  Target,
+  Radio
 } from 'lucide-react';
 import { BrowserMultiFormatReader } from '@zxing/library';
 import { sharedScannerSync } from '../lib/phoneScannerSync';
@@ -93,7 +94,13 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
       if (ping) setLatencyMs(ping);
     });
 
+    // Fast polling while active on mobile to ensure instant pairing handshake with PC
+    const phonePoll = setInterval(() => {
+      sharedScannerSync.forceSync();
+    }, 600);
+
     return () => {
+      clearInterval(phonePoll);
       unsubStatus();
     };
   }, [stationPin]);
@@ -359,16 +366,37 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
       {/* Top Header Bar */}
       <div className="p-3 bg-slate-950/90 backdrop-blur-md border-b border-slate-800 flex items-center justify-between z-30 shrink-0">
         <div className="flex items-center gap-2.5">
-          <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_rgba(52,211,153,0.9)]" />
+          <div
+            className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+              isConnected
+                ? 'bg-emerald-400 animate-pulse shadow-[0_0_8px_rgba(52,211,153,0.9)]'
+                : 'bg-amber-400 animate-pulse'
+            }`}
+          />
           <div>
             <div className="flex items-center gap-1.5">
               <span className="text-xs font-bold text-slate-100">Station {stationPin}</span>
-              <span className="text-[10px] font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-1.5 py-0.2 rounded font-bold">
-                CONNECTED
-              </span>
+              {isConnected ? (
+                <span className="text-[10px] font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-1.5 py-0.2 rounded font-bold flex items-center gap-1">
+                  <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" />
+                  CONNECTED
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => sharedScannerSync.forceSync()}
+                  className="text-[10px] font-mono bg-amber-500/20 text-amber-300 border border-amber-500/40 px-1.5 py-0.2 rounded font-bold flex items-center gap-1 animate-pulse cursor-pointer"
+                  title="Click to re-sync with workstation"
+                >
+                  <Radio className="w-2.5 h-2.5 text-amber-400" />
+                  CONNECTING…
+                </button>
+              )}
             </div>
             <span className="text-[10px] text-slate-400 block font-mono">
-              Live Wireless Barcode Reader {latencyMs > 0 ? `(~${latencyMs}ms)` : ''}
+              {isConnected
+                ? `Live Wireless Barcode Reader ${latencyMs > 0 ? `(~${latencyMs}ms)` : ''}`
+                : 'Connecting to workstation… (Tap to re-sync)'}
             </span>
           </div>
         </div>

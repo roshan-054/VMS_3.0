@@ -55,6 +55,10 @@ export const PhoneScannerModal: React.FC<PhoneScannerModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
 
+    // Actively connect PC workstation as station receiver and force instant handshake
+    sharedScannerSync.connectAsStation();
+    sharedScannerSync.forceSync();
+
     setStationPin(sharedScannerSync.getStationPin());
     setTempPin(sharedScannerSync.getStationPin());
 
@@ -73,7 +77,13 @@ export const PhoneScannerModal: React.FC<PhoneScannerModalProps> = ({
       ]);
     });
 
+    // Fast polling while modal is open to ensure instant (<500ms) pairing detection
+    const activePollTimer = setInterval(() => {
+      sharedScannerSync.forceSync();
+    }, 600);
+
     return () => {
+      clearInterval(activePollTimer);
       unsubStatus();
       unsubBarcode();
     };
@@ -142,6 +152,8 @@ export const PhoneScannerModal: React.FC<PhoneScannerModalProps> = ({
     sharedScannerSync.setStationPin(clean);
     setStationPin(clean);
     setIsEditingPin(false);
+    sharedScannerSync.connectAsStation();
+    sharedScannerSync.forceSync();
     onShowToast(`Station PIN updated to ${clean}`, 'success');
   };
 
@@ -222,9 +234,24 @@ export const PhoneScannerModal: React.FC<PhoneScannerModalProps> = ({
                 Live Sync
               </span>
             ) : (
-              <span className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-400 border border-slate-700 text-xs font-mono shrink-0">
-                Listening…
-              </span>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <span className="px-2.5 py-1 rounded-lg bg-slate-800 text-amber-300/90 border border-slate-700 text-xs font-mono flex items-center gap-1">
+                  <Radio className="w-3 h-3 text-amber-400 animate-pulse" />
+                  Listening…
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    sharedScannerSync.connectAsStation();
+                    sharedScannerSync.forceSync();
+                    onShowToast('Refreshed station receiver socket', 'info');
+                  }}
+                  className="p-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 transition cursor-pointer"
+                  title="Force re-sync with mobile phone"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+              </div>
             )}
           </div>
 

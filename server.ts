@@ -43,7 +43,14 @@ async function startServer() {
   const httpPresence = new Map<string, Map<string, { role: 'station' | 'phone'; deviceName: string; lastSeen: number }>>();
   const recentEvents: ScannerEvent[] = []; // Circular buffer of last 50 events for HTTP poll fallback
 
-  function recordPresence(stationId: string, clientId: string, role: 'station' | 'phone', deviceName: string) {
+  function cleanStationId(raw: any): string {
+    const str = String(raw || '').trim().toLowerCase();
+    const digits = str.replace(/\D/g, '').slice(0, 4);
+    return digits ? `station-${digits}` : (str || 'default');
+  }
+
+  function recordPresence(rawStationId: string, clientId: string, role: 'station' | 'phone', deviceName: string) {
+    const stationId = cleanStationId(rawStationId);
     if (!httpPresence.has(stationId)) {
       httpPresence.set(stationId, new Map());
     }
@@ -54,7 +61,8 @@ async function startServer() {
     });
   }
 
-  function getActiveStationStats(stationId: string) {
+  function getActiveStationStats(rawStationId: string) {
+    const stationId = cleanStationId(rawStationId);
     const now = Date.now();
     const wsRoom = stationRooms.get(stationId);
     const httpMap = httpPresence.get(stationId);
@@ -79,10 +87,10 @@ async function startServer() {
       });
     }
 
-    // 2. HTTP clients (active within last 12 seconds)
+    // 2. HTTP clients (active within last 8 seconds)
     if (httpMap) {
       httpMap.forEach((entry, clientId) => {
-        if (now - entry.lastSeen < 12000) {
+        if (now - entry.lastSeen < 8000) {
           if (entry.role === 'phone') {
             httpPhones++;
             activePhoneDevices.add(entry.deviceName || 'Mobile Phone');
@@ -105,7 +113,8 @@ async function startServer() {
     };
   }
 
-  function broadcastToStation(stationId: string, event: { type: string; [key: string]: any }, excludeSocket?: WebSocket) {
+  function broadcastToStation(rawStationId: string, event: { type: string; [key: string]: any }, excludeSocket?: WebSocket) {
+    const stationId = cleanStationId(rawStationId);
     // Record in fallback buffer
     const entry: ScannerEvent = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -148,30 +157,36 @@ async function startServer() {
       try {
         const msg = JSON.parse(data.toString());
         const type = String(msg.type || '');
-        const stationId = String(msg.stationId || 'default').trim();
+        const stationId = cleanStationId(msg.stationId);
 
         if (type === 'JOIN_STATION') {
+          // Leave old room if changing station
+          if (ws.stationId && ws.stationId !== stationId && stationRooms.has(ws.stationId)) {
+            stationRooms.get(ws.stationId)!.delete(ws);
+          }
+
           ws.stationId = stationId;
           ws.role = msg.role === 'phone' ? 'phone' : 'station';
           ws.deviceName = String(msg.deviceName || (ws.role === 'phone' ? 'Smartphone' : 'Packing Station')).slice(0, 40);
+          const clientId = String(msg.clientId || `ws-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+
+          recordPresence(stationId, clientId, ws.role, ws.deviceName);
 
           if (!stationRooms.has(stationId)) {
             stationRooms.set(stationId, new Set());
           }
           stationRooms.get(stationId)!.add(ws);
 
-          // Count active phones
-          const room = stationRooms.get(stationId)!;
-          const phoneCount = Array.from(room).filter((c) => c.role === 'phone' && c.readyState === WebSocket.OPEN).length;
-          const stationCount = Array.from(room).filter((c) => c.role === 'station' && c.readyState === WebSocket.OPEN).length;
+          const stats = getActiveStationStats(stationId);
 
           // Acknowledge connection
           ws.send(JSON.stringify({
             type: 'JOINED_SUCCESS',
             stationId,
             role: ws.role,
-            connectedPhones: phoneCount,
-            connectedStations: stationCount,
+            connectedPhones: stats.connectedPhones,
+            connectedStations: stats.connectedStations,
+            devices: stats.devices,
             timestamp: Date.now(),
           }));
 
@@ -180,8 +195,9 @@ async function startServer() {
             type: ws.role === 'phone' ? 'PHONE_CONNECTED' : 'STATION_CONNECTED',
             stationId,
             deviceName: ws.deviceName,
-            connectedPhones: phoneCount,
-            connectedStations: stationCount,
+            connectedPhones: stats.connectedPhones,
+            connectedStations: stats.connectedStations,
+            devices: stats.devices,
             timestamp: Date.now(),
           }, ws);
         } else if (type === 'SCAN_BARCODE') {
@@ -224,18 +240,15 @@ async function startServer() {
       if (stationId && stationRooms.has(stationId)) {
         const room = stationRooms.get(stationId)!;
         room.delete(ws);
-        const phoneCount = Array.from(room).filter((c) => c.role === 'phone' && c.readyState === WebSocket.OPEN).length;
-        if (room.size === 0) {
-          stationRooms.delete(stationId);
-        } else {
-          broadcastToStation(stationId, {
-            type: ws.role === 'phone' ? 'PHONE_DISCONNECTED' : 'STATION_DISCONNECTED',
-            stationId,
-            deviceName: ws.deviceName,
-            connectedPhones: phoneCount,
-            timestamp: Date.now(),
-          });
-        }
+        const stats = getActiveStationStats(stationId);
+        broadcastToStation(stationId, {
+          type: ws.role === 'phone' ? 'PHONE_DISCONNECTED' : 'STATION_DISCONNECTED',
+          stationId,
+          deviceName: ws.deviceName,
+          connectedPhones: stats.connectedPhones,
+          connectedStations: stats.connectedStations,
+          timestamp: Date.now(),
+        });
       }
     });
   });
@@ -328,7 +341,8 @@ async function startServer() {
 
   // REST API: Instant Barcode Broadcast (Works as zero-friction fallback if WebSockets are blocked)
   app.post('/api/scanner/broadcast', (req, res) => {
-    const { stationId = 'default', barcode = '', format = 'AUTO', action, deviceName = 'Phone Scanner' } = req.body;
+    const stationId = cleanStationId(req.body.stationId);
+    const { barcode = '', format = 'AUTO', action, deviceName = 'Phone Scanner' } = req.body;
     if (!barcode && !action) {
       return res.status(400).json({ success: false, error: 'Barcode or action is required' });
     }
@@ -341,9 +355,9 @@ async function startServer() {
       payload = { action, deviceName, timestamp: Date.now() };
     }
 
-    const sent = broadcastToStation(String(stationId), {
+    const sent = broadcastToStation(stationId, {
       type: eventType,
-      stationId: String(stationId),
+      stationId,
       ...payload,
     });
 
@@ -357,12 +371,13 @@ async function startServer() {
 
   // REST API: Poll events since timestamp (for HTTP fallback)
   app.get('/api/scanner/poll', (req, res) => {
-    const stationId = String(req.query.stationId || 'default').trim();
+    const stationId = cleanStationId(req.query.stationId);
     const since = Number(req.query.since || 0);
 
-    const matches = recentEvents.filter((e) => e.stationId === stationId && e.timestamp > since);
+    const matches = recentEvents.filter((e) => cleanStationId(e.stationId) === stationId && e.timestamp > since);
     res.json({
       success: true,
+      stationId,
       events: matches,
       serverTime: Date.now(),
     });
@@ -370,9 +385,10 @@ async function startServer() {
 
   // REST API: Heartbeat (keeps station / phone linked even when WebSockets are restricted)
   app.post('/api/scanner/heartbeat', (req, res) => {
-    const { stationId = 'default', clientId = 'anonymous', role = 'phone', deviceName = 'Device' } = req.body;
-    recordPresence(String(stationId), String(clientId), role === 'station' ? 'station' : 'phone', String(deviceName));
-    const stats = getActiveStationStats(String(stationId));
+    const stationId = cleanStationId(req.body.stationId);
+    const { clientId = 'anonymous', role = 'phone', deviceName = 'Device' } = req.body;
+    recordPresence(stationId, String(clientId), role === 'station' ? 'station' : 'phone', String(deviceName));
+    const stats = getActiveStationStats(stationId);
     res.json({
       success: true,
       stationId,
@@ -383,7 +399,7 @@ async function startServer() {
 
   // REST API: Station status
   app.get('/api/scanner/status', (req, res) => {
-    const stationId = String(req.query.stationId || 'default').trim();
+    const stationId = cleanStationId(req.query.stationId);
     const stats = getActiveStationStats(stationId);
 
     res.json({
