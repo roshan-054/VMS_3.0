@@ -175,15 +175,41 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
               if (videoRef.current.readyState >= 2 && barcodeDetectorInstance) {
                 try {
                   const barcodes = await barcodeDetectorInstance.detect(videoRef.current);
-                  if (barcodes && barcodes.length > 0 && isMounted) {
-                    const rawText = barcodes[0].rawValue || barcodes[0].text || '';
+                  if (barcodes && barcodes.length > 0 && isMounted && videoRef.current) {
+                    const vHeight = videoRef.current.videoHeight || 1080;
+                    const vWidth = videoRef.current.videoWidth || 1920;
+                    const vCenterY = vHeight / 2;
+                    const vCenterX = vWidth / 2;
+
+                    // Narrow aperture filter: vertical center must fall within ±18% of video height
+                    // This restricts detection specifically to the narrow aiming slit
+                    const narrowApertureBarcodes = barcodes.filter((b: any) => {
+                      const box = b.boundingBox;
+                      if (!box || typeof box.y !== 'number' || typeof box.height !== 'number') return true;
+                      const bCenterY = box.y + box.height / 2;
+                      return Math.abs(bCenterY - vCenterY) <= vHeight * 0.18;
+                    });
+
+                    const candidateList = narrowApertureBarcodes.length > 0 ? narrowApertureBarcodes : barcodes;
+
+                    // Sort candidates by proximity to exact laser center
+                    candidateList.sort((a: any, b: any) => {
+                      const boxA = a.boundingBox || {};
+                      const boxB = b.boundingBox || {};
+                      const distA = Math.abs((boxA.y || 0) + (boxA.height || 0) / 2 - vCenterY) * 3 + Math.abs((boxA.x || 0) + (boxA.width || 0) / 2 - vCenterX);
+                      const distB = Math.abs((boxB.y || 0) + (boxB.height || 0) / 2 - vCenterY) * 3 + Math.abs((boxB.x || 0) + (boxB.width || 0) / 2 - vCenterX);
+                      return distA - distB;
+                    });
+
+                    const targetBarcode = candidateList[0];
+                    const rawText = targetBarcode.rawValue || targetBarcode.text || '';
                     if (rawText) {
                       const text = rawText.trim();
                       const now = Date.now();
                       if (text !== lastScannedCodeRef.current || now - lastScannedTimeRef.current >= 1500) {
                         lastScannedCodeRef.current = text;
                         lastScannedTimeRef.current = now;
-                        handleBarcodeScanned(text, barcodes[0].format || 'BARCODE');
+                        handleBarcodeScanned(text, targetBarcode.format || 'BARCODE');
                       }
                     }
                   }
@@ -460,34 +486,42 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
           className="absolute inset-0 w-full h-full object-cover"
         />
 
-        {/* Real-time Aiming Reticle & Laser */}
-        <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-6">
-          <div
-            className={`w-[85%] max-w-xs aspect-4/3 relative rounded-2xl border-2 transition-all duration-300 flex items-center justify-center shadow-2xl ${
-              isRecentScan
-                ? 'border-emerald-400 bg-emerald-500/20 scale-102'
-                : 'border-white/50 bg-black/10'
-            }`}
-          >
-            {/* Corner Aiming Brackets */}
-            <div className="absolute -top-1 -left-1 w-6 h-6 border-t-3 border-l-3 border-emerald-400 rounded-tl-md" />
-            <div className="absolute -top-1 -right-1 w-6 h-6 border-t-3 border-r-3 border-emerald-400 rounded-tr-md" />
-            <div className="absolute -bottom-1 -left-1 w-6 h-6 border-b-3 border-l-3 border-emerald-400 rounded-bl-md" />
-            <div className="absolute -bottom-1 -right-1 w-6 h-6 border-b-3 border-r-3 border-emerald-400 rounded-br-md" />
+        {/* Real-time Aiming Reticle & Narrow High-Accuracy Laser Targeting Window */}
+        <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center">
+          {/* Top high-contrast shading */}
+          <div className="w-full flex-1 bg-black/60 backdrop-blur-[1px]" />
 
-            {/* Red Laser Aiming Line */}
-            <div className="absolute inset-x-3 h-0.5 bg-gradient-to-r from-transparent via-red-500 to-transparent shadow-[0_0_12px_rgba(239,68,68,0.9)] animate-bounce opacity-80" />
+          {/* Narrow Laser Scan Window (Engineered for crisp 1D/2D isolation) */}
+          <div className="w-full flex items-center justify-center py-1.5 shrink-0">
+            <div
+              className={`w-[82%] max-w-[310px] h-14 sm:h-16 relative rounded-lg border-2 transition-all duration-200 flex items-center justify-center shadow-[0_0_40px_rgba(0,0,0,0.9)] ${
+                isRecentScan
+                  ? 'border-emerald-400 bg-emerald-500/30 scale-102 ring-4 ring-emerald-500/40'
+                  : 'border-white/70 bg-black/20'
+              }`}
+            >
+              {/* Industrial Aiming Corner Brackets */}
+              <div className="absolute -top-1 -left-1 w-4 h-4 border-t-2 border-l-2 border-emerald-400 rounded-tl-xs" />
+              <div className="absolute -top-1 -right-1 w-4 h-4 border-t-2 border-r-2 border-emerald-400 rounded-tr-xs" />
+              <div className="absolute -bottom-1 -left-1 w-4 h-4 border-b-2 border-l-2 border-emerald-400 rounded-bl-xs" />
+              <div className="absolute -bottom-1 -right-1 w-4 h-4 border-b-2 border-r-2 border-emerald-400 rounded-br-xs" />
 
-            {/* Target Reticle Crosshair */}
-            <div className="w-8 h-8 rounded-full border border-emerald-400/40 flex items-center justify-center opacity-60">
-              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-            </div>
+              {/* Ultra-Crisp Red Laser Scanning Line */}
+              <div className="absolute inset-x-2 h-0.5 bg-gradient-to-r from-red-500/0 via-red-500 to-red-500/0 shadow-[0_0_14px_rgba(239,68,68,1)] animate-pulse" />
 
-            {/* Badge Note */}
-            <div className="absolute -bottom-3.5 left-1/2 -translate-x-1/2 bg-slate-950/90 backdrop-blur-xs text-[10px] font-mono font-bold px-3 py-0.5 rounded-full border border-white/20 text-slate-200 whitespace-nowrap shadow-md">
-              Point at Shipping Label / Barcode
+              {/* Center Alignment Guide Marks */}
+              <div className="absolute inset-y-1/2 left-1.5 w-2 border-t-2 border-emerald-400/80" />
+              <div className="absolute inset-y-1/2 right-1.5 w-2 border-t-2 border-emerald-400/80" />
+
+              {/* Precision Badge Note */}
+              <div className="absolute -bottom-3 left-1/2 -translate-x-1/2 bg-slate-950/95 backdrop-blur-xs text-[9px] font-mono font-bold px-2 py-0.5 rounded-full border border-white/20 text-slate-200 whitespace-nowrap shadow-md">
+                Align 1 Barcode inside Red Line
+              </div>
             </div>
           </div>
+
+          {/* Bottom high-contrast shading */}
+          <div className="w-full flex-1 bg-black/60 backdrop-blur-[1px]" />
         </div>
 
         {/* Success Scan Popup Banner */}

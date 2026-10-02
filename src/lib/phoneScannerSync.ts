@@ -68,6 +68,7 @@ class PhoneScannerSync {
   private lastPolledTimestamp: number = Date.now() - 3000;
   private processedEventIds: Set<string> = new Set();
   private lastPhoneSeenTime: number = 0;
+  private lastStationSeenTime: number = 0;
 
   // State cache
   private isPhoneConnected: boolean = false;
@@ -532,11 +533,23 @@ class PhoneScannerSync {
   }
 
   private emitStatus(connected: boolean, count: number, deviceName?: string) {
+    const now = Date.now();
     if (this.role === 'station') {
       if (connected) {
-        this.lastPhoneSeenTime = Date.now();
+        this.lastPhoneSeenTime = now;
       } else {
-        if (Date.now() - this.lastPhoneSeenTime < 4000 && this.isPhoneConnected) {
+        // Debounce disconnect: if a phone was seen within the last 8 seconds, maintain connected status
+        if (now - this.lastPhoneSeenTime < 8000 && this.isPhoneConnected) {
+          return;
+        }
+      }
+    } else {
+      // Role is 'phone'
+      if (connected) {
+        this.lastStationSeenTime = now;
+      } else {
+        // Debounce disconnect: if the station was seen within the last 8 seconds, maintain connected status
+        if (now - this.lastStationSeenTime < 8000 && this.isPhoneConnected) {
           return;
         }
       }
@@ -703,6 +716,13 @@ class PhoneScannerSync {
     if (Array.isArray(data.events) && data.events.length > 0) {
       data.events.forEach((evt: any) => {
         const p = evt.payload || evt;
+        // Do not let historical disconnect events override active connection if presence stats show peer is online
+        if (p.type === 'PHONE_DISCONNECTED' && this.role === 'station' && Number(data.connectedPhones || 0) > 0) {
+          return;
+        }
+        if (p.type === 'STATION_DISCONNECTED' && this.role === 'phone' && Number(data.connectedStations || 0) > 0) {
+          return;
+        }
         this.handleIncomingMessage(p);
         if (evt.timestamp) {
           this.lastPolledTimestamp = Math.max(this.lastPolledTimestamp, evt.timestamp);

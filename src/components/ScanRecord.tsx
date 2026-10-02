@@ -70,7 +70,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   const [isPhoneConnected, setIsPhoneConnected] = useState(false);
   const [connectedPhonesCount, setConnectedPhonesCount] = useState(0);
   const [phoneDeviceName, setPhoneDeviceName] = useState('');
-  const [autoRecordOnPhoneScan, setAutoRecordOnPhoneScan] = useState(() => localStorage.getItem('vms_phone_auto_record') !== 'false');
 
   // Camera & Stream State
   const [isCameraActive, setIsCameraActive] = useState(false);
@@ -1044,8 +1043,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   startRecordingRef.current = startRecording;
   const stopRecordingRef = useRef(stopRecording);
   stopRecordingRef.current = stopRecording;
-  const autoRecordOnPhoneScanRef = useRef(autoRecordOnPhoneScan);
-  autoRecordOnPhoneScanRef.current = autoRecordOnPhoneScan;
 
   // Real-time synchronization with Wireless Phone Barcode Scanner
   useEffect(() => {
@@ -1056,14 +1053,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
           setOrderId(cleaned);
           detectPlatformAndType(cleaned);
           onShowToast(`📱 Phone Scanned: ${cleaned} (${device || 'Mobile Phone'})`, 'success');
-          // If auto-start recording on phone scan is enabled
-          if (autoRecordOnPhoneScanRef.current && !isRecordingRef.current) {
-            setTimeout(() => {
-              if (!isRecordingRef.current) {
-                startRecordingRef.current();
-              }
-            }, 300);
-          }
         }
       },
       (connected, count, device) => {
@@ -1894,18 +1883,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
         isOpen={isPhoneScannerModalOpen}
         onClose={() => setIsPhoneScannerModalOpen(false)}
         onShowToast={onShowToast}
-        autoRecordOnScan={autoRecordOnPhoneScan}
-        onToggleAutoRecord={(enabled) => {
-          setAutoRecordOnPhoneScan(enabled);
-          localStorage.setItem('vms_phone_auto_record', String(enabled));
-        }}
-        onSimulateBarcode={(code) => {
-          const cleaned = cleanBarcode(code);
-          if (cleaned) {
-            setOrderId(cleaned);
-            detectPlatformAndType(cleaned);
-          }
-        }}
       />
     </div>
   );

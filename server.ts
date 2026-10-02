@@ -42,6 +42,7 @@ async function startServer() {
   const stationRooms = new Map<string, Set<ScannerClientSocket>>();
   const httpPresence = new Map<string, Map<string, { role: 'station' | 'phone'; deviceName: string; lastSeen: number }>>();
   const recentEvents: ScannerEvent[] = []; // Circular buffer of last 50 events for HTTP poll fallback
+  const lastBroadcastTime = new Map<string, number>();
 
   function cleanStationId(raw: any): string {
     const str = String(raw || '').trim().toLowerCase();
@@ -87,10 +88,10 @@ async function startServer() {
       });
     }
 
-    // 2. HTTP clients (active within last 15 seconds)
+    // 2. HTTP clients (active within last 25 seconds)
     if (httpMap) {
       httpMap.forEach((entry, clientId) => {
-        if (now - entry.lastSeen < 15000) {
+        if (now - entry.lastSeen < 25000) {
           if (entry.role === 'phone') {
             httpPhones++;
             activePhoneDevices.add(entry.deviceName || 'Mobile Phone');
@@ -154,6 +155,7 @@ async function startServer() {
     });
 
     ws.on('message', (data) => {
+      ws.isAlive = true;
       try {
         const msg = JSON.parse(data.toString());
         const type = String(msg.type || '');
@@ -224,6 +226,7 @@ async function startServer() {
             timestamp: Date.now(),
           }, ws);
         } else if (type === 'PING') {
+          ws.isAlive = true;
           ws.send(JSON.stringify({
             type: 'PONG',
             clientTime: msg.timestamp || Date.now(),
@@ -241,7 +244,7 @@ async function startServer() {
         const room = stationRooms.get(stationId)!;
         room.delete(ws);
         const stats = getActiveStationStats(stationId);
-        // Only broadcast disconnect if truly 0 devices remain
+        // Only broadcast disconnect if truly 0 devices remain across both WS and HTTP
         if (ws.role === 'phone' && stats.connectedPhones === 0) {
           broadcastToStation(stationId, {
             type: 'PHONE_DISCONNECTED',
@@ -265,14 +268,19 @@ async function startServer() {
     });
   });
 
-  // Heartbeat ping interval to keep sockets alive and drop stale ones
+  // Heartbeat ping interval (45s) to keep sockets alive safely without premature disconnections
   const heartbeatInterval = setInterval(() => {
     wss.clients.forEach((ws: any) => {
-      if (ws.isAlive === false) return ws.terminate();
+      if (ws.isAlive === false) {
+        try { ws.terminate(); } catch (e) {}
+        return;
+      }
       ws.isAlive = false;
-      ws.ping();
+      try {
+        ws.ping();
+      } catch (e) {}
     });
-  }, 25000);
+  }, 45000);
 
   wss.on('close', () => clearInterval(heartbeatInterval));
 
@@ -388,16 +396,22 @@ async function startServer() {
     recordPresence(stationId, String(clientId), role === 'station' ? 'station' : 'phone', String(deviceName));
     const stats = getActiveStationStats(stationId);
 
-    // Notify all peers on station immediately
-    broadcastToStation(stationId, {
-      type: role === 'phone' ? 'PHONE_CONNECTED' : 'STATION_CONNECTED',
-      stationId,
-      deviceName: String(deviceName),
-      connectedPhones: stats.connectedPhones,
-      connectedStations: stats.connectedStations,
-      devices: stats.devices,
-      timestamp: Date.now(),
-    });
+    // Only broadcast connection event on initial pairing or when reconnecting after inactivity (>15s)
+    const broadcastKey = `${stationId}:${role}:${clientId}`;
+    const now = Date.now();
+    const lastBroadcast = lastBroadcastTime.get(broadcastKey) || 0;
+    if (now - lastBroadcast > 15000) {
+      lastBroadcastTime.set(broadcastKey, now);
+      broadcastToStation(stationId, {
+        type: role === 'phone' ? 'PHONE_CONNECTED' : 'STATION_CONNECTED',
+        stationId,
+        deviceName: String(deviceName),
+        connectedPhones: stats.connectedPhones,
+        connectedStations: stats.connectedStations,
+        devices: stats.devices,
+        timestamp: now,
+      });
+    }
 
     res.json({
       success: true,

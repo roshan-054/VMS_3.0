@@ -8,16 +8,8 @@ import {
   Wifi,
   WifiOff,
   Zap,
-  ExternalLink,
-  ShieldCheck,
   Radio,
-  Sliders,
-  Volume2,
-  VolumeX,
-  Play,
-  RotateCcw,
-  Sparkles,
-  Info
+  RotateCcw
 } from 'lucide-react';
 import { BrowserQRCodeSvgWriter } from '@zxing/library';
 import { sharedScannerSync } from '../lib/phoneScannerSync';
@@ -26,18 +18,12 @@ interface PhoneScannerModalProps {
   isOpen: boolean;
   onClose: () => void;
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
-  onSimulateBarcode?: (code: string) => void;
-  autoRecordOnScan?: boolean;
-  onToggleAutoRecord?: (enabled: boolean) => void;
 }
 
 export const PhoneScannerModal: React.FC<PhoneScannerModalProps> = ({
   isOpen,
   onClose,
   onShowToast,
-  onSimulateBarcode,
-  autoRecordOnScan = true,
-  onToggleAutoRecord,
 }) => {
   const [stationPin, setStationPin] = useState<string>(sharedScannerSync.getStationPin());
   const [isEditingPin, setIsEditingPin] = useState(false);
@@ -157,13 +143,6 @@ export const PhoneScannerModal: React.FC<PhoneScannerModalProps> = ({
     sharedScannerSync.connectAsStation();
     sharedScannerSync.forceSync();
     onShowToast(`Station PIN updated to ${clean}`, 'success');
-  };
-
-  const handleSendTestBarcode = () => {
-    const sample = `OD${Math.floor(1000000000 + Math.random() * 9000000000)}`;
-    sharedScannerSync.transmitBarcode(sample, 'CODE_128', 'D2C');
-    if (onSimulateBarcode) onSimulateBarcode(sample);
-    onShowToast(`Test scan sent: ${sample}`, 'info');
   };
 
   return (
@@ -345,34 +324,16 @@ export const PhoneScannerModal: React.FC<PhoneScannerModalProps> = ({
                   {copiedLink ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
                   <span>{copiedLink ? 'Link Copied to Clipboard!' : 'Copy Mobile Scanner Link'}</span>
                 </button>
-
-                <a
-                  href={pairingUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-full px-4 py-2 bg-slate-950 hover:bg-slate-900 text-blue-400 rounded-xl text-[11px] font-medium transition flex items-center justify-center gap-1.5 border border-slate-800"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  <span>Test Mobile Scanner in New Tab</span>
-                </a>
               </div>
             </div>
           </div>
 
-          {/* Real-time Scan Feed / Test Action */}
+          {/* Real-time Scan Feed */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-slate-300 uppercase tracking-wider font-mono">
                 Recent Scanned Barcodes
               </span>
-              <button
-                type="button"
-                onClick={handleSendTestBarcode}
-                className="text-[11px] text-blue-400 hover:text-blue-300 font-semibold transition cursor-pointer flex items-center gap-1"
-              >
-                <Sparkles className="w-3 h-3 text-blue-400" />
-                Simulate Test Scan
-              </button>
             </div>
 
             <div className="bg-slate-950 p-2 rounded-xl border border-slate-800 min-h-[55px] max-h-28 overflow-y-auto space-y-1.5 font-mono text-xs">
@@ -392,7 +353,7 @@ export const PhoneScannerModal: React.FC<PhoneScannerModalProps> = ({
                 ))
               ) : (
                 <div className="p-3 text-center text-[11px] text-slate-500 font-sans">
-                  No barcodes scanned yet. Scan a package using your phone to test!
+                  No barcodes scanned yet. Scanned barcodes will appear here in real-time.
                 </div>
               )}
             </div>
