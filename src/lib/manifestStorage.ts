@@ -758,25 +758,32 @@ export async function syncManifestsWithCloud(): Promise<{ success: boolean; mani
     const res = await requestApi<{ success: boolean; manifests?: OrderManifest[]; error?: string }>('getOrderManifests', {});
     if (res && res.success && Array.isArray(res.manifests)) {
       const deletedSet = getDeletedManifestIds();
-      if (res.manifests.length > 0) {
-        // Merge cloud manifests with local manifests, skipping deleted tombstones
-        const local = getStoredManifests();
-        const map = new Map<string, OrderManifest>();
-        local.forEach((m) => {
-          const id = m.orderId.toUpperCase();
-          if (!deletedSet.has(id.toLowerCase())) {
+      
+      // The Google Sheet "Manifest_Orders" tab is the single source of truth for active orders
+      const cloudManifests = res.manifests.filter((m) => m.orderId && !deletedSet.has(m.orderId.toLowerCase().trim()));
+      
+      const map = new Map<string, OrderManifest>();
+      // Add all active cloud manifests from Google Sheet
+      cloudManifests.forEach((m) => {
+        map.set(m.orderId.toLowerCase().trim(), m);
+      });
+
+      // Keep only brand-new local entries added in the last 2 minutes that haven't landed in cloud yet
+      const local = getStoredManifests();
+      const twoMinsAgo = Date.now() - 2 * 60 * 1000;
+      local.forEach((m) => {
+        const id = m.orderId.toLowerCase().trim();
+        if (!map.has(id) && !deletedSet.has(id)) {
+          const createdAt = m.processedAt ? new Date(m.processedAt).getTime() : 0;
+          if (createdAt > twoMinsAgo) {
             map.set(id, m);
           }
-        });
-        res.manifests.forEach((m) => {
-          if (m.orderId && !deletedSet.has(m.orderId.toLowerCase())) {
-            map.set(m.orderId.toUpperCase(), m);
-          }
-        });
-        const merged = Array.from(map.values());
-        saveStoredManifests(merged);
-        return { success: true, manifests: merged };
-      }
+        }
+      });
+
+      const merged = Array.from(map.values());
+      saveStoredManifests(merged);
+      return { success: true, manifests: merged };
     }
     return { success: true, manifests: getStoredManifests() };
   } catch (err: any) {

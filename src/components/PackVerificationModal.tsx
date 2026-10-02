@@ -203,6 +203,21 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
     setLastScannedCode(cleanScan);
     setScannedHistory((prev) => [cleanScan, ...prev.slice(0, 19)]);
 
+    // 0. Check if the scanned code is the Shipping Label / Order ID itself
+    if (
+      isBarcodeEqual(cleanScan, manifest.orderId) ||
+      cleanScan === manifest.orderId.toUpperCase() ||
+      manifest.orderId.toUpperCase().replace(/[-_\s]/g, '') === cleanScan.replace(/[-_\s]/g, '')
+    ) {
+      playAudioFeedback('success');
+      onShowToast(
+        `✓ Shipping Label [${manifest.orderId}] Confirmed! Please scan each physical product barcode (GTIN).`,
+        'success'
+      );
+      setMismatchError(null);
+      return;
+    }
+
     // 1. Direct match check against item list (GTIN, SKU, Product Name, Short Name)
     let matchIndex = items.findIndex((it) => {
       const itGtin = normalizeBarcode(it.gtin);

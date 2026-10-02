@@ -37,6 +37,26 @@ interface MobilePhoneScannerProps {
   onExit?: () => void;
 }
 
+// Crisp Handheld Scanner Beep
+function playScannerBeep() {
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(2400, ctx.currentTime);
+    osc.frequency.setValueAtTime(2800, ctx.currentTime + 0.04);
+    gain.gain.setValueAtTime(0.2, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.12);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.14);
+  } catch (_) {}
+}
+
 export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
   initialPin = '',
   onExit,
@@ -47,42 +67,34 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
     if (fromUrl) return fromUrl;
     const fromStorage = cleanStationPin(localStorage.getItem('vms_paired_pin') || '');
     if (fromStorage) return fromStorage;
-    return '5829'; // Default station PIN matching desktop workstation
+    return '5829';
   });
 
   const [isPaired, setIsPaired] = useState<boolean>(true);
   const [pinInput, setPinInput] = useState<string>(stationPin);
-  const [isScanning, setIsScanning] = useState<boolean>(true);
   const [hasTorch, setHasTorch] = useState<boolean>(false);
   const [isTorchOn, setIsTorchOn] = useState<boolean>(false);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [lastScannedBarcode, setLastScannedBarcode] = useState<string>('');
   const [scannedHistory, setScannedHistory] = useState<Array<{ code: string; time: string }>>([]);
   const [manualCode, setManualCode] = useState<string>('');
-  const [statusMessage, setStatusMessage] = useState<string>('Ready to scan packages');
+  const [statusMessage, setStatusMessage] = useState<string>('Ready to scan barcodes');
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [latencyMs, setLatencyMs] = useState<number>(0);
-  const [lastScanSuccessTime, setLastScanSuccessTime] = useState<number>(0);
-  const [isScanLocked, setIsScanLocked] = useState<boolean>(false);
-  const [cooldownSeconds, setCooldownSeconds] = useState<number>(0);
-  const [scannedPopupCode, setScannedPopupCode] = useState<string | null>(null);
+  const [isRecentScan, setIsRecentScan] = useState<boolean>(false);
   const [isFocusing, setIsFocusing] = useState<boolean>(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const apertureRef = useRef<HTMLDivElement | null>(null);
   const cropCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const fullCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const zxingReaderRef = useRef<MultiFormatReader | null>(null);
-  const scanLoopRef = useRef<(() => void) | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const lastScannedTimeRef = useRef<number>(0);
   const lastScannedCodeRef = useRef<string>('');
   const barcodeAnimRef = useRef<number | null>(null);
-  const isLockedRef = useRef<boolean>(false);
-  const lockTimerRef = useRef<any>(null);
-  const candidateCodeRef = useRef<string>('');
-  const candidateCountRef = useRef<number>(0);
-  const noBarcodeFramesRef = useRef<number>(0);
+  const scanThrottledRef = useRef<boolean>(false);
 
   useEffect(() => {
     const clean = cleanStationPin(initialPin);
@@ -121,7 +133,6 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
       }
     });
 
-    // Fast polling while active on mobile to ensure instant sub-second pairing handshake with PC
     const phonePoll = setInterval(() => {
       sharedScannerSync.pairInstant();
       sharedScannerSync.pollHttpEvents();
@@ -161,7 +172,6 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
 
         streamRef.current = stream;
 
-        // Auto-focus hardware setup: continuous optical auto-focus targeting center aperture
         const track = stream.getVideoTracks()[0];
         if (track && typeof track.applyConstraints === 'function') {
           try {
@@ -175,7 +185,6 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
           } catch (_) {}
         }
 
-        // Check if device supports torch
         if (track && typeof track.getCapabilities === 'function') {
           const caps: any = track.getCapabilities();
           setHasTorch(Boolean(caps.torch));
@@ -188,15 +197,7 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
           await videoRef.current.play();
         }
 
-        // Periodic auto-focus pulse every 4.5s while actively aiming
-        const autoFocusPulseTimer = setInterval(() => {
-          if (isMounted && !isLockedRef.current && streamRef.current) {
-            triggerCameraAutoFocus();
-          }
-        }, 4500);
-
-        // Initialize decoders
-        // 1. Hardware BarcodeDetector if supported
+        // Initialize Hardware BarcodeDetector if supported
         if ('BarcodeDetector' in window) {
           try {
             barcodeDetectorInstance = new (window as any).BarcodeDetector({
@@ -217,7 +218,7 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
           }
         }
 
-        // 2. ZXing fallback instance (properly configured for canvas ImageData decoding)
+        // Initialize ZXing MultiFormatReader
         const hints = new Map();
         hints.set(DecodeHintType.POSSIBLE_FORMATS, [
           BarcodeFormat.CODE_128,
@@ -236,143 +237,82 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
         codeReader.setHints(hints);
         zxingReaderRef.current = codeReader;
 
-        // Unified High-Precision Frame Loop: CROPS ONLY THE CLEAR APERTURE WINDOW
+        // High-Precision Frame Scanner Loop
         const scanFrame = async () => {
-          scanLoopRef.current = scanFrame;
           if (!isMounted) return;
 
-          // If currently in post-scan lock / popup open, keep animation frame cycling so unlock is instant
-          if (isLockedRef.current) {
-            barcodeAnimRef.current = requestAnimationFrame(scanFrame);
-            return;
-          }
-
           const video = videoRef.current;
-          const container = containerRef.current;
-          const aperture = apertureRef.current;
-
-          if (
-            !video ||
-            !container ||
-            !aperture ||
-            video.readyState < 2 ||
-            video.videoWidth === 0 ||
-            video.videoHeight === 0
-          ) {
+          if (!video || video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) {
             barcodeAnimRef.current = requestAnimationFrame(scanFrame);
             return;
           }
 
-          const cRect = container.getBoundingClientRect();
-          const aRect = aperture.getBoundingClientRect();
-          const vWidth = video.videoWidth;
-          const vHeight = video.videoHeight;
+          const now = Date.now();
+          let detectedText: string | null = null;
+          let detectedFormat = 'BARCODE';
 
-          if (cRect.width > 0 && cRect.height > 0 && aRect.width > 0 && aRect.height > 0) {
-            // Compute layout of video with object-cover inside container
-            const containerRatio = cRect.width / cRect.height;
-            const videoRatio = vWidth / vHeight;
-            let renderWidth = cRect.width;
-            let renderHeight = cRect.height;
-            let offsetX = 0;
-            let offsetY = 0;
-
-            if (containerRatio > videoRatio) {
-              renderWidth = cRect.width;
-              renderHeight = cRect.width / videoRatio;
-              offsetY = (cRect.height - renderHeight) / 2;
-            } else {
-              renderHeight = cRect.height;
-              renderWidth = cRect.height * videoRatio;
-              offsetX = (cRect.width - renderWidth) / 2;
-            }
-
-            const scale = vWidth / renderWidth;
-            // 5% margin so codes at the inner borders of the window are not cut off
-            const marginX = (aRect.width * scale) * 0.05;
-            const marginY = (aRect.height * scale) * 0.05;
-            const sx = Math.max(0, (aRect.left - cRect.left - offsetX) * scale - marginX);
-            const sy = Math.max(0, (aRect.top - cRect.top - offsetY) * scale - marginY);
-            const sWidth = Math.min(vWidth - sx, aRect.width * scale + marginX * 2);
-            const sHeight = Math.min(vHeight - sy, aRect.height * scale + marginY * 2);
-
-            if (sWidth > 20 && sHeight > 20) {
-              if (!cropCanvasRef.current) {
-                cropCanvasRef.current = document.createElement('canvas');
+          // 1. Primary Pass: Hardware GPU BarcodeDetector directly on Video element
+          if (barcodeDetectorInstance) {
+            try {
+              const detected = await barcodeDetectorInstance.detect(video);
+              if (detected && detected.length > 0) {
+                const raw = detected[0].rawValue || detected[0].text || '';
+                if (raw && raw.trim().length >= 3) {
+                  detectedText = raw.trim();
+                  detectedFormat = detected[0].format || 'BARCODE';
+                }
               }
-              const canvas = cropCanvasRef.current;
+            } catch (_) {}
+          }
 
-              // High-clarity resolution suitable for rapid 1D & 2D barcode detection
-              const targetWidth = Math.min(720, Math.round(sWidth));
-              const targetHeight = Math.max(1, Math.round(targetWidth * (sHeight / sWidth)));
-
-              if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
-                canvas.width = targetWidth;
-                canvas.height = targetHeight;
+          // 2. Secondary Pass: ZXing fallback via Canvas (Aperture crop and Full scale)
+          if (!detectedText && zxingReaderRef.current) {
+            try {
+              if (!fullCanvasRef.current) {
+                fullCanvasRef.current = document.createElement('canvas');
               }
-
-              const ctx = canvas.getContext('2d', { willReadFrequently: true });
-              if (ctx) {
-                // PHYSICAL CROP: ONLY THE CLEAR BOX IS DRAWN. ZERO PIXELS FROM THE DARK AREA!
-                ctx.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, targetWidth, targetHeight);
-
-                let detectedText: string | null = null;
-                let detectedFormat = 'BARCODE';
-
-                // 1. Try Hardware GPU BarcodeDetector on cropped canvas
-                if (barcodeDetectorInstance) {
-                  try {
-                    const detected = await barcodeDetectorInstance.detect(canvas);
-                    if (detected && detected.length > 0) {
-                      const raw = detected[0].rawValue || detected[0].text || '';
-                      if (raw && raw.trim().length >= 4) {
-                        detectedText = raw.trim();
-                        detectedFormat = detected[0].format || 'BARCODE';
-                      }
-                    }
-                  } catch (_) {}
-                }
-
-                // 2. Try ZXing fallback with BinaryBitmap on the exact same cropped canvas
-                if (!detectedText && zxingReaderRef.current) {
-                  try {
-                    const luminanceSource = new HTMLCanvasElementLuminanceSource(canvas);
-                    const binaryBitmap = new BinaryBitmap(new HybridBinarizer(luminanceSource));
-                    const zxResult = zxingReaderRef.current.decode(binaryBitmap);
-                    if (zxResult) {
-                      const text = typeof zxResult.getText === 'function' ? zxResult.getText() : String(zxResult.text || '');
-                      if (text && text.trim().length >= 4) {
-                        detectedText = text.trim();
-                        detectedFormat = typeof zxResult.getBarcodeFormat === 'function' ? String(zxResult.getBarcodeFormat()) : 'AUTO';
-                      }
-                    }
-                  } catch (_) {
-                    // NotFoundException is standard when no code in crop
+              const fCanvas = fullCanvasRef.current;
+              const w = Math.min(640, video.videoWidth);
+              const h = Math.round(w * (video.videoHeight / video.videoWidth));
+              if (fCanvas.width !== w || fCanvas.height !== h) {
+                fCanvas.width = w;
+                fCanvas.height = h;
+              }
+              const fCtx = fCanvas.getContext('2d', { willReadFrequently: true });
+              if (fCtx) {
+                fCtx.drawImage(video, 0, 0, w, h);
+                const luminanceSource = new HTMLCanvasElementLuminanceSource(fCanvas);
+                const binaryBitmap = new BinaryBitmap(new HybridBinarizer(luminanceSource));
+                const zxResult = zxingReaderRef.current.decode(binaryBitmap);
+                if (zxResult) {
+                  const text = typeof zxResult.getText === 'function' ? zxResult.getText() : String(zxResult.text || '');
+                  if (text && text.trim().length >= 3) {
+                    detectedText = text.trim();
+                    detectedFormat = typeof zxResult.getBarcodeFormat === 'function' ? String(zxResult.getBarcodeFormat()) : 'AUTO';
                   }
                 }
+              }
+            } catch (_) {}
+          }
 
-                if (detectedText) {
-                  const cleaned = detectedText.replace(/[\x00-\x1F\x7F]/g, '').replace(/^\][a-zA-Z0-9]{2,3}/, '').trim();
-                  if (cleaned.length >= 4) {
-                    if (cleaned === lastScannedCodeRef.current) {
-                      // Same barcode is still in front of the camera: do NOT continuously re-scan it!
-                      barcodeAnimRef.current = requestAnimationFrame(scanFrame);
-                      return;
-                    }
+          if (detectedText) {
+            const cleaned = detectedText.replace(/[\x00-\x1F\x7F]/g, '').replace(/^\][a-zA-Z0-9]{2,3}/, '').trim();
 
-                    // Scanned successfully! Lock immediately, send to PC, and show popup
-                    triggerConfirmedScan(cleaned, detectedFormat);
-                    // Crucial: keep animation frame active so it loops while locked, waiting for unlock
-                    barcodeAnimRef.current = requestAnimationFrame(scanFrame);
-                    return;
-                  }
-                } else {
-                  noBarcodeFramesRef.current += 1;
-                  // If camera points away from barcode for 10 frames (~300ms), clear memory of previous code
-                  if (noBarcodeFramesRef.current > 10) {
-                    lastScannedCodeRef.current = '';
-                  }
-                }
+            if (cleaned.length >= 3) {
+              // Anti-duplicate throttle: ignore identical code within 1.2s
+              const isDuplicate = cleaned === lastScannedCodeRef.current && now - lastScannedTimeRef.current < 1200;
+
+              if (!isDuplicate && !scanThrottledRef.current) {
+                lastScannedCodeRef.current = cleaned;
+                lastScannedTimeRef.current = now;
+                scanThrottledRef.current = true;
+
+                // Fire scan event
+                handleBarcodeScanned(cleaned, detectedFormat);
+
+                setTimeout(() => {
+                  scanThrottledRef.current = false;
+                }, 400);
               }
             }
           }
@@ -391,10 +331,6 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
 
     return () => {
       isMounted = false;
-      if (lockTimerRef.current) {
-        clearInterval(lockTimerRef.current);
-        lockTimerRef.current = null;
-      }
       if (barcodeAnimRef.current) {
         cancelAnimationFrame(barcodeAnimRef.current);
         barcodeAnimRef.current = null;
@@ -411,7 +347,7 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
     };
   }, [isPaired, facingMode]);
 
-  // Hardware optical auto-focus trigger (targets center scanning aperture)
+  // Hardware optical auto-focus trigger
   const triggerCameraAutoFocus = async () => {
     if (!streamRef.current) return;
     const track = streamRef.current.getVideoTracks()[0];
@@ -437,60 +373,33 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
     } catch (_) {}
   };
 
-  const triggerConfirmedScan = (code: string, format: string) => {
-    // 1. Immediately pause scanning so it cannot continuous-scan or mis-scan
-    isLockedRef.current = true;
-    setIsScanLocked(true);
-    lastScannedCodeRef.current = code;
-    lastScannedTimeRef.current = Date.now();
-
-    // 2. Transmit barcode to workstation, vibrate, and chime
-    handleBarcodeScanned(code, format);
-
-    // 3. Open the "Scan Next Code" popup dialog
-    setScannedPopupCode(code);
-  };
-
-  const handleScanNextCode = () => {
-    // 1. Close popup
-    setScannedPopupCode(null);
-
-    // 2. Unlock scanner for the next barcode
-    isLockedRef.current = false;
-    setIsScanLocked(false);
-    candidateCodeRef.current = '';
-    candidateCountRef.current = 0;
-    noBarcodeFramesRef.current = 0;
-    lastScannedCodeRef.current = '';
-
-    // 3. Command optical auto-focus for the new barcode
-    triggerCameraAutoFocus();
-    setStatusMessage('Ready for next barcode');
-
-    // 4. Ensure frame scanning loop is running
-    if (scanLoopRef.current) {
-      if (barcodeAnimRef.current) {
-        cancelAnimationFrame(barcodeAnimRef.current);
-      }
-      barcodeAnimRef.current = requestAnimationFrame(scanLoopRef.current);
-    }
-  };
-
   const handleBarcodeScanned = async (rawCode: string, format: string) => {
-    // Clean raw barcode (remove prefixes/control chars)
     const cleaned = rawCode.trim().replace(/[\x00-\x1F\x7F]/g, '').replace(/^\][a-zA-Z0-9]{2,3}/, '').trim();
+    if (!cleaned) return;
+
+    // Haptic vibration feedback
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      try {
+        navigator.vibrate([40, 30, 40]);
+      } catch (_) {}
+    }
+
+    // Audio chirp
+    playScannerBeep();
 
     setLastScannedBarcode(cleaned);
-    setLastScanSuccessTime(Date.now());
+    setIsRecentScan(true);
+    setTimeout(() => setIsRecentScan(false), 1400);
+
     setStatusMessage(`Transmitted: ${cleaned}`);
 
-    // Add to history
+    // Add to local history
     setScannedHistory((prev) => [
       { code: cleaned, time: new Date().toLocaleTimeString() },
-      ...prev.slice(0, 9),
+      ...prev.slice(0, 19),
     ]);
 
-    // Transmit instantly to workstation
+    // Transmit instantly to workstation via WebSocket & HTTP
     await sharedScannerSync.transmitBarcode(cleaned, format);
   };
 
@@ -597,9 +506,6 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
     );
   }
 
-  // Active Wireless Scanner Screen
-  const isRecentScan = Date.now() - lastScanSuccessTime < 1800;
-
   return (
     <div className="fixed inset-0 bg-black text-white flex flex-col z-50 overflow-hidden font-sans select-none">
       {/* Top Header Bar */}
@@ -649,7 +555,7 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
             title="Reconnect with Workstation"
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            <span>Reconnect</span>
+            <span>Sync</span>
           </button>
 
           {/* Camera Flip Button */}
@@ -737,123 +643,79 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
           </div>
         )}
 
-        {/* Real-time Aiming Reticle with 100% Blackout Mask for Rest Area to prevent unwanted scans */}
+        {/* Real-time Aiming Reticle with Clear Scanning Window */}
         <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center z-10">
-          {/* Top Solid Black Mask */}
-          <div className="w-full flex-1 bg-black flex flex-col items-center justify-end pb-3">
-            <div className="text-[10px] font-mono tracking-wider font-semibold text-slate-300 uppercase bg-slate-900/95 px-3 py-1 rounded-full border border-slate-700/80 shadow-md">
-              Position Barcode in Clear Box
+          <div className="w-full flex-1 flex flex-col items-center justify-end pb-3">
+            <div className="text-[10px] font-mono tracking-wider font-semibold text-slate-200 uppercase bg-slate-900/90 backdrop-blur-xs px-3 py-1 rounded-full border border-slate-700 shadow-md">
+              Aim Camera at Any Barcode / QR Code
             </div>
           </div>
 
-          {/* Middle Scanning Row: Left Black + Narrow Central Clear Scan Window + Right Black */}
           <div className="w-full flex items-center justify-center shrink-0">
-            {/* Left flank: 100% Solid Black */}
-            <div className="flex-1 h-36 sm:h-42 bg-black" />
-
-            {/* Central High-Precision Clear Scan Window (A bit narrower for focused barcode capture) */}
             <div
               ref={apertureRef}
-              className={`w-[82%] max-w-[340px] h-36 sm:h-42 relative rounded-2xl border-2 transition-all duration-200 flex items-center justify-center shrink-0 ${
-                isScanLocked
-                  ? 'border-emerald-400 bg-emerald-950/85 scale-[1.02] ring-4 ring-emerald-500/50'
-                  : isRecentScan
-                  ? 'border-emerald-400 bg-emerald-500/25 scale-[1.02] ring-4 ring-emerald-500/50'
-                  : 'border-white/90 bg-transparent'
+              className={`w-[85%] max-w-[340px] h-40 sm:h-44 relative rounded-2xl border-2 transition-all duration-200 flex items-center justify-center shrink-0 ${
+                isRecentScan
+                  ? 'border-emerald-400 bg-emerald-500/20 scale-[1.03] ring-4 ring-emerald-500/50 shadow-[0_0_30px_rgba(52,211,153,0.8)]'
+                  : 'border-white/80 bg-black/10'
               }`}
-              style={{
-                boxShadow: (isScanLocked || isRecentScan)
-                  ? '0 0 0 9999px #000000, 0 0 35px rgba(52, 211, 153, 0.9)'
-                  : '0 0 0 9999px #000000',
-              }}
             >
-              {isScanLocked ? (
-                /* Scan Locked Confirmation & Safe Packing View */
-                <div className="absolute inset-0 z-20 flex flex-col items-center justify-center p-2.5 text-center pointer-events-auto rounded-2xl animate-fade-in bg-slate-950/90 backdrop-blur-xs">
-                  <div className="w-8 h-8 rounded-full bg-emerald-500/20 border border-emerald-400/80 flex items-center justify-center mb-0.5 shadow-[0_0_12px_rgba(52,211,153,0.5)]">
-                    <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                  </div>
-                  <div className="text-[10px] font-mono uppercase tracking-wider text-emerald-300 font-bold">
-                    Order Scanned &amp; Sent
-                  </div>
-                  <div className="text-sm font-mono font-black text-white tracking-wider truncate max-w-full my-0.5">
-                    {lastScannedBarcode}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleScanNextCode}
-                    className="mt-1 px-4 py-1.5 bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-slate-950 font-bold font-mono text-xs rounded-xl shadow-lg flex items-center gap-1.5 cursor-pointer transition"
-                  >
-                    <Barcode className="w-3.5 h-3.5" />
-                    <span>Scan Next Code</span>
-                  </button>
-                </div>
-              ) : (
-                <>
-                  {/* Industrial Aiming Corner Brackets */}
-                  <div className="absolute -top-1.5 -left-1.5 w-6 h-6 border-t-3 border-l-3 border-emerald-400 rounded-tl-md shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
-                  <div className="absolute -top-1.5 -right-1.5 w-6 h-6 border-t-3 border-r-3 border-emerald-400 rounded-tr-md shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
-                  <div className="absolute -bottom-1.5 -left-1.5 w-6 h-6 border-b-3 border-l-3 border-emerald-400 rounded-bl-md shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
-                  <div className="absolute -bottom-1.5 -right-1.5 w-6 h-6 border-b-3 border-r-3 border-emerald-400 rounded-br-md shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+              {/* Corner Brackets */}
+              <div className="absolute -top-1.5 -left-1.5 w-6 h-6 border-t-3 border-l-3 border-emerald-400 rounded-tl-md shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+              <div className="absolute -top-1.5 -right-1.5 w-6 h-6 border-t-3 border-r-3 border-emerald-400 rounded-tr-md shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+              <div className="absolute -bottom-1.5 -left-1.5 w-6 h-6 border-b-3 border-l-3 border-emerald-400 rounded-bl-md shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+              <div className="absolute -bottom-1.5 -right-1.5 w-6 h-6 border-b-3 border-r-3 border-emerald-400 rounded-br-md shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
 
-                  {/* Ultra-Crisp Red Laser Scanning Line */}
-                  <div className="absolute inset-x-3 h-0.5 bg-gradient-to-r from-red-500/10 via-red-500 to-red-500/10 shadow-[0_0_16px_rgba(239,68,68,1)] animate-pulse" />
+              {/* Red Laser Aiming Guide */}
+              <div className="absolute inset-x-3 h-0.5 bg-gradient-to-r from-red-500/10 via-red-500 to-red-500/10 shadow-[0_0_16px_rgba(239,68,68,1)] animate-pulse" />
 
-                  {/* Center Alignment Guide Marks */}
-                  <div className="absolute inset-y-1/2 left-2.5 w-3 border-t-2 border-emerald-400/90" />
-                  <div className="absolute inset-y-1/2 right-2.5 w-3 border-t-2 border-emerald-400/90" />
+              {/* Center Alignment Guide Marks */}
+              <div className="absolute inset-y-1/2 left-2.5 w-3 border-t-2 border-emerald-400/90" />
+              <div className="absolute inset-y-1/2 right-2.5 w-3 border-t-2 border-emerald-400/90" />
 
-                  {/* Precision Badge Note */}
-                  <div className="absolute -bottom-3.5 left-1/2 -translate-x-1/2 bg-slate-950 text-[10px] font-mono font-bold px-3 py-0.5 rounded-full border border-slate-700 text-slate-200 whitespace-nowrap shadow-md">
-                    Align Barcode Here
-                  </div>
-                </>
-              )}
+              <div className="absolute -bottom-3.5 left-1/2 -translate-x-1/2 bg-slate-950 text-[10px] font-mono font-bold px-3 py-0.5 rounded-full border border-slate-700 text-slate-200 whitespace-nowrap shadow-md">
+                Continuous Laser Scanning Active
+              </div>
             </div>
-
-            {/* Right flank: 100% Solid Black */}
-            <div className="flex-1 h-36 sm:h-42 bg-black" />
           </div>
 
-          {/* Bottom Solid Black Mask */}
-          <div className="w-full flex-1 bg-black flex flex-col items-center justify-start pt-3">
-            <div className="text-[10px] font-mono text-slate-400 flex items-center gap-1.5 bg-slate-900/95 px-3 py-1 rounded-full border border-slate-700/80 shadow-md">
+          <div className="w-full flex-1 flex flex-col items-center justify-start pt-4">
+            <div className="text-[10px] font-mono text-slate-300 flex items-center gap-1.5 bg-slate-900/90 backdrop-blur-xs px-3 py-1 rounded-full border border-slate-700 shadow-md">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              Rest area blacked out • Unwanted scans blocked
+              <span>Tap screen anytime to pull sharp focus</span>
             </div>
           </div>
         </div>
 
-        {/* Success Scan Popup Banner */}
+        {/* Live Scan Notification Toast Banner */}
         {isRecentScan && (
           <div className="absolute top-4 inset-x-4 bg-emerald-600/95 backdrop-blur-md text-white p-3.5 rounded-2xl shadow-2xl border border-emerald-400 flex items-center justify-between animate-fade-in z-30">
             <div className="flex items-center gap-2.5">
-              <CheckCircle2 className="w-5 h-5 text-emerald-200 shrink-0" />
+              <CheckCircle2 className="w-6 h-6 text-emerald-200 shrink-0 animate-bounce" />
               <div>
                 <span className="text-[10px] font-mono text-emerald-100 block uppercase font-bold">
-                  Transmitted to Station • &lt;5ms
+                  Transmitted to Packing Workstation
                 </span>
-                <span className="text-sm font-mono font-black tracking-wider text-white">
+                <span className="text-base font-mono font-black tracking-wider text-white">
                   {lastScannedBarcode}
                 </span>
               </div>
             </div>
-            <span className="px-2 py-1 rounded bg-black/20 text-[10px] font-mono font-bold">
-              SENT
+            <span className="px-2.5 py-1 rounded bg-black/20 text-[11px] font-mono font-bold text-emerald-100">
+              ✓ SENT
             </span>
           </div>
         )}
       </div>
 
-      {/* Clean Scanner Control Bar (Manual Barcode Entry & Status Only) */}
+      {/* Clean Scanner Control Bar (Manual Barcode Entry & Status) */}
       <div className="bg-slate-950/95 backdrop-blur-md border-t border-slate-800 p-3 sm:p-4 space-y-2.5 shrink-0 z-30">
-        {/* Manual Keyboard Barcode Entry (Fallback if barcode is ripped/damaged) */}
         <form onSubmit={handleSendManual} className="flex items-center gap-2">
           <input
             type="text"
             value={manualCode}
             onChange={(e) => setManualCode(e.target.value)}
-            placeholder="Type Order ID if barcode is damaged..."
+            placeholder="Type barcode or Order ID manually..."
             className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
           />
           <button
@@ -874,46 +736,6 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
           <span>Scans: {scannedHistory.length}</span>
         </div>
       </div>
-
-      {/* 1-Barcode Scanned Confirmation Modal Popup (Prevents unwanted and mis-scans until "Scan Next Code" is selected) */}
-      {scannedPopupCode && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fade-in">
-          <div className="w-full max-w-sm bg-slate-900/95 border-2 border-emerald-400 rounded-3xl p-6 shadow-2xl text-center flex flex-col items-center">
-            {/* Green Success Badge */}
-            <div className="w-16 h-16 rounded-full bg-emerald-500/20 border-2 border-emerald-400 flex items-center justify-center mb-3 shadow-[0_0_25px_rgba(52,211,153,0.5)]">
-              <CheckCircle2 className="w-9 h-9 text-emerald-400" />
-            </div>
-
-            <div className="text-xs font-mono uppercase tracking-widest text-emerald-400 font-bold mb-1">
-              Barcode Scanned
-            </div>
-
-            <div className="text-xs text-slate-400 mb-4 font-mono">
-              Transmitted to Workstation
-            </div>
-
-            {/* Scanned Barcode Display Box */}
-            <div className="w-full bg-slate-950 border border-slate-700/80 rounded-2xl p-4 mb-5 shadow-inner">
-              <span className="text-xl sm:text-2xl font-mono font-black text-white tracking-wider break-all select-all block">
-                {scannedPopupCode}
-              </span>
-              <span className="text-[10px] font-mono text-emerald-400/90 block mt-1.5 font-semibold">
-                ● Status: Synced with PC Station
-              </span>
-            </div>
-
-            {/* Primary Action Button: Scan Next Code */}
-            <button
-              type="button"
-              onClick={handleScanNextCode}
-              className="w-full py-4 bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-slate-950 font-black text-base rounded-2xl shadow-xl flex items-center justify-center gap-2.5 cursor-pointer transition"
-            >
-              <Barcode className="w-5 h-5" />
-              <span>Scan Next Code</span>
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

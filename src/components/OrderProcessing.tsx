@@ -1171,34 +1171,73 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         </div>
       </div>
 
-      {/* Stats Summary Cards */}
+      {/* Stats Summary Cards (Interactive Filters) */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
-        <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-2xs">
-          <div className="text-[11px] font-mono uppercase tracking-wider text-slate-400 font-bold mb-1">
-            Total Manifest Orders
+        <div
+          onClick={() => {
+            setActiveSubTab('manifest');
+            setStatusFilter('ALL');
+            setSearchQuery('');
+          }}
+          className="bg-white hover:bg-slate-50 border border-slate-200 hover:border-indigo-400 rounded-2xl p-4 shadow-2xs cursor-pointer transition transform hover:-translate-y-0.5"
+          title="Click to view all manifest orders"
+        >
+          <div className="text-[11px] font-mono uppercase tracking-wider text-slate-400 font-bold mb-1 flex items-center justify-between">
+            <span>Total Manifest Orders</span>
+            <Boxes className="w-3.5 h-3.5 text-slate-400" />
           </div>
           <div className="text-2xl font-black text-slate-900">{stats.total}</div>
+          <span className="text-[10px] text-indigo-600 font-semibold">Click to view all →</span>
         </div>
 
-        <div className="bg-white border border-amber-200/80 rounded-2xl p-4 shadow-2xs bg-gradient-to-br from-white to-amber-50/30">
-          <div className="text-[11px] font-mono uppercase tracking-wider text-amber-600 font-bold mb-1">
-            Pending Packing
+        <div
+          onClick={() => {
+            setActiveSubTab('manifest');
+            setStatusFilter('Pending');
+            setSearchQuery('');
+          }}
+          className="bg-white hover:bg-amber-50/60 border border-amber-200 hover:border-amber-400 rounded-2xl p-4 shadow-2xs cursor-pointer transition transform hover:-translate-y-0.5 bg-gradient-to-br from-white to-amber-50/30"
+          title="Click to filter Pending packing orders"
+        >
+          <div className="text-[11px] font-mono uppercase tracking-wider text-amber-600 font-bold mb-1 flex items-center justify-between">
+            <span>Pending Packing</span>
+            <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
           </div>
           <div className="text-2xl font-black text-amber-600">{stats.pending}</div>
+          <span className="text-[10px] text-amber-700 font-semibold">Click to filter pending →</span>
         </div>
 
-        <div className="bg-white border border-emerald-200/80 rounded-2xl p-4 shadow-2xs bg-gradient-to-br from-white to-emerald-50/30">
-          <div className="text-[11px] font-mono uppercase tracking-wider text-emerald-600 font-bold mb-1">
-            Packed &amp; Verified
+        <div
+          onClick={() => {
+            setActiveSubTab('manifest');
+            setStatusFilter('Packed');
+            setSearchQuery('');
+          }}
+          className="bg-white hover:bg-emerald-50/60 border border-emerald-200 hover:border-emerald-400 rounded-2xl p-4 shadow-2xs cursor-pointer transition transform hover:-translate-y-0.5 bg-gradient-to-br from-white to-emerald-50/30"
+          title="Click to filter Packed orders"
+        >
+          <div className="text-[11px] font-mono uppercase tracking-wider text-emerald-600 font-bold mb-1 flex items-center justify-between">
+            <span>Packed &amp; Verified</span>
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
           </div>
           <div className="text-2xl font-black text-emerald-600">{stats.packed}</div>
+          <span className="text-[10px] text-emerald-700 font-semibold">Click to filter packed →</span>
         </div>
 
-        <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-2xs">
-          <div className="text-[11px] font-mono uppercase tracking-wider text-slate-400 font-bold mb-1">
-            GTIN Catalog Size
+        <div
+          onClick={() => {
+            setActiveSubTab('gtin');
+            setGtinSearchQuery('');
+          }}
+          className="bg-white hover:bg-indigo-50/60 border border-slate-200 hover:border-indigo-400 rounded-2xl p-4 shadow-2xs cursor-pointer transition transform hover:-translate-y-0.5"
+          title="Click to view GTIN Barcode Catalog"
+        >
+          <div className="text-[11px] font-mono uppercase tracking-wider text-slate-400 font-bold mb-1 flex items-center justify-between">
+            <span>GTIN Catalog Size</span>
+            <Barcode className="w-3.5 h-3.5 text-indigo-500" />
           </div>
           <div className="text-2xl font-black text-indigo-600">{gtinCatalog.length} Items</div>
+          <span className="text-[10px] text-indigo-600 font-semibold">Click to open catalog →</span>
         </div>
       </div>
 
@@ -1236,20 +1275,18 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
           </span>
         </button>
 
-        {isUserAdmin && (
-          <button
-            type="button"
-            onClick={() => setActiveSubTab('gtin')}
-            className={`px-4 py-2.5 rounded-xl font-bold text-xs transition flex items-center gap-2 cursor-pointer shrink-0 ${
-              activeSubTab === 'gtin'
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
-                : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
-            }`}
-          >
-            <Barcode className="w-4 h-4" />
-            <span>GTIN Barcode Catalog ({gtinCatalog.length})</span>
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={() => setActiveSubTab('gtin')}
+          className={`px-4 py-2.5 rounded-xl font-bold text-xs transition flex items-center gap-2 cursor-pointer shrink-0 ${
+            activeSubTab === 'gtin'
+              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+              : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
+          }`}
+        >
+          <Barcode className="w-4 h-4" />
+          <span>GTIN Barcode Catalog ({gtinCatalog.length})</span>
+        </button>
 
         <button
           type="button"
@@ -2062,8 +2099,8 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         </div>
       )}
 
-      {/* SUB-TAB 3: GTIN BARCODE CATALOG (Admin Only) */}
-      {isUserAdmin && activeSubTab === 'gtin' && (
+      {/* SUB-TAB 3: GTIN BARCODE CATALOG */}
+      {activeSubTab === 'gtin' && (
         <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs space-y-4">
           {/* Active Google Sheet Sync Status Bar */}
           <div className="bg-gradient-to-r from-emerald-50 via-slate-50 to-indigo-50/40 border border-emerald-200/80 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-2xs">

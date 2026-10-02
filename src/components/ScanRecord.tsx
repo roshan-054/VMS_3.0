@@ -49,6 +49,8 @@ import { PhoneScannerModal } from './PhoneScannerModal';
 import { sharedScannerSync } from '../lib/phoneScannerSync';
 import {
   getManifestByOrderId,
+  getStoredManifests,
+  findProductInCatalog,
   updateManifestStatus,
   getVerificationSettings
 } from '../lib/manifestStorage';
@@ -158,22 +160,68 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     }
   }, [initialOrderId]);
 
-  const checkAndOpenPackVerification = (scannedOrderId: string): boolean => {
-    const clean = scannedOrderId.trim().toUpperCase();
+  const checkAndOpenPackVerification = (scannedCode: string): boolean => {
+    const clean = scannedCode.trim().toUpperCase();
     if (!clean) return false;
 
+    // 1. Direct match: Check if scanned string is an Order ID in the pre-pack manifest
     const manifest = getManifestByOrderId(clean);
     if (manifest) {
       setActiveManifest(manifest);
       setVerifiedOrderItems(null);
       setIsPackVerificationOpen(true);
+      onShowToast(`✓ Order ${clean} loaded! Now scan physical product barcodes to verify items.`, 'success');
       return true;
-    } else {
-      const settings = getVerificationSettings();
-      if (settings.enforceManifestCheck) {
-        setUnregisteredOrderWarning({ orderId: clean });
-        return true;
-      }
+    }
+
+    // 2. Smart Check: Is the scanned code a Product GTIN / SKU?
+    const catalogProduct = findProductInCatalog(clean);
+    const allManifests = getStoredManifests();
+
+    // Check if any pending manifest assigned to this operator (or in queue) requires this item
+    const matchingManifest = allManifests.find((m) => {
+      const isPending = (m.status || 'Pending') === 'Pending' || m.status === 'In Progress';
+      if (!isPending) return false;
+
+      return (m.items || []).some((it) => {
+        const itGtin = (it.gtin || '').trim().toUpperCase();
+        const itSku = (it.sku || '').trim().toUpperCase();
+        return (
+          itGtin === clean ||
+          itSku === clean ||
+          (itGtin && itGtin.replace(/^0+/, '') === clean.replace(/^0+/, '')) ||
+          (catalogProduct && (itSku === catalogProduct.sku.toUpperCase() || itGtin === catalogProduct.gtin.toUpperCase()))
+        );
+      });
+    });
+
+    if (matchingManifest) {
+      // Auto-switch to the matching pending order!
+      setActiveManifest(matchingManifest);
+      setOrderId(matchingManifest.orderId);
+      detectPlatformAndType(matchingManifest.orderId);
+      setVerifiedOrderItems(null);
+      setIsPackVerificationOpen(true);
+      onShowToast(
+        `📦 Scanned ${catalogProduct?.shortName || 'Product'} (Barcode ${clean}) → Matched to Order ${matchingManifest.orderId}!`,
+        'success'
+      );
+      return true;
+    }
+
+    if (catalogProduct) {
+      onShowToast(
+        `📦 Scanned Product "${catalogProduct.shortName || catalogProduct.productName}". Please scan the package Shipping Label barcode (e.g. TEST-0200) to start packing!`,
+        'info'
+      );
+      return false;
+    }
+
+    // 3. Fallback: If enforceManifestCheck is enabled, show clear instructions
+    const settings = getVerificationSettings();
+    if (settings.enforceManifestCheck) {
+      setUnregisteredOrderWarning({ orderId: clean });
+      return true;
     }
     return false;
   };
