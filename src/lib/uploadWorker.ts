@@ -629,7 +629,7 @@ export async function triggerUploadWorker(): Promise<void> {
 
       // -------------------------------------------------------------
       // Primary High-Speed Channel: Direct Google Drive Resumable Stream
-      // Sends raw binary video slices directly to Google Drive servers (100+ Mbps, 0% CPU, no Base64 overhead)
+      // Streams raw binary slices directly through local proxy to Google Drive (100+ Mbps, 0% CPU, no Base64 overhead)
       // -------------------------------------------------------------
       if (directUploadUrl && !directUploadDisabled) {
         while (attempt < 4 && !chunkSuccess) {
@@ -639,6 +639,77 @@ export async function triggerUploadWorker(): Promise<void> {
           }
           attempt++;
           try {
+            let usedProxy = false;
+            let proxyData: any = null;
+
+            // 1. Try local Node.js proxy to bypass browser CORS and stream raw binary at full cloud speed
+            try {
+              const proxyResp = await fetch('/api/drive/resumable-chunk', {
+                method: 'PUT',
+                headers: {
+                  'x-drive-upload-url': directUploadUrl,
+                  'content-range': `bytes ${startByte}-${endByte - 1}/${totalBytes}`,
+                  'content-type': currentItem.mimeType || 'video/mp4',
+                },
+                body: chunkBlob,
+              });
+
+              if (proxyResp && proxyResp.ok) {
+                proxyData = await proxyResp.json().catch(() => null);
+                if (proxyData) usedProxy = true;
+              }
+            } catch (proxyNetErr) {
+              usedProxy = false;
+            }
+
+            if (usedProxy && proxyData) {
+              // HTTP 308 = Chunk accepted, waiting for remaining chunks
+              if (proxyData.success && (proxyData.driveStatus === 308 || proxyData.status === 308)) {
+                chunkSuccess = true;
+                if (c > 0 && c % 4 === 0 && uploadId) {
+                  requestApi('heartbeatUpload', { uploadId }).catch(() => {});
+                }
+                break;
+              }
+
+              // HTTP 200 or 201 = Video upload fully completed by Google Drive!
+              if (proxyData.success && (proxyData.driveStatus === 200 || proxyData.driveStatus === 201 || proxyData.fileId)) {
+                finalFileId = proxyData.fileId || (proxyData.file && proxyData.file.id) || '';
+                finalWebViewLink = `https://drive.google.com/file/d/${finalFileId}/preview`;
+                chunkSuccess = true;
+
+                // Immediately finalize Google Sheets row and release upload slot
+                try {
+                  const fin = await requestApi('finishUpload', {
+                    uploadId: uploadId,
+                    fileId: finalFileId,
+                    orderId: currentItem.orderId,
+                    platform: currentItem.platform,
+                    recordingType: currentItem.recordingType || 'Forward',
+                    fileName: currentItem.fileName,
+                    fileSize: totalBytes,
+                    mimeType: currentItem.mimeType,
+                    source: currentItem.source || 'Automatic Recording',
+                    driveFolderId: driveFolderId,
+                    queueJobId: currentItem.id,
+                  });
+                  if (fin && (fin.webViewLink || fin.playbackUrl)) {
+                    finalWebViewLink = fin.webViewLink || fin.playbackUrl;
+                  }
+                } catch (finErr) {
+                  console.warn('finishUpload notice:', finErr);
+                }
+                break;
+              }
+
+              if (proxyData.sessionExpired || proxyData.driveStatus === 404 || proxyData.driveStatus === 410) {
+                throw new Error('Google Drive upload session expired');
+              }
+
+              throw new Error(proxyData.error || `Proxy returned ${proxyData.driveStatus || proxyData.status}`);
+            }
+
+            // 2. Direct Browser PUT Fallback (if proxy unavailable)
             const driveResp = await fetch(directUploadUrl, {
               method: 'PUT',
               headers: {
@@ -694,8 +765,8 @@ export async function triggerUploadWorker(): Promise<void> {
             throw new Error(`Google Drive returned status ${driveResp.status}`);
           } catch (putErr: any) {
             console.warn(`Direct Drive PUT chunk ${c + 1} attempt ${attempt} notice:`, putErr);
-            // If browser throws CORS or network error on initial chunk, immediately disable direct channel
-            // so remaining chunks stream smoothly via Apps Script proxy without 4 retries per chunk
+            // If browser throws CORS or network error on initial chunk, smoothly disable direct channel
+            // so remaining chunks stream via Apps Script proxy without 4 retries per chunk
             if (c <= 1 || attempt >= 2) {
               console.warn('Direct upload channel unavailable in browser, smoothly streaming via Apps Script...');
               directUploadDisabled = true;

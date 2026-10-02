@@ -85,6 +85,7 @@ function doPost(e) {
       case 'cleanupStuckUploads': return output_(cleanupStuckUploads_(p));
       case 'acquireUploadSlot': return output_(checkGlobalUploadSlot_(p.orderId, p.uploadId, p.packerEmail));
       case 'releaseUploadSlot': return output_({ success: true, released: (releaseGlobalUploadSlot_(p.uploadId), true) });
+      case 'heartbeatUpload': return output_({ success: true, touched: (touchGlobalUploadSlot_(p.uploadId), true) });
       case 'startUpload': return output_(startUpload_(p));
       case 'uploadChunk': return output_(uploadChunk_(p));
       case 'finishUpload': return output_(finishUpload_(p));
@@ -1699,8 +1700,8 @@ function getGlobalUploadLease_() {
   try {
     const lease = JSON.parse(raw);
     const now = Date.now();
-    // Lease expires after 35 seconds of inactive chunk heartbeats or 5 minutes total maximum
-    if (now - Number(lease.lastHeartbeatAt || 0) > 35000 || (now - Number(lease.startedAt || 0) > 300000)) {
+    // Lease expires after 120 seconds of inactive chunk heartbeats or 15 minutes total maximum
+    if (now - Number(lease.lastHeartbeatAt || 0) > 120000 || (now - Number(lease.startedAt || 0) > 900000)) {
       PropertiesService.getScriptProperties().deleteProperty('GLOBAL_ACTIVE_UPLOAD');
       return null;
     }

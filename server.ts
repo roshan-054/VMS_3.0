@@ -251,6 +251,77 @@ async function startServer() {
 
   wss.on('close', () => clearInterval(heartbeatInterval));
 
+  // High-Speed Direct Google Drive Binary Chunk Streaming Proxy
+  // Bypasses browser CORS & Apps Script Base64 bottlenecks: streams raw binary directly to Google Drive (100+ Mbps)
+  app.put('/api/drive/resumable-chunk', express.raw({ type: '*/*', limit: '100mb' }), async (req, res) => {
+    const uploadUrl = (req.headers['x-drive-upload-url'] as string || '').trim();
+    const contentRange = (req.headers['content-range'] as string || '').trim();
+    const contentType = (req.headers['content-type'] as string || 'video/mp4').trim();
+
+    if (!uploadUrl) {
+      return res.status(400).json({ success: false, error: 'Missing x-drive-upload-url header' });
+    }
+
+    try {
+      const driveResp = await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: {
+          'Content-Range': contentRange,
+          'Content-Type': contentType,
+        },
+        body: req.body, // Raw binary Buffer from client
+      });
+
+      const status = driveResp.status;
+
+      if (status === 308) {
+        // Chunk accepted by Google Drive, waiting for next chunk
+        return res.status(200).json({
+          success: true,
+          status: 308,
+          driveStatus: 308,
+          range: driveResp.headers.get('range') || '',
+        });
+      }
+
+      if (status === 200 || status === 201) {
+        // Completed: Google Drive created the file!
+        const driveJson = await driveResp.json().catch(() => ({}));
+        return res.status(200).json({
+          success: true,
+          status: 200,
+          driveStatus: status,
+          fileId: driveJson.id || '',
+          file: driveJson,
+        });
+      }
+
+      if (status === 404 || status === 410) {
+        return res.status(200).json({
+          success: false,
+          status: status,
+          driveStatus: status,
+          sessionExpired: true,
+          error: 'Google Drive upload session expired',
+        });
+      }
+
+      const errText = await driveResp.text().catch(() => '');
+      return res.status(200).json({
+        success: false,
+        status: status,
+        driveStatus: status,
+        error: `Google Drive returned ${status}: ${errText}`,
+      });
+    } catch (err: any) {
+      console.warn('Drive resumable chunk streaming error:', err);
+      return res.status(502).json({
+        success: false,
+        error: err.message || 'Error streaming chunk to Google Drive',
+      });
+    }
+  });
+
   // Allow larger payload for keyframe snapshots sent for AI video inspection
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));

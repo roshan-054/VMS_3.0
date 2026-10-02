@@ -124,6 +124,65 @@ export function setStoredAutoRefreshInterval(seconds: number): void {
   localStorage.setItem('ops_auto_refresh_sec', String(clean));
 }
 
+export type VideoQualityProfile = 'fast' | 'balanced' | 'high' | 'ultra';
+
+export interface VideoQualityConfig {
+  profile: VideoQualityProfile;
+  label: string;
+  bitrateBps: number;
+  description: string;
+  estimatedMbPerMin: number;
+}
+
+export const VIDEO_QUALITY_PROFILES: Record<VideoQualityProfile, VideoQualityConfig> = {
+  fast: {
+    profile: 'fast',
+    label: 'Fast Cloud (1.5 Mbps)',
+    bitrateBps: 1500000,
+    description: 'Blazing fast uploads (1-2s). Recommended for cellular 4G dongles and high-volume packing stations.',
+    estimatedMbPerMin: 11,
+  },
+  balanced: {
+    profile: 'balanced',
+    label: 'Balanced HD (2.2 Mbps) [Recommended]',
+    bitrateBps: 2200000,
+    description: 'Crisp barcodes, AWB shipping labels & invoice text with 4x faster uploads than original 8 Mbps.',
+    estimatedMbPerMin: 16,
+  },
+  high: {
+    profile: 'high',
+    label: 'High Detail (3.5 Mbps)',
+    bitrateBps: 3500000,
+    description: 'Fine text clarity for micro-print packaging inspection.',
+    estimatedMbPerMin: 26,
+  },
+  ultra: {
+    profile: 'ultra',
+    label: 'Studio Ultra (6.0 Mbps)',
+    bitrateBps: 6000000,
+    description: 'Maximum resolution recording for large desktop monitors.',
+    estimatedMbPerMin: 45,
+  },
+};
+
+export function getStoredVideoQualityProfile(): VideoQualityProfile {
+  const stored = localStorage.getItem('ops_video_quality_profile');
+  if (stored && stored in VIDEO_QUALITY_PROFILES) {
+    return stored as VideoQualityProfile;
+  }
+  return 'balanced'; // 2.2 Mbps default (cuts video size by 75% while keeping crisp barcodes!)
+}
+
+export function setStoredVideoQualityProfile(profile: VideoQualityProfile): void {
+  localStorage.setItem('ops_video_quality_profile', profile);
+  window.dispatchEvent(new CustomEvent('ops_config_updated', { detail: { videoQuality: profile } }));
+}
+
+export function getStoredVideoBitrate(): number {
+  const profileKey = getStoredVideoQualityProfile();
+  return VIDEO_QUALITY_PROFILES[profileKey].bitrateBps;
+}
+
 export type DuplicatePolicy = 'strict_block' | 'admin_override' | 'warn_only';
 
 export function getStoredDuplicatePolicy(): DuplicatePolicy {
