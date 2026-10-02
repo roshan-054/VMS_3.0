@@ -22,7 +22,14 @@ import {
   Target,
   Radio
 } from 'lucide-react';
-import { BrowserMultiFormatReader } from '@zxing/library';
+import {
+  MultiFormatReader,
+  BarcodeFormat,
+  DecodeHintType,
+  HTMLCanvasElementLuminanceSource,
+  HybridBinarizer,
+  BinaryBitmap,
+} from '@zxing/library';
 import { sharedScannerSync, cleanStationPin } from '../lib/phoneScannerSync';
 
 interface MobilePhoneScannerProps {
@@ -65,7 +72,8 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const apertureRef = useRef<HTMLDivElement | null>(null);
   const cropCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const zxingReaderRef = useRef<BrowserMultiFormatReader | null>(null);
+  const zxingReaderRef = useRef<MultiFormatReader | null>(null);
+  const scanLoopRef = useRef<(() => void) | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const lastScannedTimeRef = useRef<number>(0);
   const lastScannedCodeRef = useRef<string>('');
@@ -209,15 +217,31 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
           }
         }
 
-        // 2. ZXing fallback instance
-        const codeReader = new BrowserMultiFormatReader();
+        // 2. ZXing fallback instance (properly configured for canvas ImageData decoding)
+        const hints = new Map();
+        hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+          BarcodeFormat.CODE_128,
+          BarcodeFormat.CODE_39,
+          BarcodeFormat.EAN_13,
+          BarcodeFormat.EAN_8,
+          BarcodeFormat.QR_CODE,
+          BarcodeFormat.DATA_MATRIX,
+          BarcodeFormat.UPC_A,
+          BarcodeFormat.UPC_E,
+          BarcodeFormat.ITF,
+        ]);
+        hints.set(DecodeHintType.TRY_HARDER, true);
+
+        const codeReader = new MultiFormatReader();
+        codeReader.setHints(hints);
         zxingReaderRef.current = codeReader;
 
         // Unified High-Precision Frame Loop: CROPS ONLY THE CLEAR APERTURE WINDOW
         const scanFrame = async () => {
+          scanLoopRef.current = scanFrame;
           if (!isMounted) return;
 
-          // If currently in post-scan lock / cooldown, pause frame decoding completely
+          // If currently in post-scan lock / popup open, keep animation frame cycling so unlock is instant
           if (isLockedRef.current) {
             barcodeAnimRef.current = requestAnimationFrame(scanFrame);
             return;
@@ -264,10 +288,13 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
             }
 
             const scale = vWidth / renderWidth;
-            const sx = Math.max(0, (aRect.left - cRect.left - offsetX) * scale);
-            const sy = Math.max(0, (aRect.top - cRect.top - offsetY) * scale);
-            const sWidth = Math.min(vWidth - sx, aRect.width * scale);
-            const sHeight = Math.min(vHeight - sy, aRect.height * scale);
+            // 5% margin so codes at the inner borders of the window are not cut off
+            const marginX = (aRect.width * scale) * 0.05;
+            const marginY = (aRect.height * scale) * 0.05;
+            const sx = Math.max(0, (aRect.left - cRect.left - offsetX) * scale - marginX);
+            const sy = Math.max(0, (aRect.top - cRect.top - offsetY) * scale - marginY);
+            const sWidth = Math.min(vWidth - sx, aRect.width * scale + marginX * 2);
+            const sHeight = Math.min(vHeight - sy, aRect.height * scale + marginY * 2);
 
             if (sWidth > 20 && sHeight > 20) {
               if (!cropCanvasRef.current) {
@@ -276,7 +303,7 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
               const canvas = cropCanvasRef.current;
 
               // High-clarity resolution suitable for rapid 1D & 2D barcode detection
-              const targetWidth = Math.min(640, Math.round(sWidth));
+              const targetWidth = Math.min(720, Math.round(sWidth));
               const targetHeight = Math.max(1, Math.round(targetWidth * (sHeight / sWidth)));
 
               if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
@@ -306,10 +333,12 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
                   } catch (_) {}
                 }
 
-                // 2. Try ZXing fallback on the exact same cropped canvas
+                // 2. Try ZXing fallback with BinaryBitmap on the exact same cropped canvas
                 if (!detectedText && zxingReaderRef.current) {
                   try {
-                    const zxResult = zxingReaderRef.current.decode(canvas);
+                    const luminanceSource = new HTMLCanvasElementLuminanceSource(canvas);
+                    const binaryBitmap = new BinaryBitmap(new HybridBinarizer(luminanceSource));
+                    const zxResult = zxingReaderRef.current.decode(binaryBitmap);
                     if (zxResult) {
                       const text = typeof zxResult.getText === 'function' ? zxResult.getText() : String(zxResult.text || '');
                       if (text && text.trim().length >= 4) {
@@ -322,7 +351,6 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
                   }
                 }
 
-                // 3. Double-Read Consensus (eliminates mis-scans and noisy single-frame glitches)
                 if (detectedText) {
                   const cleaned = detectedText.replace(/[\x00-\x1F\x7F]/g, '').replace(/^\][a-zA-Z0-9]{2,3}/, '').trim();
                   if (cleaned.length >= 4) {
@@ -332,26 +360,16 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
                       return;
                     }
 
-                    if (candidateCodeRef.current === cleaned) {
-                      candidateCountRef.current += 1;
-                    } else {
-                      candidateCodeRef.current = cleaned;
-                      candidateCountRef.current = 1;
-                    }
-
-                    if (candidateCountRef.current >= 2) {
-                      candidateCodeRef.current = '';
-                      candidateCountRef.current = 0;
-                      triggerConfirmedScan(cleaned, detectedFormat);
-                      return;
-                    }
+                    // Scanned successfully! Lock immediately, send to PC, and show popup
+                    triggerConfirmedScan(cleaned, detectedFormat);
+                    // Crucial: keep animation frame active so it loops while locked, waiting for unlock
+                    barcodeAnimRef.current = requestAnimationFrame(scanFrame);
+                    return;
                   }
                 } else {
                   noBarcodeFramesRef.current += 1;
-                  // Once previous package leaves camera view for ~1 second, allow re-scanning
-                  if (noBarcodeFramesRef.current > 25) {
-                    candidateCodeRef.current = '';
-                    candidateCountRef.current = 0;
+                  // If camera points away from barcode for 10 frames (~300ms), clear memory of previous code
+                  if (noBarcodeFramesRef.current > 10) {
                     lastScannedCodeRef.current = '';
                   }
                 }
@@ -397,28 +415,26 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
   const triggerCameraAutoFocus = async () => {
     if (!streamRef.current) return;
     const track = streamRef.current.getVideoTracks()[0];
-    if (!track) return;
+    if (!track || track.readyState !== 'live') return;
 
     setIsFocusing(true);
-    setTimeout(() => setIsFocusing(false), 800);
+    setTimeout(() => setIsFocusing(false), 700);
 
-    if (typeof track.applyConstraints === 'function') {
-      try {
-        await track.applyConstraints({
-          advanced: [
-            { focusMode: 'continuous' },
-            { exposureMode: 'continuous' },
-            { pointsOfInterest: [{ x: 0.5, y: 0.5 }] },
-          ] as any,
-        });
-        setStatusMessage('Auto-focused on barcode');
-      } catch (err) {
-        try {
-          await track.applyConstraints({ advanced: [{ focusMode: 'manual' }] as any });
-          await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] as any });
-        } catch (_) {}
+    try {
+      if (typeof track.applyConstraints === 'function') {
+        const caps: any = typeof track.getCapabilities === 'function' ? track.getCapabilities() : {};
+        const adv: any = {};
+        if (caps.focusMode && Array.isArray(caps.focusMode) && caps.focusMode.includes('continuous')) {
+          adv.focusMode = 'continuous';
+        }
+        if (caps.pointsOfInterest) {
+          adv.pointsOfInterest = [{ x: 0.5, y: 0.5 }];
+        }
+        if (Object.keys(adv).length > 0) {
+          await track.applyConstraints({ advanced: [adv] } as any);
+        }
       }
-    }
+    } catch (_) {}
   };
 
   const triggerConfirmedScan = (code: string, format: string) => {
@@ -450,6 +466,14 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
     // 3. Command optical auto-focus for the new barcode
     triggerCameraAutoFocus();
     setStatusMessage('Ready for next barcode');
+
+    // 4. Ensure frame scanning loop is running
+    if (scanLoopRef.current) {
+      if (barcodeAnimRef.current) {
+        cancelAnimationFrame(barcodeAnimRef.current);
+      }
+      barcodeAnimRef.current = requestAnimationFrame(scanLoopRef.current);
+    }
   };
 
   const handleBarcodeScanned = async (rawCode: string, format: string) => {

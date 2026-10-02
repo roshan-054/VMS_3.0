@@ -1058,9 +1058,9 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
             return;
           }
 
-          // Anti-continuous scanning guard: ignore identical barcode received within 3.5 seconds
+          // Anti-continuous scanning guard: ignore identical barcode received within 1.2 seconds
           const now = Date.now();
-          if (cleaned === lastStationBarcodeRef.current && now - lastStationBarcodeTimeRef.current < 3500) {
+          if (cleaned === lastStationBarcodeRef.current && now - lastStationBarcodeTimeRef.current < 1200) {
             return;
           }
           lastStationBarcodeRef.current = cleaned;
