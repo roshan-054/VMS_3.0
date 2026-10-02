@@ -2,6 +2,7 @@ import express from 'express';
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import dotenv from 'dotenv';
 import { WebSocketServer, WebSocket } from 'ws';
 import { GoogleGenAI, Type } from '@google/genai';
@@ -47,7 +48,30 @@ async function startServer() {
   function cleanStationId(raw: any): string {
     const str = String(raw || '').trim().toLowerCase();
     const digits = str.replace(/\D/g, '').slice(0, 4);
-    return digits ? `station-${digits}` : (str || 'default');
+    return digits ? `station-${digits}` : 'station-5829';
+  }
+
+  function getAnyActiveStation(): { stationId: string; pin: string } | null {
+    const now = Date.now();
+    // 1. Check WS stations
+    for (const [stId, room] of stationRooms.entries()) {
+      for (const client of room) {
+        if (client.readyState === WebSocket.OPEN && client.role === 'station') {
+          const pin = stId.replace(/\D/g, '').slice(0, 4) || '5829';
+          return { stationId: stId, pin };
+        }
+      }
+    }
+    // 2. Check HTTP presence stations (active within last 25 seconds)
+    for (const [stId, map] of httpPresence.entries()) {
+      for (const entry of map.values()) {
+        if (entry.role === 'station' && now - entry.lastSeen < 25000) {
+          const pin = stId.replace(/\D/g, '').slice(0, 4) || '5829';
+          return { stationId: stId, pin };
+        }
+      }
+    }
+    return null;
   }
 
   function recordPresence(rawStationId: string, clientId: string, role: 'station' | 'phone', deviceName: string) {
@@ -391,8 +415,21 @@ async function startServer() {
 
   // REST API: Instant Station & Phone Pairing Handshake (<20ms response)
   app.post('/api/scanner/pair', (req, res) => {
-    const stationId = cleanStationId(req.body.stationId);
+    let stationId = cleanStationId(req.body.stationId);
     const { clientId = `client-${Date.now()}`, role = 'phone', deviceName = 'Device' } = req.body;
+
+    // Smart Auto-Pairing: If a phone connects and its specified stationId has no active workstation,
+    // automatically link it to the workstation currently active on the server!
+    if (role === 'phone') {
+      const initialStats = getActiveStationStats(stationId);
+      if (initialStats.connectedStations === 0) {
+        const active = getAnyActiveStation();
+        if (active && active.stationId) {
+          stationId = active.stationId;
+        }
+      }
+    }
+
     recordPresence(stationId, String(clientId), role === 'station' ? 'station' : 'phone', String(deviceName));
     const stats = getActiveStationStats(stationId);
 
@@ -413,12 +450,36 @@ async function startServer() {
       });
     }
 
+    const stationPin = stationId.replace(/\D/g, '').slice(0, 4) || '5829';
+
     res.json({
       success: true,
       stationId,
+      stationPin,
       role,
       paired: true,
       ...stats,
+      serverTime: Date.now(),
+    });
+  });
+
+  // REST API: Network info for mobile scanner QR code & direct Wi-Fi pairing
+  app.get('/api/scanner/info', (_req, res) => {
+    const interfaces = os.networkInterfaces();
+    const lanIps: string[] = [];
+    for (const name of Object.keys(interfaces)) {
+      for (const iface of interfaces[name] || []) {
+        if (iface.family === 'IPv4' && !iface.internal) {
+          lanIps.push(iface.address);
+        }
+      }
+    }
+    const active = getAnyActiveStation();
+    res.json({
+      success: true,
+      lanIps,
+      port: PORT,
+      activeStation: active,
       serverTime: Date.now(),
     });
   });

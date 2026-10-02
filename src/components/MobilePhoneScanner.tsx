@@ -36,11 +36,14 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
 }) => {
   const [stationPin, setStationPin] = useState<string>(() => {
     const urlParams = new URLSearchParams(window.location.search);
-    const raw = urlParams.get('pin') || urlParams.get('station') || initialPin || localStorage.getItem('vms_paired_pin') || '';
-    return cleanStationPin(raw);
+    const fromUrl = cleanStationPin(urlParams.get('pin') || urlParams.get('station') || initialPin);
+    if (fromUrl) return fromUrl;
+    const fromStorage = cleanStationPin(localStorage.getItem('vms_paired_pin') || '');
+    if (fromStorage) return fromStorage;
+    return '5829'; // Default station PIN matching desktop workstation
   });
 
-  const [isPaired, setIsPaired] = useState<boolean>(Boolean(stationPin && stationPin.length === 4));
+  const [isPaired, setIsPaired] = useState<boolean>(true);
   const [pinInput, setPinInput] = useState<string>(stationPin);
   const [isScanning, setIsScanning] = useState<boolean>(true);
   const [hasTorch, setHasTorch] = useState<boolean>(false);
@@ -71,12 +74,8 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
 
   // Auto-connect to WebSocket station room
   useEffect(() => {
-    if (!stationPin || stationPin.length !== 4) {
-      setIsPaired(false);
-      return;
-    }
-
-    localStorage.setItem('vms_paired_pin', stationPin);
+    const effectivePin = cleanStationPin(stationPin) || '5829';
+    localStorage.setItem('vms_paired_pin', effectivePin);
     setIsPaired(true);
 
     const userAgent = navigator.userAgent;
@@ -86,12 +85,17 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
       ? 'Android'
       : 'Mobile Phone';
 
-    sharedScannerSync.connectAsPhone(stationPin, phoneModel);
+    sharedScannerSync.connectAsPhone(effectivePin, phoneModel);
     sharedScannerSync.pairInstant();
 
     const unsubStatus = sharedScannerSync.onPhoneStatus((connected, _count, _dev, ping) => {
       setIsConnected(connected);
       if (ping) setLatencyMs(ping);
+      const syncedPin = sharedScannerSync.getStationPin();
+      if (syncedPin && syncedPin.length === 4 && syncedPin !== stationPin) {
+        setStationPin(syncedPin);
+        setPinInput(syncedPin);
+      }
     });
 
     // Fast polling while active on mobile to ensure instant sub-second pairing handshake with PC
@@ -178,13 +182,12 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
                     const vCenterY = vHeight / 2;
                     const vCenterX = vWidth / 2;
 
-                    // Aperture filter: vertical center must fall within ±26% of video height
-                    // This matches the comfortable wider aiming reticle window
+                    // Aperture filter: vertical center must fall within ±40% of video height (wide generous scanning area)
                     const apertureBarcodes = barcodes.filter((b: any) => {
                       const box = b.boundingBox;
                       if (!box || typeof box.y !== 'number' || typeof box.height !== 'number') return true;
                       const bCenterY = box.y + box.height / 2;
-                      return Math.abs(bCenterY - vCenterY) <= vHeight * 0.26;
+                      return Math.abs(bCenterY - vCenterY) <= vHeight * 0.40;
                     });
 
                     const candidateList = apertureBarcodes.length > 0 ? apertureBarcodes : barcodes;
@@ -503,42 +506,42 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
           className="absolute inset-0 w-full h-full object-cover"
         />
 
-        {/* Real-time Aiming Reticle & Wider Laser Targeting Window */}
+        {/* Real-time Aiming Reticle & Wide Laser Targeting Window */}
         <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center">
-          {/* Top high-contrast shading */}
-          <div className="w-full flex-1 bg-black/60 backdrop-blur-[0.5px]" />
+          {/* Top subtle shading */}
+          <div className="w-full flex-1 bg-black/40 backdrop-blur-[0.5px]" />
 
-          {/* Comfortable Wider Laser Scan Window */}
+          {/* Comfortable Wide Laser Scan Window */}
           <div className="w-full flex items-center justify-center py-2 shrink-0">
             <div
-              className={`w-[90%] max-w-[360px] h-20 sm:h-24 relative rounded-xl border-2 transition-all duration-200 flex items-center justify-center shadow-[0_0_40px_rgba(0,0,0,0.9)] ${
+              className={`w-[94%] max-w-[460px] h-48 sm:h-56 relative rounded-2xl border-2 transition-all duration-200 flex items-center justify-center shadow-[0_0_50px_rgba(0,0,0,0.85)] ${
                 isRecentScan
-                  ? 'border-emerald-400 bg-emerald-500/30 scale-102 ring-4 ring-emerald-500/40'
-                  : 'border-white/70 bg-black/20'
+                  ? 'border-emerald-400 bg-emerald-500/25 scale-102 ring-4 ring-emerald-500/40'
+                  : 'border-white/80 bg-black/15'
               }`}
             >
               {/* Industrial Aiming Corner Brackets */}
-              <div className="absolute -top-1 -left-1 w-5 h-5 border-t-2 border-l-2 border-emerald-400 rounded-tl-sm" />
-              <div className="absolute -top-1 -right-1 w-5 h-5 border-t-2 border-r-2 border-emerald-400 rounded-tr-sm" />
-              <div className="absolute -bottom-1 -left-1 w-5 h-5 border-b-2 border-l-2 border-emerald-400 rounded-bl-sm" />
-              <div className="absolute -bottom-1 -right-1 w-5 h-5 border-b-2 border-r-2 border-emerald-400 rounded-br-sm" />
+              <div className="absolute -top-1.5 -left-1.5 w-6 h-6 border-t-3 border-l-3 border-emerald-400 rounded-tl-md" />
+              <div className="absolute -top-1.5 -right-1.5 w-6 h-6 border-t-3 border-r-3 border-emerald-400 rounded-tr-md" />
+              <div className="absolute -bottom-1.5 -left-1.5 w-6 h-6 border-b-3 border-l-3 border-emerald-400 rounded-bl-md" />
+              <div className="absolute -bottom-1.5 -right-1.5 w-6 h-6 border-b-3 border-r-3 border-emerald-400 rounded-br-md" />
 
               {/* Ultra-Crisp Red Laser Scanning Line */}
-              <div className="absolute inset-x-2 h-0.5 bg-gradient-to-r from-red-500/0 via-red-500 to-red-500/0 shadow-[0_0_14px_rgba(239,68,68,1)] animate-pulse" />
+              <div className="absolute inset-x-3 h-0.5 bg-gradient-to-r from-red-500/10 via-red-500 to-red-500/10 shadow-[0_0_16px_rgba(239,68,68,1)] animate-pulse" />
 
               {/* Center Alignment Guide Marks */}
-              <div className="absolute inset-y-1/2 left-2 w-2 border-t-2 border-emerald-400/80" />
-              <div className="absolute inset-y-1/2 right-2 w-2 border-t-2 border-emerald-400/80" />
+              <div className="absolute inset-y-1/2 left-2.5 w-3 border-t-2 border-emerald-400/90" />
+              <div className="absolute inset-y-1/2 right-2.5 w-3 border-t-2 border-emerald-400/90" />
 
               {/* Precision Badge Note */}
-              <div className="absolute -bottom-3 left-1/2 -translate-x-1/2 bg-slate-950/95 backdrop-blur-xs text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full border border-white/20 text-slate-200 whitespace-nowrap shadow-md">
-                Align Barcode inside Red Line
+              <div className="absolute -bottom-3.5 left-1/2 -translate-x-1/2 bg-slate-950/95 backdrop-blur-xs text-[10px] font-mono font-bold px-3 py-0.5 rounded-full border border-white/20 text-slate-200 whitespace-nowrap shadow-md">
+                Align Barcode inside Frame
               </div>
             </div>
           </div>
 
-          {/* Bottom high-contrast shading */}
-          <div className="w-full flex-1 bg-black/60 backdrop-blur-[0.5px]" />
+          {/* Bottom subtle shading */}
+          <div className="w-full flex-1 bg-black/40 backdrop-blur-[0.5px]" />
         </div>
 
         {/* Success Scan Popup Banner */}

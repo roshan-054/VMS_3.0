@@ -14,11 +14,11 @@ import { getStoredApiUrl } from './storage';
 
 export function cleanStationPin(pin?: string): string {
   const digits = String(pin || '').replace(/\D/g, '').slice(0, 4);
-  return digits.length === 4 ? digits : (digits || '5829');
+  return digits.length === 4 ? digits : '';
 }
 
 export function cleanStationId(pinOrId?: string): string {
-  const pin = cleanStationPin(pinOrId);
+  const pin = cleanStationPin(pinOrId) || '5829';
   return `station-${pin}`;
 }
 
@@ -83,14 +83,13 @@ class PhoneScannerSync {
     let storedId = localStorage.getItem('vms_station_id');
     let storedPin = localStorage.getItem('vms_station_pin');
 
-    if (!storedId || !storedPin || storedPin.replace(/\D/g, '').length !== 4) {
-      const pinNum = Math.floor(1000 + Math.random() * 9000);
-      storedPin = String(pinNum);
-      storedId = `station-${storedPin}`;
+    if (!storedId || !storedPin || cleanStationPin(storedPin).length !== 4) {
+      storedPin = '5829';
+      storedId = 'station-5829';
       localStorage.setItem('vms_station_id', storedId);
       localStorage.setItem('vms_station_pin', storedPin);
     } else {
-      storedPin = cleanStationPin(storedPin);
+      storedPin = cleanStationPin(storedPin) || '5829';
       storedId = `station-${storedPin}`;
     }
 
@@ -286,6 +285,12 @@ class PhoneScannerSync {
       const firstDevice = Array.isArray(data.devices) && data.devices.length > 0 ? data.devices[0] : (phones > 0 ? 'Wireless Scanner' : undefined);
       this.emitStatus(phones > 0, phones, firstDevice);
     } else {
+      // Auto-adopt workstation stationId if server mapped to active workstation
+      if (data.stationPin && data.stationPin.length === 4 && data.stationPin !== this.stationPin) {
+        this.stationPin = data.stationPin;
+        this.stationId = `station-${data.stationPin}`;
+        localStorage.setItem('vms_paired_pin', data.stationPin);
+      }
       // On phone, station presence confirmed
       const stations = Number(data.connectedStations || 0);
       this.emitStatus(stations > 0 || Boolean(data.paired), Math.max(stations, 1), 'Packing Station');

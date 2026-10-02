@@ -34,8 +34,30 @@ export const PhoneScannerModal: React.FC<PhoneScannerModalProps> = ({
   const [latencyMs, setLatencyMs] = useState(0);
   const [copiedLink, setCopiedLink] = useState(false);
   const [recentScans, setRecentScans] = useState<Array<{ code: string; time: string; device: string }>>([]);
+  const [lanIp, setLanIp] = useState<string>('');
 
   const qrContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    fetch('/api/scanner/info')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d && Array.isArray(d.lanIps) && d.lanIps.length > 0) {
+          setLanIp(d.lanIps[0]);
+        }
+      })
+      .catch(() => {});
+  }, [isOpen]);
+
+  const getResolvedPairingUrl = () => {
+    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    if (isLocalhost && lanIp) {
+      const port = window.location.port ? `:${window.location.port}` : '';
+      return `http://${lanIp}${port}/?scanner=mobile&pin=${stationPin}`;
+    }
+    return sharedScannerSync.getPairingUrl(stationPin);
+  };
 
   // Sync state with phoneScannerSync
   useEffect(() => {
@@ -82,7 +104,7 @@ export const PhoneScannerModal: React.FC<PhoneScannerModalProps> = ({
     if (!isOpen || !qrContainerRef.current) return;
 
     try {
-      const pairingUrl = sharedScannerSync.getPairingUrl(stationPin);
+      const pairingUrl = getResolvedPairingUrl();
       const writer = new BrowserQRCodeSvgWriter();
       const svg = writer.write(pairingUrl, 200, 200);
 
@@ -122,7 +144,7 @@ export const PhoneScannerModal: React.FC<PhoneScannerModalProps> = ({
 
   if (!isOpen) return null;
 
-  const pairingUrl = sharedScannerSync.getPairingUrl(stationPin);
+  const pairingUrl = getResolvedPairingUrl();
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(pairingUrl);
