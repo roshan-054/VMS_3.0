@@ -26,7 +26,7 @@ import {
   Radio
 } from 'lucide-react';
 import { BrowserMultiFormatReader } from '@zxing/library';
-import { sharedScannerSync } from '../lib/phoneScannerSync';
+import { sharedScannerSync, cleanStationPin } from '../lib/phoneScannerSync';
 
 interface MobilePhoneScannerProps {
   initialPin?: string;
@@ -39,7 +39,8 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
 }) => {
   const [stationPin, setStationPin] = useState<string>(() => {
     const urlParams = new URLSearchParams(window.location.search);
-    return urlParams.get('pin') || urlParams.get('station') || initialPin || localStorage.getItem('vms_paired_pin') || '';
+    const raw = urlParams.get('pin') || urlParams.get('station') || initialPin || localStorage.getItem('vms_paired_pin') || '';
+    return cleanStationPin(raw);
   });
 
   const [isPaired, setIsPaired] = useState<boolean>(Boolean(stationPin && stationPin.length === 4));
@@ -64,9 +65,10 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
   const barcodeAnimRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (initialPin && initialPin.length === 4 && initialPin !== stationPin) {
-      setStationPin(initialPin);
-      setPinInput(initialPin);
+    const clean = cleanStationPin(initialPin);
+    if (clean && clean.length === 4 && clean !== stationPin) {
+      setStationPin(clean);
+      setPinInput(clean);
     }
   }, [initialPin]);
 
@@ -88,16 +90,18 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
       : 'Mobile Phone';
 
     sharedScannerSync.connectAsPhone(stationPin, phoneModel);
+    sharedScannerSync.pairInstant();
 
     const unsubStatus = sharedScannerSync.onPhoneStatus((connected, _count, _dev, ping) => {
       setIsConnected(connected);
       if (ping) setLatencyMs(ping);
     });
 
-    // Fast polling while active on mobile to ensure instant pairing handshake with PC
+    // Fast polling while active on mobile to ensure instant sub-second pairing handshake with PC
     const phonePoll = setInterval(() => {
-      sharedScannerSync.forceSync();
-    }, 600);
+      sharedScannerSync.pairInstant();
+      sharedScannerSync.pollHttpEvents();
+    }, 400);
 
     return () => {
       clearInterval(phonePoll);

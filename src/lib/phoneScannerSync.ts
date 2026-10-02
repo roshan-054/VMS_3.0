@@ -52,8 +52,9 @@ class PhoneScannerSync {
   private isConnecting: boolean = false;
   private lastPingSent: number = 0;
   private latencyMs: number = 0;
-  private lastPolledTimestamp: number = 0;
+  private lastPolledTimestamp: number = Date.now() - 2000;
   private processedEventIds: Set<string> = new Set();
+  private lastPhoneSeenTime: number = 0;
 
   // State cache
   private isPhoneConnected: boolean = false;
@@ -222,6 +223,7 @@ class PhoneScannerSync {
     } else {
       this.connectWs();
     }
+    this.pairInstant();
     this.sendHeartbeat();
     this.pollHttpEvents();
   }
@@ -234,7 +236,7 @@ class PhoneScannerSync {
     this.stationPin = cleanStationPin(stationPin);
     this.stationId = cleanStationId(this.stationPin);
     this.deviceName = phoneName;
-    this.lastPolledTimestamp = 0;
+    this.lastPolledTimestamp = Date.now() - 2000;
 
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({
@@ -247,8 +249,38 @@ class PhoneScannerSync {
     } else {
       this.connectWs();
     }
+    this.pairInstant();
     this.sendHeartbeat();
     this.pollHttpEvents();
+  }
+
+  public async pairInstant() {
+    if (!this.stationId) return;
+    try {
+      const res = await fetch('/api/scanner/pair', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stationId: this.stationId,
+          clientId: this.clientId,
+          role: this.role,
+          deviceName: this.deviceName,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (this.role === 'station') {
+          const phones = Number(data.connectedPhones || 0);
+          const firstDevice = Array.isArray(data.devices) && data.devices.length > 0 ? data.devices[0] : (phones > 0 ? 'Wireless Scanner' : undefined);
+          this.emitStatus(phones > 0, phones, firstDevice);
+        } else {
+          const stations = Number(data.connectedStations || 0);
+          this.emitStatus(stations > 0, stations, 'Packing Station');
+        }
+      }
+    } catch (e) {
+      // Pair notice
+    }
   }
 
   public forceSync() {
@@ -263,6 +295,7 @@ class PhoneScannerSync {
     } else {
       this.connectWs();
     }
+    this.pairInstant();
     this.sendHeartbeat();
     this.pollHttpEvents();
   }
@@ -316,9 +349,27 @@ class PhoneScannerSync {
   }
 
   private emitStatus(connected: boolean, count: number, deviceName?: string) {
+    if (this.role === 'station') {
+      if (connected) {
+        this.lastPhoneSeenTime = Date.now();
+      } else {
+        // If a phone was actively seen within the last 4 seconds, debounce disconnect
+        if (Date.now() - this.lastPhoneSeenTime < 4000 && this.isPhoneConnected) {
+          return;
+        }
+      }
+    }
+
+    const wasDisconnected = !this.isPhoneConnected;
     this.isPhoneConnected = connected;
     this.connectedPhonesCount = count;
     if (deviceName) this.lastDeviceName = deviceName;
+
+    // Chime when phone connects to station
+    if (this.role === 'station' && connected && wasDisconnected) {
+      this.playBeepSound('double');
+    }
+
     this.phoneStatusListeners.forEach((fn) => fn(connected, count, this.lastDeviceName || deviceName, this.latencyMs));
   }
 
@@ -412,15 +463,15 @@ class PhoneScannerSync {
     if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
     if (this.pollInterval) clearInterval(this.pollInterval);
 
-    // 1. Send periodic presence heartbeat every 800ms
+    // 1. Send periodic presence heartbeat every 600ms
     this.heartbeatInterval = setInterval(() => {
       this.sendHeartbeat();
-    }, 800);
+    }, 600);
 
-    // 2. Poll fallback events every 350ms for near-instant HTTP fallback
+    // 2. Poll fallback events every 250ms for near-instant zero-delay sync
     this.pollInterval = setInterval(() => {
       this.pollHttpEvents();
-    }, 350);
+    }, 250);
   }
 
   private async sendHeartbeat() {
@@ -452,12 +503,22 @@ class PhoneScannerSync {
     }
   }
 
-  private async pollHttpEvents() {
+  public async pollHttpEvents() {
     if (!this.stationId) return;
     try {
       const res = await fetch(`/api/scanner/poll?stationId=${encodeURIComponent(this.stationId)}&since=${this.lastPolledTimestamp}`);
       if (res.ok) {
         const data = await res.json();
+        // Update presence stats directly from poll payload for sub-second handshake
+        if (this.role === 'station' && typeof data.connectedPhones === 'number') {
+          const phones = Number(data.connectedPhones || 0);
+          const firstDevice = Array.isArray(data.devices) && data.devices.length > 0 ? data.devices[0] : (phones > 0 ? 'Wireless Scanner' : undefined);
+          this.emitStatus(phones > 0, phones, firstDevice);
+        } else if (this.role === 'phone' && typeof data.connectedStations === 'number') {
+          const stations = Number(data.connectedStations || 0);
+          this.emitStatus(stations > 0, stations, 'Packing Station');
+        }
+
         if (Array.isArray(data.events) && data.events.length > 0) {
           data.events.forEach((evt: any) => {
             const p = evt.payload || {};

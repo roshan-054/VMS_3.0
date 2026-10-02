@@ -87,10 +87,10 @@ async function startServer() {
       });
     }
 
-    // 2. HTTP clients (active within last 8 seconds)
+    // 2. HTTP clients (active within last 15 seconds)
     if (httpMap) {
       httpMap.forEach((entry, clientId) => {
-        if (now - entry.lastSeen < 8000) {
+        if (now - entry.lastSeen < 15000) {
           if (entry.role === 'phone') {
             httpPhones++;
             activePhoneDevices.add(entry.deviceName || 'Mobile Phone');
@@ -241,14 +241,26 @@ async function startServer() {
         const room = stationRooms.get(stationId)!;
         room.delete(ws);
         const stats = getActiveStationStats(stationId);
-        broadcastToStation(stationId, {
-          type: ws.role === 'phone' ? 'PHONE_DISCONNECTED' : 'STATION_DISCONNECTED',
-          stationId,
-          deviceName: ws.deviceName,
-          connectedPhones: stats.connectedPhones,
-          connectedStations: stats.connectedStations,
-          timestamp: Date.now(),
-        });
+        // Only broadcast disconnect if truly 0 devices remain
+        if (ws.role === 'phone' && stats.connectedPhones === 0) {
+          broadcastToStation(stationId, {
+            type: 'PHONE_DISCONNECTED',
+            stationId,
+            deviceName: ws.deviceName,
+            connectedPhones: 0,
+            connectedStations: stats.connectedStations,
+            timestamp: Date.now(),
+          });
+        } else if (ws.role === 'station' && stats.connectedStations === 0) {
+          broadcastToStation(stationId, {
+            type: 'STATION_DISCONNECTED',
+            stationId,
+            deviceName: ws.deviceName,
+            connectedPhones: stats.connectedPhones,
+            connectedStations: 0,
+            timestamp: Date.now(),
+          });
+        }
       }
     });
   });
@@ -369,16 +381,55 @@ async function startServer() {
     });
   });
 
-  // REST API: Poll events since timestamp (for HTTP fallback)
+  // REST API: Instant Station & Phone Pairing Handshake (<20ms response)
+  app.post('/api/scanner/pair', (req, res) => {
+    const stationId = cleanStationId(req.body.stationId);
+    const { clientId = `client-${Date.now()}`, role = 'phone', deviceName = 'Device' } = req.body;
+    recordPresence(stationId, String(clientId), role === 'station' ? 'station' : 'phone', String(deviceName));
+    const stats = getActiveStationStats(stationId);
+
+    // Notify all peers on station immediately
+    broadcastToStation(stationId, {
+      type: role === 'phone' ? 'PHONE_CONNECTED' : 'STATION_CONNECTED',
+      stationId,
+      deviceName: String(deviceName),
+      connectedPhones: stats.connectedPhones,
+      connectedStations: stats.connectedStations,
+      devices: stats.devices,
+      timestamp: Date.now(),
+    });
+
+    res.json({
+      success: true,
+      stationId,
+      role,
+      paired: true,
+      ...stats,
+      serverTime: Date.now(),
+    });
+  });
+
+  // REST API: Poll events since timestamp (with live peer presence stats)
   app.get('/api/scanner/poll', (req, res) => {
     const stationId = cleanStationId(req.query.stationId);
     const since = Number(req.query.since || 0);
 
-    const matches = recentEvents.filter((e) => cleanStationId(e.stationId) === stationId && e.timestamp > since);
+    // If client polls with since=0 (initial load), only return events from last 3000ms and omit historical disconnects
+    const cutoff = since > 0 ? since : (Date.now() - 3000);
+    const matches = recentEvents.filter((e) => {
+      if (cleanStationId(e.stationId) !== stationId || e.timestamp <= cutoff) return false;
+      if (since <= 0 && (e.type === 'PHONE_DISCONNECTED' || e.type === 'STATION_DISCONNECTED')) return false;
+      return true;
+    });
+
+    const stats = getActiveStationStats(stationId);
     res.json({
       success: true,
       stationId,
       events: matches,
+      connectedPhones: stats.connectedPhones,
+      connectedStations: stats.connectedStations,
+      devices: stats.devices,
       serverTime: Date.now(),
     });
   });

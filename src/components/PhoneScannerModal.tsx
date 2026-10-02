@@ -57,7 +57,8 @@ export const PhoneScannerModal: React.FC<PhoneScannerModalProps> = ({
 
     // Actively connect PC workstation as station receiver and force instant handshake
     sharedScannerSync.connectAsStation();
-    sharedScannerSync.forceSync();
+    sharedScannerSync.pairInstant();
+    sharedScannerSync.pollHttpEvents();
 
     setStationPin(sharedScannerSync.getStationPin());
     setTempPin(sharedScannerSync.getStationPin());
@@ -77,10 +78,11 @@ export const PhoneScannerModal: React.FC<PhoneScannerModalProps> = ({
       ]);
     });
 
-    // Fast polling while modal is open to ensure instant (<500ms) pairing detection
+    // Fast polling while modal is open to ensure instant (<300ms) pairing detection
     const activePollTimer = setInterval(() => {
-      sharedScannerSync.forceSync();
-    }, 600);
+      sharedScannerSync.pairInstant();
+      sharedScannerSync.pollHttpEvents();
+    }, 300);
 
     return () => {
       clearInterval(activePollTimer);
@@ -243,8 +245,9 @@ export const PhoneScannerModal: React.FC<PhoneScannerModalProps> = ({
                   type="button"
                   onClick={() => {
                     sharedScannerSync.connectAsStation();
-                    sharedScannerSync.forceSync();
-                    onShowToast('Refreshed station receiver socket', 'info');
+                    sharedScannerSync.pairInstant();
+                    sharedScannerSync.pollHttpEvents();
+                    onShowToast('Instant re-sync requested', 'info');
                   }}
                   className="p-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 transition cursor-pointer"
                   title="Force re-sync with mobile phone"
