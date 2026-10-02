@@ -58,10 +58,6 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
   const [lastScanSuccessTime, setLastScanSuccessTime] = useState<number>(0);
   const [isScanLocked, setIsScanLocked] = useState<boolean>(false);
   const [cooldownSeconds, setCooldownSeconds] = useState<number>(0);
-  const [scanMode, setScanMode] = useState<'single' | 'auto'>(() => {
-    const saved = localStorage.getItem('vms_phone_scan_mode');
-    return saved === 'auto' ? 'auto' : 'single';
-  });
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -308,8 +304,8 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
                 if (detectedText) {
                   const cleaned = detectedText.replace(/[\x00-\x1F\x7F]/g, '').replace(/^\][a-zA-Z0-9]{2,3}/, '').trim();
                   if (cleaned.length >= 4) {
-                    if (cleaned === lastScannedCodeRef.current && isLockedRef.current) {
-                      // Already locked on this code
+                    if (cleaned === lastScannedCodeRef.current) {
+                      // Same barcode is still in front of the camera: do NOT continuously re-scan it!
                       barcodeAnimRef.current = requestAnimationFrame(scanFrame);
                       return;
                     }
@@ -330,9 +326,11 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
                   }
                 } else {
                   noBarcodeFramesRef.current += 1;
-                  if (noBarcodeFramesRef.current > 8) {
+                  // Once previous package leaves camera view for ~1 second, allow re-scanning
+                  if (noBarcodeFramesRef.current > 25) {
                     candidateCodeRef.current = '';
                     candidateCountRef.current = 0;
+                    lastScannedCodeRef.current = '';
                   }
                 }
               }
@@ -376,6 +374,7 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
   const triggerConfirmedScan = (code: string, format: string) => {
     isLockedRef.current = true;
     setIsScanLocked(true);
+    setCooldownSeconds(3);
     lastScannedCodeRef.current = code;
     lastScannedTimeRef.current = Date.now();
 
@@ -386,28 +385,15 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
       lockTimerRef.current = null;
     }
 
-    if (scanMode === 'auto') {
-      setCooldownSeconds(4);
-      let remaining = 4;
-      lockTimerRef.current = setInterval(() => {
-        remaining -= 1;
-        if (remaining <= 0) {
-          unlockScanner();
-        } else {
-          setCooldownSeconds(remaining);
-        }
-      }, 1000);
-    } else {
-      // Single-scan mode (1-by-1): Stays locked permanently until operator taps "Scan Next Order"
-      setCooldownSeconds(0);
-    }
-  };
-
-  const handleToggleScanMode = () => {
-    const next = scanMode === 'single' ? 'auto' : 'single';
-    setScanMode(next);
-    localStorage.setItem('vms_phone_scan_mode', next);
-    setStatusMessage(next === 'single' ? 'Mode: 1-by-1 Strict Lock' : 'Mode: Auto-Scan (4s delay)');
+    let remaining = 3;
+    lockTimerRef.current = setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        unlockScanner();
+      } else {
+        setCooldownSeconds(remaining);
+      }
+    }, 1000);
   };
 
   const unlockScanner = () => {
@@ -628,20 +614,6 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
             </button>
           )}
 
-          {/* Scan Mode Toggle: 1-by-1 strict lock vs Auto 4s */}
-          <button
-            type="button"
-            onClick={handleToggleScanMode}
-            className={`px-2.5 py-1.5 rounded-xl text-[11px] font-mono font-bold border transition cursor-pointer flex items-center gap-1 shadow-xs ${
-              scanMode === 'single'
-                ? 'bg-emerald-950/90 border-emerald-500/80 text-emerald-300'
-                : 'bg-amber-950/90 border-amber-500/80 text-amber-300'
-            }`}
-            title="Switch Mode: 🔒 1-by-1 Strict Lock (Recommended for packing) vs ⏱️ Auto (4s delay)"
-          >
-            {scanMode === 'single' ? '🔒 1-by-1' : '⏱️ Auto 4s'}
-          </button>
-
           <button
             type="button"
             onClick={() => setIsPaired(false)}
@@ -710,7 +682,7 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
                     <CheckCircle2 className="w-5 h-5 text-emerald-400" />
                   </div>
                   <div className="text-[10px] font-mono uppercase tracking-wider text-emerald-300 font-bold">
-                    {scanMode === 'single' ? 'Order Scanned • Paused' : 'Order Scanned & Sent'}
+                    Order Scanned &amp; Sent
                   </div>
                   <div className="text-sm font-mono font-black text-white tracking-wider truncate max-w-full my-0.5">
                     {lastScannedBarcode}
@@ -721,9 +693,7 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
                     className="mt-1 px-4 py-1.5 bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-slate-950 font-bold font-mono text-xs rounded-xl shadow-lg flex items-center gap-1.5 cursor-pointer transition"
                   >
                     <Zap className="w-3.5 h-3.5 fill-current" />
-                    {scanMode === 'single'
-                      ? 'Scan Next Order'
-                      : `Scan Next Now ${cooldownSeconds > 0 ? `(${cooldownSeconds}s)` : ''}`}
+                    Scan Next Now {cooldownSeconds > 0 ? `(${cooldownSeconds}s)` : ''}
                   </button>
                 </div>
               ) : (
