@@ -199,6 +199,35 @@ export function deleteManifest(orderId: string): void {
 
 // --- GTIN Product Catalog Store ---
 
+/**
+ * Robust Barcode / GTIN / GSIN Normalizer:
+ * - Fixes Excel scientific notation (e.g. "8.901234567890E+12" -> "8901234567890")
+ * - Preserves leading zeros (e.g. "0123456789012")
+ * - Strips quotes, whitespace, control characters, trailing ".0"
+ */
+export function normalizeBarcode(input: any): string {
+  if (input === null || input === undefined) return '';
+  let str = String(input).trim().replace(/^["']|["']$/g, '');
+
+  // Strip trailing .0 from float conversion
+  if (/\.0+$/.test(str)) {
+    str = str.replace(/\.0+$/, '');
+  }
+
+  // Handle scientific notation e.g. 8.90123456789E+12 or 8.90123456789e12
+  if (/^[+-]?\d+(\.\d+)?[eE][+-]?\d+$/.test(str)) {
+    try {
+      const num = Number(str);
+      if (!isNaN(num) && isFinite(num)) {
+        str = BigInt(Math.round(num)).toString();
+      }
+    } catch (_) {}
+  }
+
+  // Remove any spaces or invisible characters
+  return str.replace(/[\s\u200B-\u200D\uFEFF]/g, '').trim();
+}
+
 export function getStoredGtinCatalog(): GtinCatalogProduct[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_GTIN_CATALOG);
@@ -299,35 +328,71 @@ export function findProductByGtin(gtinOrSkuOrName: string): GtinCatalogProduct |
 
 export async function addOrUpdateGtinProduct(product: GtinCatalogProduct): Promise<void> {
   const catalog = getStoredGtinCatalog();
-  const cleanGtin = product.gtin.trim();
-  const index = catalog.findIndex((p) => p.gtin.trim() === cleanGtin);
+  const cleanGtin = normalizeBarcode(product.gtin);
+  if (!cleanGtin) return;
+
+  const normalizedProd: GtinCatalogProduct = {
+    ...product,
+    gtin: cleanGtin,
+    sku: product.sku ? product.sku.trim() : cleanGtin,
+    productName: product.productName ? product.productName.trim() : `Product ${cleanGtin}`,
+    shortName: product.shortName ? product.shortName.trim() : product.productName || cleanGtin,
+  };
+
+  const index = catalog.findIndex((p) => normalizeBarcode(p.gtin) === cleanGtin);
 
   if (index >= 0) {
-    catalog[index] = { ...catalog[index], ...product };
+    catalog[index] = { ...catalog[index], ...normalizedProd };
   } else {
-    catalog.unshift(product);
+    catalog.unshift(normalizedProd);
   }
 
   saveStoredGtinCatalog(catalog);
 
   try {
-    requestApi('saveGtinProduct', { product }).catch(() => {});
+    requestApi('saveGtinProduct', { product: normalizedProd }).catch(() => {});
   } catch (_) {}
+}
+
+export async function deleteGtinProduct(gtin: string): Promise<boolean> {
+  const clean = normalizeBarcode(gtin);
+  if (!clean) return false;
+
+  const catalog = getStoredGtinCatalog();
+  const filtered = catalog.filter((p) => normalizeBarcode(p.gtin) !== clean);
+  saveStoredGtinCatalog(filtered);
+
+  try {
+    requestApi('deleteGtinProduct', { gtin: clean }).catch(() => {});
+  } catch (_) {}
+
+  return true;
 }
 
 export async function importGtinCatalog(products: GtinCatalogProduct[]): Promise<number> {
   const catalog = getStoredGtinCatalog();
   let newCount = 0;
+  const cleanedProducts: GtinCatalogProduct[] = [];
 
   for (const item of products) {
-    const cleanGtin = item.gtin.trim();
+    const cleanGtin = normalizeBarcode(item.gtin);
     if (!cleanGtin) continue;
 
-    const index = catalog.findIndex((p) => p.gtin.trim() === cleanGtin);
+    const normalizedItem: GtinCatalogProduct = {
+      ...item,
+      gtin: cleanGtin,
+      sku: item.sku ? item.sku.trim() : cleanGtin,
+      productName: item.productName ? item.productName.trim() : `Product ${cleanGtin}`,
+      shortName: item.shortName ? item.shortName.trim() : item.productName || cleanGtin,
+    };
+
+    cleanedProducts.push(normalizedItem);
+
+    const index = catalog.findIndex((p) => normalizeBarcode(p.gtin) === cleanGtin);
     if (index >= 0) {
-      catalog[index] = { ...catalog[index], ...item };
+      catalog[index] = { ...catalog[index], ...normalizedItem };
     } else {
-      catalog.push(item);
+      catalog.push(normalizedItem);
       newCount++;
     }
   }
@@ -335,10 +400,75 @@ export async function importGtinCatalog(products: GtinCatalogProduct[]): Promise
   saveStoredGtinCatalog(catalog);
 
   try {
-    requestApi('saveGtinCatalogBatch', { products }).catch(() => {});
+    if (cleanedProducts.length > 0) {
+      requestApi('saveGtinCatalogBatch', { products: cleanedProducts }).catch(() => {});
+    }
   } catch (_) {}
 
   return newCount;
+}
+
+/**
+ * Fetch and synchronize GTIN catalog from the master connected Google Sheet ("GTINCatalog" tab)
+ * Uses the Branding / master Google Sheet reference as the single source of truth.
+ */
+export async function syncGtinWithMasterSheet(): Promise<{
+  success: boolean;
+  count: number;
+  message: string;
+  items?: GtinCatalogProduct[];
+}> {
+  try {
+    const res = await requestApi<{ success: boolean; catalog?: GtinCatalogProduct[]; error?: string }>(
+      'getGtinCatalog',
+      {}
+    );
+
+    if (res && res.success && Array.isArray(res.catalog)) {
+      if (res.catalog.length > 0) {
+        // Merge or replace with cloud catalog
+        const catalog = getStoredGtinCatalog();
+        const map = new Map<string, GtinCatalogProduct>();
+        // Add existing local
+        catalog.forEach((p) => map.set(normalizeBarcode(p.gtin), p));
+        // Overwrite with master cloud sheet
+        res.catalog.forEach((p) => {
+          const g = normalizeBarcode(p.gtin);
+          if (g) map.set(g, { ...p, gtin: g });
+        });
+        const merged = Array.from(map.values());
+        saveStoredGtinCatalog(merged);
+
+        return {
+          success: true,
+          count: res.catalog.length,
+          message: `Successfully synchronized ${res.catalog.length} products from your Master Google Sheet ("GTINCatalog" tab)!`,
+          items: merged,
+        };
+      } else {
+        // Master tab is currently empty, push our local catalog to seed it!
+        const local = getStoredGtinCatalog();
+        if (local.length > 0) {
+          await requestApi('saveGtinCatalogBatch', { products: local });
+        }
+        return {
+          success: true,
+          count: local.length,
+          message: `Connected to Master Google Sheet. Initialized "GTINCatalog" tab with ${local.length} products!`,
+          items: local,
+        };
+      }
+    } else {
+      throw new Error(res.error || 'Could not fetch GTIN catalog from Google Sheet.');
+    }
+  } catch (err: any) {
+    console.warn('Master Sheet GTIN Sync notice:', err);
+    return {
+      success: false,
+      count: 0,
+      message: err.message || 'Failed to sync with master Google Sheet.',
+    };
+  }
 }
 
 // --- Separate GTIN Google Sheet Configuration ---

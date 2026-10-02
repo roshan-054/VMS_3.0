@@ -123,6 +123,8 @@ function doPost(e) {
       case 'logPackVerification': return output_(logPackVerification_(p));
       case 'getPackVerificationLogs': return output_(getPackVerificationLogs_(p));
       case 'getGtinCatalog': return output_(getGtinCatalog_(p));
+      case 'saveGtinProduct': return output_(saveGtinProduct_(p));
+      case 'deleteGtinProduct': return output_(deleteGtinProduct_(p));
       case 'saveGtinCatalogBatch': return output_(saveGtinCatalogBatch_(p));
       case 'syncExternalGtinSheet': return output_(syncExternalGtinSheet_(p));
       default: return output_({success:false, error:'Unknown action: '+a});
@@ -4468,6 +4470,63 @@ function getGtinCatalog_(p) {
   }
 
   return { success: true, catalog: catalog };
+}
+
+function saveGtinProduct_(p) {
+  var prod = p.product || {};
+  var gtin = String(prod.gtin || '').trim();
+  if (!gtin) return { success: false, error: 'GTIN / Barcode is required' };
+
+  var sh = getGtinCatalogSheet_();
+  var data = sh.getDataRange().getValues();
+  var targetRow = -1;
+
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][1] || '').trim().toUpperCase() === gtin.toUpperCase()) {
+      targetRow = i + 1;
+      break;
+    }
+  }
+
+  var now = new Date();
+  var rowValues = [
+    now,
+    gtin,
+    prod.sku || '',
+    prod.productName || '',
+    prod.shortName || prod.productName || '',
+    prod.category || 'General',
+    prod.imageUrl || '',
+    prod.defaultQuantity || 1,
+    prod.notes || ''
+  ];
+
+  if (targetRow > 1) {
+    sh.getRange(targetRow, 1, 1, rowValues.length).setValues([rowValues]);
+  } else {
+    sh.appendRow(rowValues);
+  }
+
+  return { success: true, gtin: gtin, product: prod };
+}
+
+function deleteGtinProduct_(p) {
+  var gtin = String(p.gtin || '').trim().toUpperCase();
+  if (!gtin) return { success: false, error: 'GTIN is required' };
+
+  var sh = getGtinCatalogSheet_();
+  var data = sh.getDataRange().getValues();
+  var deleted = false;
+
+  for (var i = data.length - 1; i >= 1; i--) {
+    if (String(data[i][1] || '').trim().toUpperCase() === gtin) {
+      sh.deleteRow(i + 1);
+      deleted = true;
+      break;
+    }
+  }
+
+  return { success: true, deleted: deleted, gtin: gtin };
 }
 
 function saveGtinCatalogBatch_(p) {

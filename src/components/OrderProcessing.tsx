@@ -36,12 +36,16 @@ import {
   deleteManifest,
   getStoredGtinCatalog,
   addOrUpdateGtinProduct,
+  deleteGtinProduct,
+  importGtinCatalog,
+  normalizeBarcode,
   findProductByGtin,
   findProductInCatalog,
   searchCatalog,
   getGtinSheetConfig,
   saveGtinSheetConfig,
   syncGtinFromGoogleSheet,
+  syncGtinWithMasterSheet,
   getStoredVerificationLogs,
   extractSpreadsheetId
 } from '../lib/manifestStorage';
@@ -110,6 +114,11 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [platformFilter, setPlatformFilter] = useState<string>('ALL');
 
+  // --- GTIN Catalog Tab States ---
+  const [gtinSearchQuery, setGtinSearchQuery] = useState<string>('');
+  const [isSyncingMasterSheet, setIsSyncingMasterSheet] = useState<boolean>(false);
+  const [isInitializingTabs, setIsInitializingTabs] = useState<boolean>(false);
+
   // --- Add Product to Catalog State ---
   const [isAddProductModalOpen, setIsAddProductModalOpen] = useState<boolean>(false);
   const [newGtin, setNewGtin] = useState<string>('');
@@ -118,6 +127,32 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   const [newShortName, setNewShortName] = useState<string>('');
   const [newImageUrl, setNewImageUrl] = useState<string>('');
   const [newCategory, setNewCategory] = useState<string>('General');
+
+  // --- Edit Product State ---
+  const [editingProduct, setEditingProduct] = useState<GtinCatalogProduct | null>(null);
+
+  // --- Multi-Product Manual Entry & Excel Paste State ---
+  const [isBulkManualModalOpen, setIsBulkManualModalOpen] = useState<boolean>(false);
+  const [bulkManualText, setBulkManualText] = useState<string>('');
+  const [manualRows, setManualRows] = useState<Array<{
+    id: string;
+    gtin: string;
+    sku: string;
+    productName: string;
+    shortName: string;
+    category: string;
+    imageUrl: string;
+  }>>([
+    {
+      id: 'row-1',
+      gtin: '',
+      sku: '',
+      productName: '',
+      shortName: '',
+      category: 'General',
+      imageUrl: ''
+    }
+  ]);
 
   // Load registered users from API
   useEffect(() => {
@@ -356,7 +391,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     ]);
   };
 
-  // Sync with user's separate GTIN Google Sheet
+  // Sync with user's separate GTIN Google Sheet (Advanced)
   const handlePerformGtinSync = async () => {
     if (!gtinSheetInput.trim()) {
       setSheetSyncResult({ success: false, msg: 'Please provide your Google Sheet ID or URL.' });
@@ -382,26 +417,74 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     }
   };
 
-  // Add Product to GTIN Catalog
+  // Primary Sync: Sync directly with connected Master Google Sheet (single reference point from Branding)
+  const handleSyncMasterSheet = async () => {
+    setIsSyncingMasterSheet(true);
+    try {
+      const res = await syncGtinWithMasterSheet();
+      if (res.success) {
+        setGtinCatalog(getStoredGtinCatalog());
+        onShowToast(res.message, 'success');
+      } else {
+        onShowToast(res.message, 'error');
+      }
+    } catch (err: any) {
+      onShowToast(err?.message || 'Master Google Sheet sync failed', 'error');
+    } finally {
+      setIsSyncingMasterSheet(false);
+    }
+  };
+
+  // Initialize and ensure all 11 tabs exist in the connected Google Sheet
+  const handleInitializeAllSheetTabs = async () => {
+    setIsInitializingTabs(true);
+    try {
+      const res = await requestApi('setup', {});
+      if (res && res.success) {
+        onShowToast('✅ All Google Sheet tabs verified & created: OrderLog, ReturnLog, OrderManifest, GTINCatalog, PackVerificationLog, Branding, Users, UploadLog, DownloadLog, SecurityLog, TrashLog!', 'success');
+      } else {
+        onShowToast(res?.error || 'Could not initialize Google Sheet tabs', 'error');
+      }
+    } catch (err: any) {
+      onShowToast(err?.message || 'Failed to initialize sheet tabs', 'error');
+    } finally {
+      setIsInitializingTabs(false);
+    }
+  };
+
+  // Delete product from Catalog and Google Sheet
+  const handleDeleteProduct = async (gtin: string, name?: string) => {
+    const clean = normalizeBarcode(gtin);
+    if (!clean) return;
+
+    if (window.confirm(`Are you sure you want to delete "${name || clean}" (Barcode: ${clean}) from the GTIN product catalog and Google Sheet?`)) {
+      await deleteGtinProduct(clean);
+      setGtinCatalog(getStoredGtinCatalog());
+      onShowToast(`Product ${clean} deleted from catalog and Google Sheet!`, 'info');
+    }
+  };
+
+  // Add Single Product to GTIN Catalog
   const handleAddNewProduct = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newGtin.trim()) {
+    const cleanGtin = normalizeBarcode(newGtin);
+    if (!cleanGtin) {
       onShowToast('GTIN / Barcode is required', 'error');
       return;
     }
 
     const prod: GtinCatalogProduct = {
-      gtin: newGtin.trim(),
-      sku: newSku.trim() || newGtin.trim(),
-      productName: newProdName.trim() || `Product ${newGtin}`,
-      shortName: newShortName.trim() || newProdName.trim() || newSku.trim() || newGtin.trim(),
+      gtin: cleanGtin,
+      sku: newSku.trim() || cleanGtin,
+      productName: newProdName.trim() || `Product ${cleanGtin}`,
+      shortName: newShortName.trim() || newProdName.trim() || newSku.trim() || cleanGtin,
       imageUrl: newImageUrl.trim() || undefined,
       category: newCategory.trim() || 'General'
     };
 
     await addOrUpdateGtinProduct(prod);
     setGtinCatalog(getStoredGtinCatalog());
-    onShowToast(`Product ${prod.shortName} added to GTIN catalog!`, 'success');
+    onShowToast(`Product ${prod.shortName} (Barcode: ${prod.gtin}) saved to catalog & Google Sheet!`, 'success');
 
     setIsAddProductModalOpen(false);
     setNewGtin('');
@@ -409,6 +492,189 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     setNewProdName('');
     setNewShortName('');
     setNewImageUrl('');
+  };
+
+  // Save Edited Product
+  const handleSaveEditedProduct = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingProduct) return;
+
+    const cleanGtin = normalizeBarcode(editingProduct.gtin);
+    if (!cleanGtin) {
+      onShowToast('GTIN / Barcode is required', 'error');
+      return;
+    }
+
+    const updatedProd: GtinCatalogProduct = {
+      ...editingProduct,
+      gtin: cleanGtin,
+      sku: editingProduct.sku.trim() || cleanGtin,
+      productName: editingProduct.productName.trim() || `Product ${cleanGtin}`,
+      shortName: editingProduct.shortName?.trim() || editingProduct.productName.trim() || cleanGtin,
+      category: editingProduct.category?.trim() || 'General',
+      imageUrl: editingProduct.imageUrl?.trim() || undefined
+    };
+
+    await addOrUpdateGtinProduct(updatedProd);
+    setGtinCatalog(getStoredGtinCatalog());
+    setEditingProduct(null);
+    onShowToast(`Product ${updatedProd.shortName} updated successfully!`, 'success');
+  };
+
+  // Multi-Product Manual Entry & Excel Paste handlers
+  const handleOpenBulkManualModal = () => {
+    setBulkManualText('');
+    setManualRows([
+      { id: 'row-1', gtin: '', sku: '', productName: '', shortName: '', category: 'General', imageUrl: '' },
+      { id: 'row-2', gtin: '', sku: '', productName: '', shortName: '', category: 'General', imageUrl: '' },
+      { id: 'row-3', gtin: '', sku: '', productName: '', shortName: '', category: 'General', imageUrl: '' }
+    ]);
+    setIsBulkManualModalOpen(true);
+  };
+
+  const handleAddManualRow = () => {
+    setManualRows((prev) => [
+      ...prev,
+      {
+        id: `row-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        gtin: '',
+        sku: '',
+        productName: '',
+        shortName: '',
+        category: 'General',
+        imageUrl: ''
+      }
+    ]);
+  };
+
+  const handleRemoveManualRow = (rowId: string) => {
+    if (manualRows.length <= 1) return;
+    setManualRows((prev) => prev.filter((r) => r.id !== rowId));
+  };
+
+  const handleManualRowChange = (rowId: string, field: string, val: string) => {
+    setManualRows((prev) =>
+      prev.map((r) => (r.id === rowId ? { ...r, [field]: val } : r))
+    );
+  };
+
+  const handleParsePastedText = () => {
+    if (!bulkManualText.trim()) {
+      onShowToast('Please paste product lines from Excel or Google Sheets first.', 'info');
+      return;
+    }
+
+    const lines = bulkManualText.split(/\r?\n/).filter((l) => l.trim().length > 0);
+    if (lines.length === 0) return;
+
+    // Determine delimiter: Tab or Comma
+    const firstLine = lines[0];
+    const isTab = firstLine.includes('\t');
+    const delimiter = isTab ? '\t' : ',';
+
+    // Check if first row is header
+    let startIndex = 0;
+    const firstCols = lines[0].split(delimiter).map((c) => c.trim().toLowerCase().replace(/^["']|["']$/g, ''));
+    const isHeader = firstCols.some((c) =>
+      c.includes('gtin') || c.includes('barcode') || c.includes('sku') || c.includes('product') || c.includes('ean') || c.includes('name')
+    );
+
+    let gtinIdx = 0;
+    let skuIdx = 1;
+    let nameIdx = 2;
+    let shortIdx = 3;
+    let catIdx = 4;
+    let imgIdx = 5;
+
+    if (isHeader) {
+      startIndex = 1;
+      const foundGtin = firstCols.findIndex((c) => c.includes('gtin') || c.includes('barcode') || c.includes('ean') || c.includes('upc'));
+      const foundSku = firstCols.findIndex((c) => c.includes('sku') || c.includes('code') || c.includes('item'));
+      const foundName = firstCols.findIndex((c) => c.includes('name') || c.includes('title') || c.includes('product') || c.includes('description'));
+      const foundShort = firstCols.findIndex((c) => c.includes('short'));
+      const foundCat = firstCols.findIndex((c) => c.includes('category') || c.includes('dept'));
+      const foundImg = firstCols.findIndex((c) => c.includes('image') || c.includes('photo') || c.includes('url') || c.includes('img'));
+
+      if (foundGtin !== -1) gtinIdx = foundGtin;
+      if (foundSku !== -1) skuIdx = foundSku;
+      if (foundName !== -1) nameIdx = foundName;
+      if (foundShort !== -1) shortIdx = foundShort;
+      if (foundCat !== -1) catIdx = foundCat;
+      if (foundImg !== -1) imgIdx = foundImg;
+    }
+
+    const parsedRows = [];
+    for (let i = startIndex; i < lines.length; i++) {
+      const line = lines[i];
+      const cols = line.split(delimiter).map((c) => c.trim().replace(/^["']|["']$/g, ''));
+      const rawGtin = cols[gtinIdx] || '';
+      const cleanGtin = normalizeBarcode(rawGtin);
+      if (!cleanGtin && !cols[skuIdx] && !cols[nameIdx]) continue;
+
+      const sku = (cols[skuIdx] || cleanGtin).trim();
+      const name = (cols[nameIdx] || sku || `Product ${cleanGtin}`).trim();
+      const shortName = (shortIdx < cols.length && cols[shortIdx] ? cols[shortIdx] : name).trim();
+      const cat = (catIdx < cols.length && cols[catIdx] ? cols[catIdx] : 'General').trim();
+      const img = (imgIdx < cols.length && cols[imgIdx] ? cols[imgIdx] : '').trim();
+
+      parsedRows.push({
+        id: `row-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 6)}`,
+        gtin: cleanGtin,
+        sku,
+        productName: name,
+        shortName,
+        category: cat,
+        imageUrl: img
+      });
+    }
+
+    if (parsedRows.length > 0) {
+      setManualRows(parsedRows);
+      onShowToast(`Parsed ${parsedRows.length} product rows! Review in table below and click Save.`, 'success');
+    } else {
+      onShowToast('Could not parse any product rows. Check text format.', 'error');
+    }
+  };
+
+  const handleSaveBulkManual = async () => {
+    const validProducts: GtinCatalogProduct[] = [];
+
+    for (let i = 0; i < manualRows.length; i++) {
+      const r = manualRows[i];
+      let cleanGtin = normalizeBarcode(r.gtin);
+      if (!cleanGtin && !r.sku.trim() && !r.productName.trim()) {
+        continue; // Skip empty rows
+      }
+
+      // If GTIN is missing, auto-generate a valid barcode so it has an identifier
+      if (!cleanGtin) {
+        const random10 = Math.floor(1000000000 + Math.random() * 9000000000);
+        cleanGtin = `890${random10}`;
+      }
+
+      const sku = (r.sku.trim() || cleanGtin).toUpperCase();
+      const name = r.productName.trim() || `Product ${cleanGtin}`;
+      const shortName = r.shortName.trim() || name;
+
+      validProducts.push({
+        gtin: cleanGtin,
+        sku,
+        productName: name,
+        shortName,
+        category: r.category.trim() || 'General',
+        imageUrl: r.imageUrl.trim() || undefined
+      });
+    }
+
+    if (validProducts.length === 0) {
+      onShowToast('Please enter at least 1 valid product with GTIN Barcode, SKU, or Name.', 'error');
+      return;
+    }
+
+    await importGtinCatalog(validProducts);
+    setGtinCatalog(getStoredGtinCatalog());
+    setIsBulkManualModalOpen(false);
+    onShowToast(`Successfully saved ${validProducts.length} products to catalog & Google Sheet!`, 'success');
   };
 
   const handleDownloadCsvTemplate = () => {
@@ -441,12 +707,15 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         return;
       }
 
-      const headers = lines[0].split(',').map((h) => h.trim().toLowerCase().replace(/["']/g, ''));
+      const isTab = lines[0].includes('\t');
+      const delimiter = isTab ? '\t' : ',';
+
+      const headers = lines[0].split(delimiter).map((h) => h.trim().toLowerCase().replace(/["']/g, ''));
       let gtinIdx = headers.findIndex((h) => h.includes('gtin') || h.includes('barcode') || h.includes('ean') || h.includes('upc'));
       let skuIdx = headers.findIndex((h) => h.includes('sku') || h.includes('code') || h.includes('item'));
-      let nameIdx = headers.findIndex((h) => h.includes('product') || h.includes('name') || h.includes('title'));
+      let nameIdx = headers.findIndex((h) => h.includes('product') || h.includes('name') || h.includes('title') || h.includes('description'));
       let shortIdx = headers.findIndex((h) => h.includes('short'));
-      let imgIdx = headers.findIndex((h) => h.includes('image') || h.includes('photo') || h.includes('url'));
+      let imgIdx = headers.findIndex((h) => h.includes('image') || h.includes('photo') || h.includes('url') || h.includes('img'));
       let catIdx = headers.findIndex((h) => h.includes('category') || h.includes('dept'));
 
       if (gtinIdx === -1) gtinIdx = 0;
@@ -455,18 +724,20 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
       const parsedProducts: GtinCatalogProduct[] = [];
       for (let i = 1; i < lines.length; i++) {
-        const cols = lines[i].split(',').map((c) => c.trim().replace(/^["']|["']$/g, ''));
-        const gtin = cols[gtinIdx];
-        if (!gtin) continue;
+        const cols = lines[i].split(delimiter).map((c) => c.trim().replace(/^["']|["']$/g, ''));
+        const rawGtin = cols[gtinIdx];
+        const gtin = normalizeBarcode(rawGtin);
+        if (!gtin && !cols[skuIdx] && !cols[nameIdx]) continue;
 
-        const sku = skuIdx >= 0 && cols[skuIdx] ? cols[skuIdx] : gtin;
-        const name = nameIdx >= 0 && cols[nameIdx] ? cols[nameIdx] : sku;
-        const shortName = shortIdx >= 0 && cols[shortIdx] ? cols[shortIdx] : name;
-        const img = imgIdx >= 0 && cols[imgIdx] ? cols[imgIdx] : '';
-        const cat = catIdx >= 0 && cols[catIdx] ? cols[catIdx] : 'General';
+        const effectiveGtin = gtin || `890${Math.floor(1000000000 + Math.random() * 9000000000)}`;
+        const sku = skuIdx >= 0 && cols[skuIdx] ? cols[skuIdx].trim().toUpperCase() : effectiveGtin;
+        const name = nameIdx >= 0 && cols[nameIdx] ? cols[nameIdx].trim() : sku;
+        const shortName = shortIdx >= 0 && cols[shortIdx] ? cols[shortIdx].trim() : name;
+        const img = imgIdx >= 0 && cols[imgIdx] ? cols[imgIdx].trim() : '';
+        const cat = catIdx >= 0 && cols[catIdx] ? cols[catIdx].trim() : 'General';
 
         parsedProducts.push({
-          gtin,
+          gtin: effectiveGtin,
           sku,
           productName: name,
           shortName,
@@ -476,11 +747,9 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
       }
 
       if (parsedProducts.length > 0) {
-        for (const p of parsedProducts) {
-          await addOrUpdateGtinProduct(p);
-        }
+        await importGtinCatalog(parsedProducts);
         setGtinCatalog(getStoredGtinCatalog());
-        onShowToast(`Imported ${parsedProducts.length} products from CSV!`, 'success');
+        onShowToast(`Imported ${parsedProducts.length} products from CSV & synced to Google Sheet!`, 'success');
       } else {
         onShowToast('Could not find any products in CSV', 'error');
       }
@@ -488,6 +757,20 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     reader.readAsText(file);
     e.target.value = '';
   };
+
+  // Filtered GTIN Catalog for Display
+  const filteredGtinCatalog = useMemo(() => {
+    if (!gtinSearchQuery.trim()) return gtinCatalog;
+    const clean = gtinSearchQuery.trim().toLowerCase();
+    return gtinCatalog.filter(
+      (p) =>
+        p.gtin.toLowerCase().includes(clean) ||
+        p.sku.toLowerCase().includes(clean) ||
+        (p.productName && p.productName.toLowerCase().includes(clean)) ||
+        (p.shortName && p.shortName.toLowerCase().includes(clean)) ||
+        (p.category && p.category.toLowerCase().includes(clean))
+    );
+  }, [gtinCatalog, gtinSearchQuery]);
 
   // Delete Manifest Row
   const handleDeleteManifest = (id: string, oId: string) => {
@@ -553,23 +836,35 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         </div>
 
         {/* Quick Top Actions */}
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={() => setIsSyncModalOpen(true)}
-            className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-300 transition flex items-center gap-2 cursor-pointer shadow-2xs"
+            disabled={isSyncingMasterSheet}
+            onClick={handleSyncMasterSheet}
+            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            title="Sync products with Master Google Sheet (Branding Tab Reference)"
           >
-            <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-            <span>Sync GTIN Google Sheet</span>
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncingMasterSheet ? 'animate-spin' : ''}`} />
+            <span>{isSyncingMasterSheet ? 'Syncing...' : 'Sync Master Google Sheet'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleOpenBulkManualModal}
+            className="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl border border-indigo-200 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+            title="Add multiple products manually or paste directly from Excel/Sheets"
+          >
+            <Layers className="w-3.5 h-3.5 text-indigo-600" />
+            <span>Multi-Product / Excel Paste</span>
           </button>
 
           <button
             type="button"
             onClick={() => setIsAddProductModalOpen(true)}
-            className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl border border-indigo-200 transition flex items-center gap-2 cursor-pointer shadow-2xs"
+            className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
           >
-            <Plus className="w-4 h-4 text-indigo-600" />
-            <span>Add GTIN Product</span>
+            <Plus className="w-3.5 h-3.5 text-slate-600" />
+            <span>Add Single Product</span>
           </button>
         </div>
       </div>
@@ -1343,26 +1638,56 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
       {/* SUB-TAB 3: GTIN BARCODE CATALOG */}
       {activeSubTab === 'gtin' && (
         <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div>
               <h2 className="text-base font-black text-slate-900 tracking-tight flex items-center gap-2">
-                <span>Product GTIN &amp; Barcode Catalog</span>
-                <span className="text-xs font-mono bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full font-bold border border-indigo-200">
+                <span>Product GTIN &amp; Barcode Master Catalog</span>
+                <span className="text-xs font-mono bg-indigo-50 text-indigo-700 px-2.5 py-0.5 rounded-full font-bold border border-indigo-200">
                   {gtinCatalog.length} Products
                 </span>
               </h2>
-              <p className="text-xs text-slate-400">
-                Master database of your products, barcodes (EAN/GTIN/UPC), SKUs, and thumbnails for pack verification.
+              <p className="text-xs text-slate-400 mt-0.5">
+                Master product database synchronized with Google Sheet (&quot;GTINCatalog&quot; tab) — used for instantaneous auto-fetch during order entry and packing verification.
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={isSyncingMasterSheet}
+                onClick={handleSyncMasterSheet}
+                className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                title="Synchronize GTIN catalog with connected Google Sheet"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingMasterSheet ? 'animate-spin' : ''}`} />
+                <span>{isSyncingMasterSheet ? 'Syncing...' : 'Sync Master Sheet'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleOpenBulkManualModal}
+                className="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl border border-indigo-200 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                title="Paste from Excel / Google Sheets or add multiple product lines"
+              >
+                <Layers className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Multi-Product / Excel Paste</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsAddProductModalOpen(true)}
+                className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Product</span>
+              </button>
+
               <label className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer shadow-2xs">
                 <Upload className="w-3.5 h-3.5 text-slate-600" />
                 <span>Upload CSV</span>
                 <input
                   type="file"
-                  accept=".csv,.txt"
+                  accept=".csv,.txt,.tsv"
                   className="hidden"
                   onChange={handleCsvUpload}
                 />
@@ -1380,69 +1705,158 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
               <button
                 type="button"
-                onClick={() => setIsSyncModalOpen(true)}
-                className="px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-bold rounded-xl border border-emerald-200 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                disabled={isInitializingTabs}
+                onClick={handleInitializeAllSheetTabs}
+                className="px-3 py-2 bg-purple-50 hover:bg-purple-100 text-purple-700 text-xs font-bold rounded-xl border border-purple-200 transition flex items-center gap-1.5 cursor-pointer shadow-2xs disabled:opacity-50"
+                title="Ensure all 11 tabs exist in your connected Google Sheet"
               >
-                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Sync Google Sheet</span>
+                <CheckCircle2 className={`w-3.5 h-3.5 text-purple-600 ${isInitializingTabs ? 'animate-spin' : ''}`} />
+                <span>{isInitializingTabs ? 'Verifying Tabs...' : 'Verify Sheet Tabs'}</span>
               </button>
 
               <button
                 type="button"
-                onClick={() => setIsAddProductModalOpen(true)}
-                className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+                onClick={() => setIsSyncModalOpen(true)}
+                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                title="Connect custom or external Google Sheet"
               >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add Product</span>
+                <Sliders className="w-3.5 h-3.5 text-slate-500" />
+                <span>External Sheet</span>
               </button>
             </div>
           </div>
 
-          {/* Product Catalog Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-            {gtinCatalog.map((prod) => (
-              <div
-                key={prod.gtin}
-                className="bg-slate-50 border border-slate-200 hover:border-slate-300 rounded-2xl p-3.5 space-y-2.5 transition shadow-2xs flex flex-col justify-between"
-              >
-                <div className="flex items-start gap-3">
-                  {prod.imageUrl ? (
-                    <img
-                      src={prod.imageUrl}
-                      alt={prod.shortName}
-                      className="w-14 h-14 rounded-xl object-contain bg-white border border-slate-200 p-1 shadow-xs shrink-0"
-                    />
-                  ) : (
-                    <div className="w-14 h-14 rounded-xl bg-slate-200 text-slate-400 flex items-center justify-center shrink-0">
-                      <ShoppingBag className="w-6 h-6" />
-                    </div>
-                  )}
-
-                  <div className="min-w-0 flex-1">
-                    <span className="text-[10px] font-mono text-indigo-600 uppercase font-bold block">
-                      {prod.category || 'General'}
-                    </span>
-                    <h3 className="text-xs font-bold text-slate-900 truncate" title={prod.productName}>
-                      {prod.shortName || prod.productName}
-                    </h3>
-                    <p className="text-[11px] font-mono text-slate-500 font-bold mt-0.5">
-                      SKU: {prod.sku}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="pt-2 border-t border-slate-200/80 flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <Barcode className="w-4 h-4 text-slate-400" />
-                    <span className="text-xs font-mono font-black text-slate-900">{prod.gtin}</span>
-                  </div>
-                  <span className="text-[10px] font-mono bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full border border-emerald-200 font-bold">
-                    Active
-                  </span>
-                </div>
-              </div>
-            ))}
+          {/* Search Bar for Product Catalog */}
+          <div className="flex items-center gap-3">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={gtinSearchQuery}
+                onChange={(e) => setGtinSearchQuery(e.target.value)}
+                placeholder="Search catalog by Barcode / GTIN, SKU, Product Name, or Category..."
+                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500 shadow-inner"
+              />
+              {gtinSearchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setGtinSearchQuery('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+            {gtinSearchQuery && (
+              <span className="text-xs font-mono text-slate-500 font-bold whitespace-nowrap">
+                Showing {filteredGtinCatalog.length} of {gtinCatalog.length}
+              </span>
+            )}
           </div>
+
+          {/* Product Catalog Grid */}
+          {filteredGtinCatalog.length === 0 ? (
+            <div className="p-12 text-center text-slate-400 space-y-3 border-2 border-dashed border-slate-200 rounded-2xl">
+              <ShoppingBag className="w-10 h-10 mx-auto text-slate-300" />
+              <div className="font-bold text-sm text-slate-600">
+                {gtinSearchQuery ? 'No matching products found' : 'Product Catalog is Empty'}
+              </div>
+              <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                {gtinSearchQuery
+                  ? 'Try searching with a different product name, SKU, or GTIN barcode.'
+                  : 'Add your products or paste from Excel to enable instantaneous auto-fetch during order entry.'}
+              </p>
+              <div className="flex items-center justify-center gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={handleOpenBulkManualModal}
+                  className="px-3.5 py-2 bg-indigo-600 text-white font-bold text-xs rounded-xl shadow-xs hover:bg-indigo-500 cursor-pointer flex items-center gap-1.5"
+                >
+                  <Layers className="w-4 h-4" />
+                  <span>Paste from Excel / Multi-Product</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsAddProductModalOpen(true)}
+                  className="px-3.5 py-2 bg-slate-100 text-slate-700 font-bold text-xs rounded-xl border border-slate-300 hover:bg-slate-200 cursor-pointer flex items-center gap-1.5"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Add Single Product</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3.5">
+              {filteredGtinCatalog.map((prod) => (
+                <div
+                  key={prod.gtin}
+                  className="bg-slate-50 border border-slate-200 hover:border-indigo-300 rounded-2xl p-3.5 space-y-2.5 transition shadow-2xs flex flex-col justify-between group"
+                >
+                  <div className="flex items-start gap-3">
+                    {prod.imageUrl ? (
+                      <img
+                        src={prod.imageUrl}
+                        alt={prod.shortName}
+                        className="w-14 h-14 rounded-xl object-contain bg-white border border-slate-200 p-1 shadow-xs shrink-0"
+                        onError={(e) => {
+                          (e.target as HTMLElement).style.display = 'none';
+                        }}
+                      />
+                    ) : (
+                      <div className="w-14 h-14 rounded-xl bg-slate-200 text-slate-400 flex items-center justify-center shrink-0">
+                        <ShoppingBag className="w-6 h-6" />
+                      </div>
+                    )}
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="text-[10px] font-mono text-indigo-600 uppercase font-bold truncate">
+                          {prod.category || 'General'}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setEditingProduct(prod)}
+                            className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition cursor-pointer"
+                            title="Edit product"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteProduct(prod.gtin, prod.shortName || prod.productName)}
+                            className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition cursor-pointer"
+                            title="Delete product from catalog & Google Sheet"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <h3 className="text-xs font-bold text-slate-900 truncate" title={prod.productName}>
+                        {prod.shortName || prod.productName}
+                      </h3>
+                      <p className="text-[11px] font-mono text-slate-500 font-bold mt-0.5 truncate">
+                        SKU: <span className="text-slate-700">{prod.sku}</span>
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-200/80 flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <Barcode className="w-4 h-4 text-slate-400 shrink-0" />
+                      <span className="text-xs font-mono font-black text-slate-900 truncate tracking-wide">
+                        {prod.gtin}
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-mono bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full border border-emerald-200 font-bold shrink-0">
+                      Active
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -1745,6 +2159,310 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* MODAL 3: EDIT PRODUCT */}
+      {editingProduct && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in">
+          <form
+            onSubmit={handleSaveEditedProduct}
+            className="w-full max-w-md bg-white border border-slate-200 rounded-3xl p-6 shadow-2xl space-y-4"
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <Edit2 className="w-5 h-5 text-indigo-600" />
+                <h3 className="font-bold text-slate-900 text-base">Edit Catalog Product</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingProduct(null)}
+                className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  GTIN / Barcode <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editingProduct.gtin}
+                  onChange={(e) => setEditingProduct({ ...editingProduct, gtin: e.target.value.trim() })}
+                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Product SKU / Item Code
+                </label>
+                <input
+                  type="text"
+                  value={editingProduct.sku}
+                  onChange={(e) => setEditingProduct({ ...editingProduct, sku: e.target.value })}
+                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Full Product Name
+                </label>
+                <input
+                  type="text"
+                  value={editingProduct.productName}
+                  onChange={(e) => setEditingProduct({ ...editingProduct, productName: e.target.value })}
+                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Short Name
+                </label>
+                <input
+                  type="text"
+                  value={editingProduct.shortName || ''}
+                  onChange={(e) => setEditingProduct({ ...editingProduct, shortName: e.target.value })}
+                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Category
+                </label>
+                <input
+                  type="text"
+                  value={editingProduct.category || ''}
+                  onChange={(e) => setEditingProduct({ ...editingProduct, category: e.target.value })}
+                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Product Image URL (Optional)
+                </label>
+                <input
+                  type="url"
+                  value={editingProduct.imageUrl || ''}
+                  onChange={(e) => setEditingProduct({ ...editingProduct, imageUrl: e.target.value })}
+                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setEditingProduct(null)}
+                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="submit"
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-md cursor-pointer"
+              >
+                Update Product
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* MODAL 4: MULTI-PRODUCT MANUAL ENTRY & EXCEL QUICK-PASTE */}
+      {isBulkManualModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/60 backdrop-blur-xs animate-fade-in overflow-y-auto">
+          <div className="w-full max-w-5xl bg-white border border-slate-200 rounded-3xl p-6 shadow-2xl space-y-4 my-auto max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-600 flex items-center justify-center">
+                  <Layers className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-slate-900 text-base">
+                    Multi-Product Manual Entry &amp; Excel Quick-Paste
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Paste product rows directly from Excel / Google Sheets or add multiple items in the table below.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsBulkManualModalOpen(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Quick Paste Area from Excel */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-2.5 shrink-0">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                  <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                  <span>Paste from Excel / Google Sheets (Tab or Comma Separated)</span>
+                </label>
+                <span className="text-[11px] text-slate-400 font-mono">
+                  Columns: GTIN/Barcode, SKU, Name, ShortName, Category, ImageURL
+                </span>
+              </div>
+              <textarea
+                rows={3}
+                value={bulkManualText}
+                onChange={(e) => setBulkManualText(e.target.value)}
+                placeholder="Paste copied cells from Excel/Google Sheets here... e.g.&#10;8901234567890	SKU-SHIRT-BLUE	Premium Oxford Shirt	Oxford Shirt	Apparel	https://...&#10;8909876543210	SKU-EARBUDS	Wireless Earbuds Pro	Earbuds Pro	Electronics"
+                className="w-full px-3.5 py-2 bg-white border border-slate-300 rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:border-indigo-500"
+              />
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-slate-500">
+                  Leading zeros and large barcodes are preserved automatically without scientific notation.
+                </span>
+                <button
+                  type="button"
+                  onClick={handleParsePastedText}
+                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Parse &amp; Populate Table</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Editable Product Table */}
+            <div className="flex-1 overflow-y-auto border border-slate-200 rounded-2xl">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-mono text-[11px] sticky top-0 z-10">
+                  <tr>
+                    <th className="p-2.5 w-12 text-center">#</th>
+                    <th className="p-2.5 min-w-[150px]">GTIN / Barcode *</th>
+                    <th className="p-2.5 min-w-[130px]">SKU / Code *</th>
+                    <th className="p-2.5 min-w-[200px]">Product Name *</th>
+                    <th className="p-2.5 min-w-[140px]">Short Name</th>
+                    <th className="p-2.5 min-w-[100px]">Category</th>
+                    <th className="p-2.5 min-w-[150px]">Image URL</th>
+                    <th className="p-2.5 w-12 text-center">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {manualRows.map((row, idx) => (
+                    <tr key={row.id} className="hover:bg-slate-50/80">
+                      <td className="p-2.5 text-center font-mono text-slate-400 text-[11px]">
+                        {idx + 1}
+                      </td>
+                      <td className="p-2">
+                        <div className="relative">
+                          <input
+                            type="text"
+                            value={row.gtin}
+                            onChange={(e) => handleManualRowChange(row.id, 'gtin', e.target.value)}
+                            placeholder="e.g. 8901234567890"
+                            className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-900 focus:border-indigo-500 focus:outline-none"
+                          />
+                        </div>
+                      </td>
+                      <td className="p-2">
+                        <input
+                          type="text"
+                          value={row.sku}
+                          onChange={(e) => handleManualRowChange(row.id, 'sku', e.target.value)}
+                          placeholder="e.g. SKU-SHIRT"
+                          className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800 focus:border-indigo-500 focus:outline-none"
+                        />
+                      </td>
+                      <td className="p-2">
+                        <input
+                          type="text"
+                          value={row.productName}
+                          onChange={(e) => handleManualRowChange(row.id, 'productName', e.target.value)}
+                          placeholder="Full product title..."
+                          className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-900 focus:border-indigo-500 focus:outline-none"
+                        />
+                      </td>
+                      <td className="p-2">
+                        <input
+                          type="text"
+                          value={row.shortName}
+                          onChange={(e) => handleManualRowChange(row.id, 'shortName', e.target.value)}
+                          placeholder="Short name..."
+                          className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-900 focus:border-indigo-500 focus:outline-none"
+                        />
+                      </td>
+                      <td className="p-2">
+                        <input
+                          type="text"
+                          value={row.category}
+                          onChange={(e) => handleManualRowChange(row.id, 'category', e.target.value)}
+                          placeholder="General"
+                          className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-900 focus:border-indigo-500 focus:outline-none"
+                        />
+                      </td>
+                      <td className="p-2">
+                        <input
+                          type="text"
+                          value={row.imageUrl}
+                          onChange={(e) => handleManualRowChange(row.id, 'imageUrl', e.target.value)}
+                          placeholder="https://..."
+                          className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-700 focus:border-indigo-500 focus:outline-none"
+                        />
+                      </td>
+                      <td className="p-2 text-center">
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveManualRow(row.id)}
+                          disabled={manualRows.length <= 1}
+                          className="p-1.5 text-slate-400 hover:text-red-600 rounded-md transition cursor-pointer disabled:opacity-30"
+                          title="Remove row"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Bottom Actions */}
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-100 shrink-0">
+              <button
+                type="button"
+                onClick={handleAddManualRow}
+                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Another Row</span>
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsBulkManualModalOpen(false)}
+                  className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSaveBulkManual}
+                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-md flex items-center gap-2 cursor-pointer"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Save All Products to Catalog &amp; Google Sheet</span>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

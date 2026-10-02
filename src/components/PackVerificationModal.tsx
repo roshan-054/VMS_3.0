@@ -19,7 +19,7 @@ import {
   UserCheck
 } from 'lucide-react';
 import { OrderManifest, ManifestItem, User } from '../types';
-import { logPackVerification, updateManifestStatus } from '../lib/manifestStorage';
+import { logPackVerification, updateManifestStatus, normalizeBarcode } from '../lib/manifestStorage';
 import { sharedScannerSync } from '../lib/phoneScannerSync';
 
 interface PackVerificationModalProps {
@@ -147,7 +147,7 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
   }, [isAssignedToCurrent]);
 
   const processGtinScan = (rawScan: string) => {
-    const cleanScan = rawScan.trim().toUpperCase();
+    const cleanScan = normalizeBarcode(rawScan).toUpperCase() || rawScan.trim().toUpperCase();
     if (!cleanScan) return;
 
     setLastScannedCode(cleanScan);
@@ -155,7 +155,7 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
 
     // Check if this GTIN or SKU or Name matches any item in the order
     const matchIndex = items.findIndex((it) => {
-      const itGtin = (it.gtin || '').trim().toUpperCase();
+      const itGtin = normalizeBarcode(it.gtin).toUpperCase();
       const itSku = (it.sku || '').trim().toUpperCase();
       const itName = (it.productName || '').trim().toUpperCase();
       const itShort = (it.shortName || '').trim().toUpperCase();
