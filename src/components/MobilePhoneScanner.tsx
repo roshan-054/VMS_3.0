@@ -58,6 +58,8 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
   const [lastScanSuccessTime, setLastScanSuccessTime] = useState<number>(0);
   const [isScanLocked, setIsScanLocked] = useState<boolean>(false);
   const [cooldownSeconds, setCooldownSeconds] = useState<number>(0);
+  const [scannedPopupCode, setScannedPopupCode] = useState<string | null>(null);
+  const [isFocusing, setIsFocusing] = useState<boolean>(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -151,8 +153,21 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
 
         streamRef.current = stream;
 
-        // Check if device supports torch
+        // Auto-focus hardware setup: continuous optical auto-focus targeting center aperture
         const track = stream.getVideoTracks()[0];
+        if (track && typeof track.applyConstraints === 'function') {
+          try {
+            await track.applyConstraints({
+              advanced: [
+                { focusMode: 'continuous' },
+                { exposureMode: 'continuous' },
+                { pointsOfInterest: [{ x: 0.5, y: 0.5 }] },
+              ] as any,
+            });
+          } catch (_) {}
+        }
+
+        // Check if device supports torch
         if (track && typeof track.getCapabilities === 'function') {
           const caps: any = track.getCapabilities();
           setHasTorch(Boolean(caps.torch));
@@ -164,6 +179,13 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
           videoRef.current.setAttribute('webkit-playsinline', 'true');
           await videoRef.current.play();
         }
+
+        // Periodic auto-focus pulse every 4.5s while actively aiming
+        const autoFocusPulseTimer = setInterval(() => {
+          if (isMounted && !isLockedRef.current && streamRef.current) {
+            triggerCameraAutoFocus();
+          }
+        }, 4500);
 
         // Initialize decoders
         // 1. Hardware BarcodeDetector if supported
@@ -371,46 +393,63 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
     };
   }, [isPaired, facingMode]);
 
+  // Hardware optical auto-focus trigger (targets center scanning aperture)
+  const triggerCameraAutoFocus = async () => {
+    if (!streamRef.current) return;
+    const track = streamRef.current.getVideoTracks()[0];
+    if (!track) return;
+
+    setIsFocusing(true);
+    setTimeout(() => setIsFocusing(false), 800);
+
+    if (typeof track.applyConstraints === 'function') {
+      try {
+        await track.applyConstraints({
+          advanced: [
+            { focusMode: 'continuous' },
+            { exposureMode: 'continuous' },
+            { pointsOfInterest: [{ x: 0.5, y: 0.5 }] },
+          ] as any,
+        });
+        setStatusMessage('Auto-focused on barcode');
+      } catch (err) {
+        try {
+          await track.applyConstraints({ advanced: [{ focusMode: 'manual' }] as any });
+          await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] as any });
+        } catch (_) {}
+      }
+    }
+  };
+
   const triggerConfirmedScan = (code: string, format: string) => {
+    // 1. Immediately pause scanning so it cannot continuous-scan or mis-scan
     isLockedRef.current = true;
     setIsScanLocked(true);
-    setCooldownSeconds(3);
     lastScannedCodeRef.current = code;
     lastScannedTimeRef.current = Date.now();
 
+    // 2. Transmit barcode to workstation, vibrate, and chime
     handleBarcodeScanned(code, format);
 
-    if (lockTimerRef.current) {
-      clearInterval(lockTimerRef.current);
-      lockTimerRef.current = null;
-    }
-
-    let remaining = 3;
-    lockTimerRef.current = setInterval(() => {
-      remaining -= 1;
-      if (remaining <= 0) {
-        unlockScanner();
-      } else {
-        setCooldownSeconds(remaining);
-      }
-    }, 1000);
+    // 3. Open the "Scan Next Code" popup dialog
+    setScannedPopupCode(code);
   };
 
-  const unlockScanner = () => {
-    if (lockTimerRef.current) {
-      clearInterval(lockTimerRef.current);
-      lockTimerRef.current = null;
-    }
+  const handleScanNextCode = () => {
+    // 1. Close popup
+    setScannedPopupCode(null);
+
+    // 2. Unlock scanner for the next barcode
     isLockedRef.current = false;
     setIsScanLocked(false);
-    setCooldownSeconds(0);
     candidateCodeRef.current = '';
     candidateCountRef.current = 0;
     noBarcodeFramesRef.current = 0;
-  };
+    lastScannedCodeRef.current = '';
 
-  const handleScanNextNow = () => {
-    unlockScanner();
+    // 3. Command optical auto-focus for the new barcode
+    triggerCameraAutoFocus();
+    setStatusMessage('Ready for next barcode');
   };
 
   const handleBarcodeScanned = async (rawCode: string, format: string) => {
@@ -614,6 +653,21 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
             </button>
           )}
 
+          {/* Hardware Auto-Focus Camera Button */}
+          <button
+            type="button"
+            onClick={triggerCameraAutoFocus}
+            className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold transition cursor-pointer flex items-center gap-1 shadow-xs ${
+              isFocusing
+                ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-emerald-500/30'
+                : 'bg-slate-900 border-slate-700 text-slate-200 hover:border-slate-500'
+            }`}
+            title="Auto-Focus Camera on Barcode"
+          >
+            <Target className={`w-3.5 h-3.5 ${isFocusing ? 'animate-spin text-slate-950' : 'text-emerald-400'}`} />
+            <span>Focus</span>
+          </button>
+
           <button
             type="button"
             onClick={() => setIsPaired(false)}
@@ -636,14 +690,28 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
         </div>
       </div>
 
-      {/* Camera Viewfinder Area */}
-      <div ref={containerRef} className="relative flex-1 bg-black flex items-center justify-center overflow-hidden">
+      {/* Camera Viewfinder Area (Tap anywhere to trigger optical Auto-Focus) */}
+      <div
+        ref={containerRef}
+        onClick={() => triggerCameraAutoFocus()}
+        className="relative flex-1 bg-black flex items-center justify-center overflow-hidden cursor-pointer"
+        title="Tap to Auto-Focus on Barcode"
+      >
         <video
           ref={videoRef}
           playsInline
           muted
           className="absolute inset-0 w-full h-full object-cover"
         />
+
+        {/* Optical Auto-Focus Target Pulse Ring Indicator */}
+        {isFocusing && (
+          <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-30 animate-fade-in">
+            <div className="w-24 h-24 rounded-full border-2 border-emerald-400 flex items-center justify-center animate-ping shadow-[0_0_25px_rgba(52,211,153,1)]">
+              <Target className="w-8 h-8 text-emerald-400" />
+            </div>
+          </div>
+        )}
 
         {/* Real-time Aiming Reticle with 100% Blackout Mask for Rest Area to prevent unwanted scans */}
         <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center z-10">
@@ -689,11 +757,11 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
                   </div>
                   <button
                     type="button"
-                    onClick={handleScanNextNow}
+                    onClick={handleScanNextCode}
                     className="mt-1 px-4 py-1.5 bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-slate-950 font-bold font-mono text-xs rounded-xl shadow-lg flex items-center gap-1.5 cursor-pointer transition"
                   >
-                    <Zap className="w-3.5 h-3.5 fill-current" />
-                    Scan Next Now {cooldownSeconds > 0 ? `(${cooldownSeconds}s)` : ''}
+                    <Barcode className="w-3.5 h-3.5" />
+                    <span>Scan Next Code</span>
                   </button>
                 </div>
               ) : (
@@ -782,6 +850,46 @@ export const MobilePhoneScanner: React.FC<MobilePhoneScannerProps> = ({
           <span>Scans: {scannedHistory.length}</span>
         </div>
       </div>
+
+      {/* 1-Barcode Scanned Confirmation Modal Popup (Prevents unwanted and mis-scans until "Scan Next Code" is selected) */}
+      {scannedPopupCode && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fade-in">
+          <div className="w-full max-w-sm bg-slate-900/95 border-2 border-emerald-400 rounded-3xl p-6 shadow-2xl text-center flex flex-col items-center">
+            {/* Green Success Badge */}
+            <div className="w-16 h-16 rounded-full bg-emerald-500/20 border-2 border-emerald-400 flex items-center justify-center mb-3 shadow-[0_0_25px_rgba(52,211,153,0.5)]">
+              <CheckCircle2 className="w-9 h-9 text-emerald-400" />
+            </div>
+
+            <div className="text-xs font-mono uppercase tracking-widest text-emerald-400 font-bold mb-1">
+              Barcode Scanned
+            </div>
+
+            <div className="text-xs text-slate-400 mb-4 font-mono">
+              Transmitted to Workstation
+            </div>
+
+            {/* Scanned Barcode Display Box */}
+            <div className="w-full bg-slate-950 border border-slate-700/80 rounded-2xl p-4 mb-5 shadow-inner">
+              <span className="text-xl sm:text-2xl font-mono font-black text-white tracking-wider break-all select-all block">
+                {scannedPopupCode}
+              </span>
+              <span className="text-[10px] font-mono text-emerald-400/90 block mt-1.5 font-semibold">
+                ● Status: Synced with PC Station
+              </span>
+            </div>
+
+            {/* Primary Action Button: Scan Next Code */}
+            <button
+              type="button"
+              onClick={handleScanNextCode}
+              className="w-full py-4 bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-slate-950 font-black text-base rounded-2xl shadow-xl flex items-center justify-center gap-2.5 cursor-pointer transition"
+            >
+              <Barcode className="w-5 h-5" />
+              <span>Scan Next Code</span>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
