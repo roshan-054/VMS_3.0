@@ -83,6 +83,13 @@ import {
   clearAllApplicationCacheAndStorage
 } from '../lib/storage';
 
+import {
+  getGtinSheetConfig,
+  saveGtinSheetConfig,
+  syncGtinFromGoogleSheet,
+  syncGtinWithMasterSheet
+} from '../lib/manifestStorage';
+
 interface AdminPanelProps {
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
   currentUser: { name: string; email: string; role: string } | null;
@@ -155,6 +162,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
   const [autoRefreshIntervalInput, setAutoRefreshIntervalInput] = useState<number>(getStoredAutoRefreshInterval());
   const [nightModeInput, setNightModeInput] = useState<boolean>(getStoredNightMode());
   const [maxConcurrentInput, setMaxConcurrentInput] = useState<number>(getStoredMaxConcurrentUploads());
+  const [gtinSyncSheetInput, setGtinSyncSheetInput] = useState<string>(() => getGtinSheetConfig().sheetIdOrUrl);
+  const [gtinSyncTabInput, setGtinSyncTabInput] = useState<string>(() => getGtinSheetConfig().tabName || 'GTINCatalog');
+  const [isSyncingGtinFromAdmin, setIsSyncingGtinFromAdmin] = useState<boolean>(false);
   const [clearingCache, setClearingCache] = useState(false);
   const [testingHealth, setTestingHealth] = useState(false);
   const [repairingUrls, setRepairingUrls] = useState(false);
@@ -284,6 +294,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
     setStoredNightMode(nightModeInput);
     setStoredMaxConcurrentUploads(maxConcurrentInput);
 
+    // Save GTIN Product Catalog Google Sheet & Tab Link Configuration
+    saveGtinSheetConfig({
+      sheetIdOrUrl: gtinSyncSheetInput.trim(),
+      tabName: gtinSyncTabInput.trim() || 'GTINCatalog',
+      autoSync: true,
+      lastSyncTime: new Date().toISOString()
+    });
+
     // Save permanently to Google Sheet Branding tab and script properties
     setStoredBranding({
       videoDriveFolderId: cleanFolderId,
@@ -293,9 +311,41 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
     window.dispatchEvent(new CustomEvent('ops_queue_updated'));
 
     onShowToast(
-      `Drive & System configuration saved permanently to Google Sheet "Branding" tab! Concurrency: ${maxConcurrentInput}.`,
+      `Drive & System configuration saved permanently! Google Sheet Sync & Drive settings active.`,
       'success'
     );
+  };
+
+  const handleSyncGtinCatalogFromAdmin = async () => {
+    setIsSyncingGtinFromAdmin(true);
+    try {
+      const cleanInput = gtinSyncSheetInput.trim();
+      const cleanTab = gtinSyncTabInput.trim() || 'GTINCatalog';
+      let res: { success: boolean; count: number; message: string };
+
+      if (cleanInput) {
+        res = await syncGtinFromGoogleSheet(cleanInput, cleanTab);
+      } else {
+        res = await syncGtinWithMasterSheet();
+        saveGtinSheetConfig({
+          sheetIdOrUrl: '',
+          tabName: cleanTab,
+          autoSync: true,
+          lastSyncTime: new Date().toISOString(),
+          totalSyncedItems: res.count
+        });
+      }
+
+      if (res.success) {
+        onShowToast(res.message, 'success');
+      } else {
+        onShowToast(res.message, 'error');
+      }
+    } catch (err: any) {
+      onShowToast(err?.message || 'GTIN Catalog sync failed', 'error');
+    } finally {
+      setIsSyncingGtinFromAdmin(false);
+    }
   };
 
   const handleRepairPlaybackUrls = async () => {
@@ -1002,12 +1052,87 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                 </div>
               </div>
 
-              {/* 3. Chunk Upload Size Limit */}
+              {/* 3. GTIN Barcode Catalog Google Sheet & Tab Link */}
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-xs">
+                      3
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900">GTIN Catalog Google Sheet &amp; Tab Sync</h4>
+                      <p className="text-[11px] text-slate-500">Configure master or separate product spreadsheet link and tab name</p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleSyncGtinCatalogFromAdmin}
+                    disabled={isSyncingGtinFromAdmin}
+                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-xs shadow-emerald-600/20"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncingGtinFromAdmin ? 'animate-spin' : ''}`} />
+                    <span>{isSyncingGtinFromAdmin ? 'Syncing...' : 'Sync Catalog Now'}</span>
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="block text-xs font-semibold text-slate-700">
+                        Google Sheet Link or Spreadsheet ID
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setGtinSyncSheetInput('');
+                          setGtinSyncTabInput('GTINCatalog');
+                        }}
+                        className="text-[11px] text-indigo-600 hover:underline font-medium cursor-pointer"
+                      >
+                        Reset to Master Sheet
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      disabled={disableSettings}
+                      value={gtinSyncSheetInput}
+                      onChange={(e) => setGtinSyncSheetInput(e.target.value)}
+                      placeholder="Leave blank for Master Sheet or paste https://docs.google.com/spreadsheets/d/.../edit"
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
+                    />
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      {gtinSyncSheetInput.trim()
+                        ? 'Custom Google Sheet configured for product catalog.'
+                        : 'Using connected Master Google Sheet as the source of truth.'}
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                      Sheet Tab Name
+                    </label>
+                    <input
+                      type="text"
+                      disabled={disableSettings}
+                      value={gtinSyncTabInput}
+                      onChange={(e) => setGtinSyncTabInput(e.target.value)}
+                      placeholder="e.g. GTINCatalog, Sheet1, or Products"
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
+                    />
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      Tab inside the spreadsheet containing your products. Default: <code>GTINCatalog</code>.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* 4. Chunk Upload Size Limit */}
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                   <div className="flex items-center gap-2">
                     <div className="w-7 h-7 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center font-bold text-xs">
-                      3
+                      4
                     </div>
                     <div>
                       <h4 className="text-xs font-bold text-slate-900">Video Upload Chunk Size</h4>

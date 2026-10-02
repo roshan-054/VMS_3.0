@@ -49,6 +49,7 @@ import {
   searchCatalog,
   getGtinSheetConfig,
   saveGtinSheetConfig,
+  GtinSheetConfig,
   syncGtinFromGoogleSheet,
   syncGtinWithMasterSheet,
   syncManifestsWithCloud,
@@ -431,45 +432,74 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     ]);
   };
 
-  // Sync with user's separate GTIN Google Sheet (Advanced)
+  // Sync with user's separate GTIN Google Sheet (Advanced / Custom Sheet & Tab)
   const handlePerformGtinSync = async () => {
-    if (!gtinSheetInput.trim()) {
-      setSheetSyncResult({ success: false, msg: 'Please provide your Google Sheet ID or URL.' });
-      return;
-    }
+    const cleanInput = gtinSheetInput.trim();
+    const cleanTab = gtinSheetTab.trim() || 'GTINCatalog';
 
     setIsSyncingSheet(true);
     setSheetSyncResult(null);
 
-    const res = await syncGtinFromGoogleSheet(gtinSheetInput.trim(), gtinSheetTab.trim() || 'Sheet1');
+    let res: { success: boolean; count: number; message: string };
+
+    if (cleanInput) {
+      // User specified an external or custom Google Sheet ID/URL and Tab Name
+      res = await syncGtinFromGoogleSheet(cleanInput, cleanTab);
+    } else {
+      // User left sheet link empty -> sync with connected Master Google Sheet
+      res = await syncGtinWithMasterSheet();
+      const updatedConfig: GtinSheetConfig = {
+        sheetIdOrUrl: '',
+        tabName: cleanTab,
+        autoSync: true,
+        lastSyncTime: new Date().toISOString(),
+        totalSyncedItems: res.count
+      };
+      saveGtinSheetConfig(updatedConfig);
+    }
+
     setIsSyncingSheet(false);
     setSheetSyncResult({ success: res.success, msg: res.message });
 
     if (res.success) {
-      setGtinCatalog(getStoredGtinCatalog());
+      const updatedCatalog = getStoredGtinCatalog();
+      setGtinCatalog(updatedCatalog);
+      // Automatically switch to GTIN Barcode Catalog tab so user sees all fetched products!
+      setActiveSubTab('gtin');
       onShowToast(res.message, 'success');
       setTimeout(() => {
         setIsSyncModalOpen(false);
         setSheetSyncResult(null);
-      }, 1800);
+      }, 1200);
     } else {
       onShowToast(res.message, 'error');
     }
   };
 
-  // Primary Sync: Sync directly with connected Master Google Sheet (single reference point from Branding)
+  // Primary Sync: Sync directly with connected Google Sheet & configured Tab Name
   const handleSyncMasterSheet = async () => {
     setIsSyncingMasterSheet(true);
     try {
-      const res = await syncGtinWithMasterSheet();
+      const cfg = getGtinSheetConfig();
+      let res: { success: boolean; count: number; message: string };
+
+      if (cfg.sheetIdOrUrl && cfg.sheetIdOrUrl.trim()) {
+        res = await syncGtinFromGoogleSheet(cfg.sheetIdOrUrl.trim(), cfg.tabName?.trim() || 'GTINCatalog');
+      } else {
+        res = await syncGtinWithMasterSheet();
+      }
+
       if (res.success) {
-        setGtinCatalog(getStoredGtinCatalog());
+        const updatedCatalog = getStoredGtinCatalog();
+        setGtinCatalog(updatedCatalog);
+        // Automatically switch to GTIN Barcode Catalog tab to display the freshly fetched data!
+        setActiveSubTab('gtin');
         onShowToast(res.message, 'success');
       } else {
         onShowToast(res.message, 'error');
       }
     } catch (err: any) {
-      onShowToast(err?.message || 'Master Google Sheet sync failed', 'error');
+      onShowToast(err?.message || 'Google Sheet sync failed', 'error');
     } finally {
       setIsSyncingMasterSheet(false);
     }
@@ -1089,16 +1119,33 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         {/* Quick Top Actions (Admin Only) */}
         {isUserAdmin && (
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              disabled={isSyncingMasterSheet}
-              onClick={handleSyncMasterSheet}
-              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-              title="Sync products with Master Google Sheet (Branding Tab Reference)"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isSyncingMasterSheet ? 'animate-spin' : ''}`} />
-              <span>{isSyncingMasterSheet ? 'Syncing...' : 'Sync Master Google Sheet'}</span>
-            </button>
+            {/* Sync Google Sheet Button Group with Direct Settings / Tab Configuration */}
+            <div className="inline-flex rounded-xl shadow-xs overflow-hidden border border-emerald-700 bg-emerald-600">
+              <button
+                type="button"
+                disabled={isSyncingMasterSheet || isSyncingSheet}
+                onClick={handleSyncMasterSheet}
+                className="px-3.5 py-2 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                title="Fetch and sync products from Google Sheet into GTIN Catalog"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingMasterSheet || isSyncingSheet ? 'animate-spin' : ''}`} />
+                <span>{isSyncingMasterSheet || isSyncingSheet ? 'Syncing...' : 'Sync Master Google Sheet'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const cfg = getGtinSheetConfig();
+                  setGtinSheetInput(cfg.sheetIdOrUrl);
+                  setGtinSheetTab(cfg.tabName || 'GTINCatalog');
+                  setIsSyncModalOpen(true);
+                }}
+                className="px-2.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white border-l border-emerald-500 transition cursor-pointer flex items-center gap-1 text-xs font-bold"
+                title="Change Google Sheet Link or Tab Name"
+              >
+                <Sliders className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Sheet &amp; Tab</span>
+              </button>
+            </div>
 
             <button
               type="button"
@@ -2016,7 +2063,62 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
       {/* SUB-TAB 3: GTIN BARCODE CATALOG (Admin Only) */}
       {isUserAdmin && activeSubTab === 'gtin' && (
         <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs space-y-4">
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          {/* Active Google Sheet Sync Status Bar */}
+          <div className="bg-gradient-to-r from-emerald-50 via-slate-50 to-indigo-50/40 border border-emerald-200/80 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-2xs">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-emerald-600/20">
+                <FileSpreadsheet className="w-5 h-5" />
+              </div>
+              <div className="space-y-0.5 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-bold text-slate-900">
+                    Active Sync Source:
+                  </span>
+                  <span className="text-xs font-mono font-bold bg-white px-2.5 py-0.5 rounded-lg border border-emerald-200 text-emerald-800 shadow-2xs truncate max-w-xs sm:max-w-md">
+                    {getGtinSheetConfig().sheetIdOrUrl
+                      ? getGtinSheetConfig().sheetIdOrUrl
+                      : 'Master Google Sheet'}
+                  </span>
+                  <span className="text-xs font-mono font-bold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-lg border border-indigo-200">
+                    Tab: {getGtinSheetConfig().tabName || 'GTINCatalog'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  Clicking <strong>Sync</strong> automatically fetches all products &amp; GTIN barcodes from this sheet and tab directly into your catalog.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  const cfg = getGtinSheetConfig();
+                  setGtinSheetInput(cfg.sheetIdOrUrl);
+                  setGtinSheetTab(cfg.tabName || 'GTINCatalog');
+                  setIsSyncModalOpen(true);
+                }}
+                className="px-3 py-2 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                title="Change the Google Sheet link or tab name"
+              >
+                <Sliders className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Change Sheet / Tab</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={isSyncingMasterSheet || isSyncingSheet}
+                onClick={handleSyncMasterSheet}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-emerald-600/20"
+                title="Fetch latest data from configured Google Sheet & Tab"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingMasterSheet || isSyncingSheet ? 'animate-spin' : ''}`} />
+                <span>{isSyncingMasterSheet || isSyncingSheet ? 'Fetching...' : 'Sync Now'}</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pt-1">
             <div>
               <h2 className="text-base font-black text-slate-900 tracking-tight flex items-center gap-2">
                 <span>Product GTIN &amp; Barcode Master Catalog</span>
@@ -2025,22 +2127,11 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                 </span>
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">
-                Master product database synchronized with Google Sheet (&quot;GTINCatalog&quot; tab) — used for instantaneous auto-fetch during order entry and packing verification.
+                Master product database used for instantaneous auto-fetch during order entry and live camera barcode verification.
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                disabled={isSyncingMasterSheet}
-                onClick={handleSyncMasterSheet}
-                className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                title="Synchronize GTIN catalog with connected Google Sheet"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingMasterSheet ? 'animate-spin' : ''}`} />
-                <span>{isSyncingMasterSheet ? 'Syncing...' : 'Sync Master Sheet'}</span>
-              </button>
-
               <button
                 type="button"
                 onClick={handleOpenBulkManualModal}
@@ -2576,16 +2667,23 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         </div>
       )}
 
-      {/* MODAL 1: SYNC SEPARATE GOOGLE SHEET */}
+      {/* MODAL 1: SYNC & CONFIGURE GOOGLE SHEET */}
       {isSyncModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in">
-          <div className="w-full max-w-md bg-white border border-slate-200 rounded-3xl p-6 shadow-2xl space-y-4">
+          <div className="w-full max-w-lg bg-white border border-slate-200 rounded-3xl p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div className="flex items-center gap-2">
-                <FileSpreadsheet className="w-5 h-5 text-emerald-600" />
-                <h3 className="font-bold text-slate-900 text-base">
-                  Connect Separate GTIN Google Sheet
-                </h3>
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-xs">
+                  <FileSpreadsheet className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-base">
+                    Configure Google Sheet &amp; Tab Sync
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Sync GTIN product catalog from your master or custom Google Sheet
+                  </p>
+                </div>
               </div>
               <button
                 type="button"
@@ -2597,34 +2695,51 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
             </div>
 
             <p className="text-xs text-slate-500">
-              Provide the Google Sheet link or ID containing your products and GTIN barcodes. The system will automatically detect the columns (<code className="font-mono text-indigo-600">GTIN</code>, <code className="font-mono text-indigo-600">SKU</code>, <code className="font-mono text-indigo-600">Product Name</code>, <code className="font-mono text-indigo-600">Short Name</code>, <code className="font-mono text-indigo-600">Image URL</code>).
+              Provide your Google Sheet link or spreadsheet ID and the exact Tab Name. When synced, all products and barcodes will be fetched and populated into your <strong>GTIN Barcode Catalog</strong>.
             </p>
 
-            <div className="space-y-3">
+            <div className="space-y-3.5">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Google Sheet URL or Spreadsheet ID <span className="text-red-500">*</span>
+                <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
+                  <span>Google Sheet URL or Spreadsheet ID</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setGtinSheetInput('');
+                      setGtinSheetTab('GTINCatalog');
+                    }}
+                    className="text-[11px] text-indigo-600 hover:underline font-medium cursor-pointer"
+                  >
+                    Reset to Master Sheet
+                  </button>
                 </label>
                 <input
                   type="text"
                   value={gtinSheetInput}
                   onChange={(e) => setGtinSheetInput(e.target.value)}
-                  placeholder="https://docs.google.com/spreadsheets/d/.../edit or ID"
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500"
+                  placeholder="Leave blank for Master Sheet or paste https://docs.google.com/spreadsheets/d/.../edit"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500 shadow-inner"
                 />
+                <span className="text-[10px] text-slate-400 mt-1 block">
+                  {gtinSheetInput.trim() ? 'Using Custom Google Sheet' : 'Using connected Master Google Sheet'}
+                </span>
               </div>
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Sheet Tab Name (Optional, defaults to first tab)
+                  Sheet Tab Name <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="text"
+                  required
                   value={gtinSheetTab}
                   onChange={(e) => setGtinSheetTab(e.target.value)}
-                  placeholder="e.g. Sheet1, Products, or GTINs"
-                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500"
+                  placeholder="e.g. GTINCatalog, Sheet1, or Products"
+                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500 shadow-inner"
                 />
+                <span className="text-[10px] text-slate-400 mt-1 block">
+                  Default is <code>GTINCatalog</code> (or <code>Sheet1</code> for raw spreadsheets).
+                </span>
               </div>
             </div>
 
@@ -2645,33 +2760,53 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
               </div>
             )}
 
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-100">
               <button
                 type="button"
-                onClick={() => setIsSyncModalOpen(false)}
-                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer"
+                onClick={() => {
+                  const updatedConfig: GtinSheetConfig = {
+                    sheetIdOrUrl: gtinSheetInput.trim(),
+                    tabName: gtinSheetTab.trim() || 'GTINCatalog',
+                    autoSync: true,
+                    lastSyncTime: new Date().toISOString()
+                  };
+                  saveGtinSheetConfig(updatedConfig);
+                  onShowToast('Sync Sheet & Tab configuration saved!', 'success');
+                  setIsSyncModalOpen(false);
+                }}
+                className="px-3.5 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer border border-slate-200"
               >
-                Cancel
+                Save Settings
               </button>
 
-              <button
-                type="button"
-                disabled={isSyncingSheet || !gtinSheetInput.trim()}
-                onClick={handlePerformGtinSync}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-              >
-                {isSyncingSheet ? (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>Syncing Sheet...</span>
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    <span>Sync Now</span>
-                  </>
-                )}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsSyncModalOpen(false)}
+                  className="px-3 py-2 text-xs font-bold text-slate-500 hover:text-slate-800 cursor-pointer"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isSyncingSheet}
+                  onClick={handlePerformGtinSync}
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-emerald-600/20"
+                >
+                  {isSyncingSheet ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Fetching Products...</span>
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Sync &amp; Fetch to GTIN Catalog</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>
