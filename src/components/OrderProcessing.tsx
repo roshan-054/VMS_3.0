@@ -31,7 +31,8 @@ import {
   Square,
   LayoutGrid,
   List,
-  Tag
+  Tag,
+  Copy
 } from 'lucide-react';
 import { PlatformType, User, OrderManifest, ManifestItem, GtinCatalogProduct, PackVerificationLog } from '../types';
 import {
@@ -1071,6 +1072,15 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     );
   }, [gtinCatalog, gtinSearchQuery, selectedTagFilter]);
 
+  const handleCopyText = (text: string, label: string) => {
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => {
+      onShowToast(`${label} copied to clipboard!`, 'success');
+    }).catch(() => {
+      onShowToast(`Failed to copy ${label}`, 'error');
+    });
+  };
+
   // Delete Manifest Row
   const handleDeleteManifest = (id: string, oId: string) => {
     if (window.confirm(`Are you sure you want to remove Order ${oId} from the pre-pack manifest?`)) {
@@ -2027,8 +2037,16 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                   >
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
                       <div className="flex items-center gap-3">
-                        <span className="text-base font-mono font-black text-slate-900 tracking-wide">
-                          {m.orderId}
+                        <span className="text-base font-mono font-black text-slate-900 tracking-wide flex items-center gap-2">
+                          <span>{m.orderId}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopyText(m.orderId, 'Order ID')}
+                            className="p-1 text-slate-400 hover:text-indigo-600 rounded-lg bg-slate-100 hover:bg-indigo-50 transition cursor-pointer"
+                            title="Copy Order ID"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                          </button>
                         </span>
                         <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-slate-100 text-slate-700 border border-slate-200">
                           {m.platform}
@@ -2156,8 +2174,18 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                               <div className="text-xs font-bold text-slate-900 truncate">
                                 {it.shortName || it.productName}
                               </div>
-                              <div className="text-[10px] font-mono text-slate-400 truncate">
-                                GTIN: {it.gtin} • SKU: {it.sku}
+                              <div className="text-[10px] font-mono text-slate-400 truncate flex items-center gap-1.5">
+                                <span>GTIN: {it.gtin} • SKU: {it.sku}</span>
+                                {it.sku && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCopyText(it.sku, 'SKU')}
+                                    className="p-0.5 text-slate-400 hover:text-indigo-600 rounded bg-slate-100 hover:bg-indigo-50 transition cursor-pointer inline-flex items-center"
+                                    title="Copy SKU"
+                                  >
+                                    <Copy className="w-3 h-3" />
+                                  </button>
+                                )}
                               </div>
                             </div>
 
