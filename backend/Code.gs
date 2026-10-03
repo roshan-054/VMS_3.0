@@ -4238,6 +4238,20 @@ function formatDateDDMMMYYYY_(dateVal) {
   return day + '-' + month + '-' + year;
 }
 
+function formatDateTimeDDMMMYYYY_(dateVal) {
+  if (!dateVal) return '';
+  var d = dateVal instanceof Date ? dateVal : new Date(dateVal);
+  if (isNaN(d.getTime())) return String(dateVal);
+  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var day = ('0' + d.getDate()).slice(-2);
+  var month = months[d.getMonth()];
+  var year = d.getFullYear();
+  var hours = ('0' + d.getHours()).slice(-2);
+  var mins = ('0' + d.getMinutes()).slice(-2);
+  var secs = ('0' + d.getSeconds()).slice(-2);
+  return day + '-' + month + '-' + year + ' ' + hours + ':' + mins + ':' + secs;
+}
+
 function formatItemsList_(items) {
   if (!Array.isArray(items)) return '';
   var list = [];
@@ -4280,7 +4294,7 @@ function saveOrderManifest_(p) {
     }
   }
 
-  var nowStr = formatDateDDMMMYYYY_(new Date());
+  var nowStr = manifest.processedAt ? formatDateTimeDDMMMYYYY_(manifest.processedAt) : formatDateTimeDDMMMYYYY_(new Date());
   var itemsStr = formatItemsList_(manifest.items || []);
   var totalItems = 0;
   if (Array.isArray(manifest.items)) {
@@ -4289,7 +4303,7 @@ function saveOrderManifest_(p) {
     }
   }
 
-  var packedAtStr = manifest.packedAt ? formatDateDDMMMYYYY_(manifest.packedAt) : '';
+  var packedAtStr = manifest.packedAt ? formatDateTimeDDMMMYYYY_(manifest.packedAt) : '';
 
   var rowValues = [
     nowStr,

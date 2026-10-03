@@ -1137,6 +1137,17 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       bypassDuplicateRef.current = false;
 
       await dbPutQueue(queueItem);
+      requestApi('startUpload', {
+        orderId: queueItem.orderId,
+        platform: queueItem.platform,
+        fileName: queueItem.fileName,
+        fileSize: queueItem.fileSize,
+        uploadId: queueItem.id,
+        recordingType: queueItem.recordingType,
+        queueJobId: queueItem.id,
+        status: 'Pending',
+        stage: 'Queued in Station Storage'
+      }).catch(() => {});
       window.dispatchEvent(new CustomEvent('ops_queue_updated'));
       onQueueUpdated();
       triggerUploadWorker();

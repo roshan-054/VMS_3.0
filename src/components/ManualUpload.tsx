@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { PlatformType, RecordingType, QueueItem } from '../types';
 import { dbPutQueue, getStoredDriveFolderId, manualFileCache } from '../lib/storage';
-import { checkDuplicate } from '../lib/api';
+import { checkDuplicate, requestApi } from '../lib/api';
 import { triggerUploadWorker } from '../lib/uploadWorker';
 
 interface ManualUploadProps {
@@ -342,12 +342,34 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
 
         try {
           await dbPutQueue(queueItem);
+          requestApi('startUpload', {
+            orderId: queueItem.orderId,
+            platform: queueItem.platform,
+            fileName: queueItem.fileName,
+            fileSize: queueItem.fileSize,
+            uploadId: queueItem.id,
+            recordingType: queueItem.recordingType,
+            queueJobId: queueItem.id,
+            status: 'Pending',
+            stage: 'Queued in Manual Backup Storage'
+          }).catch(() => {});
         } catch (dbErr) {
           // If browser IndexedDB quota is exceeded for ultra-large files, fall back to memory cache
           console.warn('IndexedDB write note, using in-memory store:', dbErr);
           queueItem.blob = new Blob([''], { type: mimeType });
           queueItem.isInMemory = true;
           await dbPutQueue(queueItem);
+          requestApi('startUpload', {
+            orderId: queueItem.orderId,
+            platform: queueItem.platform,
+            fileName: queueItem.fileName,
+            fileSize: queueItem.fileSize,
+            uploadId: queueItem.id,
+            recordingType: queueItem.recordingType,
+            queueJobId: queueItem.id,
+            status: 'Pending',
+            stage: 'Queued in Manual Backup Storage'
+          }).catch(() => {});
         }
 
         queuedCount++;
