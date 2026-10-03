@@ -404,6 +404,7 @@ export async function triggerUploadWorker(): Promise<void> {
         totalChunks: totalChunks,
         bypassDuplicate: !!currentItem.bypassDuplicate,
         queueJobId: currentItem.id,
+        createdAt: currentItem.createdAt,
       });
     } catch (startErr: any) {
       if (deletedItemIds.has(currentItem.id)) {
@@ -672,7 +673,7 @@ export async function triggerUploadWorker(): Promise<void> {
                 break;
               }
 
-              // HTTP 200 or 201 = Video upload fully completed by Google Drive!
+               // HTTP 200 or 201 = Video upload fully completed by Google Drive!
               if (proxyData.success && (proxyData.driveStatus === 200 || proxyData.driveStatus === 201 || proxyData.fileId)) {
                 finalFileId = proxyData.fileId || (proxyData.file && proxyData.file.id) || '';
                 finalWebViewLink = `https://drive.google.com/file/d/${finalFileId}/preview`;
@@ -692,6 +693,7 @@ export async function triggerUploadWorker(): Promise<void> {
                     source: currentItem.source || 'Automatic Recording',
                     driveFolderId: driveFolderId,
                     queueJobId: currentItem.id,
+                    createdAt: currentItem.createdAt,
                   });
                   if (fin && (fin.webViewLink || fin.playbackUrl)) {
                     finalWebViewLink = fin.webViewLink || fin.playbackUrl;
@@ -747,6 +749,7 @@ export async function triggerUploadWorker(): Promise<void> {
                     source: currentItem.source || 'Automatic Recording',
                     driveFolderId: driveFolderId,
                     queueJobId: currentItem.id,
+                    createdAt: currentItem.createdAt,
                   });
                   if (fin && (fin.webViewLink || fin.playbackUrl)) {
                     finalWebViewLink = fin.webViewLink || fin.playbackUrl;
@@ -979,6 +982,7 @@ export async function triggerUploadWorker(): Promise<void> {
                 source: currentItem.source || 'Automatic Recording',
                 driveFolderId: driveFolderId,
                 queueJobId: currentItem.id,
+                createdAt: currentItem.createdAt,
               });
               if (fin && fin.fileId) {
                 resolvedFileId = fin.fileId;

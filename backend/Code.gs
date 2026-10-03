@@ -1896,7 +1896,7 @@ function startUpload_(p){
         targetFolderId: folder.getId(),
         reservationKey: reservation ? reservation.key : '',
         bypassDuplicate: isBypass,
-        createdAt: Date.now()
+        createdAt: p.createdAt ? new Date(p.createdAt).getTime() : Date.now()
       };
 
       PropertiesService.getScriptProperties().setProperty('UPLOAD_' + uploadId, JSON.stringify(sessionData));
@@ -2227,8 +2227,9 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
 
     if (!alreadyLogged) {
       const formattedSize = formatFileSize_(s.size);
+      const originalDate = s.createdAt ? new Date(s.createdAt) : new Date();
       targetLogSheet.appendRow([
-        new Date(),
+        originalDate,
         s.order,
         s.platform,
         s.packerEmail || (user ? user.email : ''),
@@ -2243,7 +2244,7 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
       ]);
       try {
         sheet_(CONFIG.DOWNLOAD_LOG_SHEET).appendRow([
-          new Date(),
+          originalDate,
           s.order,
           s.platform,
           s.packerEmail || (user ? user.email : ''),
@@ -2315,8 +2316,11 @@ function finishUpload_(p) {
       packerEmail: user.email,
       queueJobId: String(p.queueJobId || ''),
       driveFolderId: p.driveFolderId || CONFIG.HARDWIRED_PARENT_FOLDER_ID,
-      reservationKey: ''
+      reservationKey: '',
+      createdAt: p.createdAt ? new Date(p.createdAt).getTime() : Date.now()
     };
+  } else if (p.createdAt) {
+    s.createdAt = new Date(p.createdAt).getTime();
   }
 
   return finalizeCompletedUpload_(s, uploadId, fid, user);
