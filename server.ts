@@ -311,7 +311,7 @@ async function startServer() {
 
   // High-Speed Direct Google Drive Binary Chunk Streaming Proxy
   // Bypasses browser CORS & Apps Script Base64 bottlenecks: streams raw binary directly to Google Drive (100+ Mbps)
-  app.put('/api/drive/resumable-chunk', express.raw({ type: '*/*', limit: '100mb' }), async (req, res) => {
+  app.put('/api/drive/resumable-chunk', express.raw({ type: '*/*', limit: '500mb' }), async (req, res) => {
     const uploadUrl = (req.headers['x-drive-upload-url'] as string || '').trim();
     const contentRange = (req.headers['content-range'] as string || '').trim();
     const contentType = (req.headers['content-type'] as string || 'video/mp4').trim();

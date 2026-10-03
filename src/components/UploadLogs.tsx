@@ -39,7 +39,7 @@ import { CleanDuplicatesModal } from './CleanDuplicatesModal';
 import { fetchUploadLogs, deleteLogEntry, formatFileSize, fetchDriveFileSize, normalizeOrderId } from '../lib/api';
 import { dbGetAllQueue, dbPutQueue, dbDeleteQueueItem, getStoredDriveFolderId, getStoredAutoRefreshInterval, manualFileCache } from '../lib/storage';
 import { canUserDeleteData } from '../lib/permissions';
-import { retryUploadItem, fixAndCleanAllStuckUploads, subscribeWorkerStatus } from '../lib/uploadWorker';
+import { retryUploadItem, fixAndCleanAllStuckUploads, subscribeWorkerStatus, triggerUploadWorker } from '../lib/uploadWorker';
 
 interface UploadLogsProps {
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
@@ -421,6 +421,40 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
       onShowToast(`Failed to clean stuck uploads: ${e?.message || e}`, 'error');
     } finally {
       setIsCleaningStuck(false);
+    }
+  };
+
+  const [isAutoRecovering, setIsAutoRecovering] = useState<boolean>(false);
+
+  const handleAutoRecoverStaleLogs = async () => {
+    setIsAutoRecovering(true);
+    try {
+      // 1. Re-verify Drive for completed files & update sheets logs
+      const cleanRes = await fixAndCleanAllStuckUploads({ purgeInterrupted: false });
+
+      // 2. Re-trigger background upload queue for local pending/failed items
+      const queue = await dbGetAllQueue();
+      let reQueuedCount = 0;
+      for (const item of queue) {
+        if (item.status === 'failed' || item.status === 'paused') {
+          item.status = 'pending';
+          item.error = undefined;
+          item.progress = 0;
+          await dbPutQueue(item);
+          reQueuedCount++;
+        }
+      }
+      triggerUploadWorker();
+      await loadData(true);
+
+      onShowToast(
+        `⚡ Auto-Recovery Complete! Re-verified Drive files & re-queued ${reQueuedCount} local videos for background upload.`,
+        'success'
+      );
+    } catch (err: any) {
+      onShowToast(`Auto-recovery note: ${err?.message || err}`, 'error');
+    } finally {
+      setIsAutoRecovering(false);
     }
   };
 
@@ -1383,7 +1417,16 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={handleAutoRecoverStaleLogs}
+              disabled={isAutoRecovering}
+              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition inline-flex items-center gap-1.5 shadow-2xs cursor-pointer"
+              title="Automatically check Google Drive for completed files & re-queue local videos for upload"
+            >
+              <RotateCw className={`w-3.5 h-3.5 ${isAutoRecovering ? 'animate-spin' : ''}`} />
+              {isAutoRecovering ? 'Recovering…' : '⚡ Auto-Recover & Verify Drive'}
+            </button>
             <button
               onClick={handlePurgeInterrupted}
               disabled={isPurgingInterrupted}

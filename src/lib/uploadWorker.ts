@@ -879,15 +879,13 @@ export async function triggerUploadWorker(): Promise<void> {
                 } catch (_) {}
               }
 
-              // CRITICAL: ONLY auto-renew session on chunk 0!
-              // For intermediate chunks (c > 0), NEVER reset c = -1, as restarting a 200 MB
-              // upload from chunk 0 is the root cause of the "upload reaches 100% and restarts" loop!
-              if (c === 0 && sessionRecoveryCount < 2) {
+              // Auto-renew expired upload session and restart stream with fresh session tokens
+              if (sessionRecoveryCount < 3) {
                 sessionRecoveryCount++;
                 console.warn(
-                  `Drive upload session expired on chunk 0. Auto-healing with a fresh session (${sessionRecoveryCount}/2)...`
+                  `Drive upload session expired on chunk ${c + 1}. Auto-healing with fresh session tokens (${sessionRecoveryCount}/3)...`
                 );
-                currentItem.stage = `Auto-recovering upload session (${sessionRecoveryCount}/2)...`;
+                currentItem.stage = `Auto-recovering upload session (${sessionRecoveryCount}/3)...`;
                 await safePutQueue(currentItem);
                 updateState({
                   isProcessing: true,
@@ -912,13 +910,18 @@ export async function triggerUploadWorker(): Promise<void> {
                     totalChunks: totalChunks,
                     bypassDuplicate: true,
                     queueJobId: currentItem.id,
+                    createdAt: currentItem.createdAt,
                   });
 
                   if (freshStartRes?.success && freshStartRes.uploadId) {
                     uploadId = freshStartRes.uploadId;
                     currentItem.uploadId = uploadId;
+                    if (freshStartRes.uploadUrl) {
+                      startRes.uploadUrl = freshStartRes.uploadUrl;
+                      directUploadDisabled = false;
+                    }
                     await safePutQueue(currentItem);
-                    c = -1;
+                    c = -1; // Restart chunk loop with fresh uploadUrl
                     chunkSuccess = true;
                     break;
                   }

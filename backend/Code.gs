@@ -1725,8 +1725,8 @@ function getGlobalUploadLease_() {
   try {
     const lease = JSON.parse(raw);
     const now = Date.now();
-    // Lease expires after 120 seconds of inactive chunk heartbeats or 15 minutes total maximum
-    if (now - Number(lease.lastHeartbeatAt || 0) > 120000 || (now - Number(lease.startedAt || 0) > 900000)) {
+    // Lease expires after 25 seconds of inactive chunk heartbeats or 15 minutes total maximum
+    if (now - Number(lease.lastHeartbeatAt || 0) > 25000 || (now - Number(lease.startedAt || 0) > 900000)) {
       PropertiesService.getScriptProperties().deleteProperty('GLOBAL_ACTIVE_UPLOAD');
       return null;
     }
