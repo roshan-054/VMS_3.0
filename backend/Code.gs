@@ -4332,6 +4332,44 @@ function saveOrderManifestsBatch_(p) {
   return { success: true, count: count };
 }
 
+function parseItemsList_(text) {
+  var str = String(text || '').trim();
+  if (!str) return [];
+  if (str.indexOf('[') === 0 || str.indexOf('{') === 0) {
+    try {
+      var parsed = JSON.parse(str);
+      if (Array.isArray(parsed)) return parsed;
+    } catch (_) {}
+  }
+  var parts = str.split(';');
+  var items = [];
+  for (var i = 0; i < parts.length; i++) {
+    var p = parts[i].trim();
+    if (!p) continue;
+    var match = p.match(/^(.*?)(?:\s+\[(.*?)\])?\s+x\s+(\d+)$/);
+    if (match) {
+      items.push({
+        id: 'item-' + (i + 1),
+        productName: match[1].trim(),
+        shortName: match[1].trim(),
+        sku: match[2] ? match[2].trim() : '',
+        gtin: '',
+        quantity: Number(match[3]) || 1
+      });
+    } else {
+      items.push({
+        id: 'item-' + (i + 1),
+        productName: p,
+        shortName: p,
+        sku: '',
+        gtin: '',
+        quantity: 1
+      });
+    }
+  }
+  return items;
+}
+
 function getOrderManifests_(p) {
   var sh = getManifestSheet_();
   var data = sh.getDataRange().getValues();
@@ -4342,10 +4380,7 @@ function getOrderManifests_(p) {
     var orderId = String(r[1] || '').trim();
     if (!orderId) continue;
 
-    var items = [];
-    try {
-      if (r[8]) items = JSON.parse(r[8]);
-    } catch (_) {}
+    var items = parseItemsList_(r[8]);
 
     manifests.push({
       id: 'm-' + i,

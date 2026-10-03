@@ -89,6 +89,24 @@ export function recordDeletedGtinCode(gtin: string): void {
 
 // --- Order Manifest Store ---
 
+export function enrichManifestItems(items: ManifestItem[]): ManifestItem[] {
+  if (!Array.isArray(items)) return [];
+  return items.map((it) => {
+    const found = findProductInCatalog(it.sku || it.productName || it.gtin);
+    if (found) {
+      return {
+        ...it,
+        gtin: it.gtin || found.gtin || '',
+        sku: it.sku || found.sku || '',
+        productName: it.productName || found.productName || '',
+        shortName: it.shortName || found.shortName || found.productName || '',
+        imageUrl: it.imageUrl || found.imageUrl || ''
+      };
+    }
+    return it;
+  });
+}
+
 export function getStoredManifests(): OrderManifest[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_MANIFESTS);
@@ -96,10 +114,15 @@ export function getStoredManifests(): OrderManifest[] {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     const deletedSet = getDeletedManifestIds();
-    return parsed.filter((m) => {
-      const id = String(m.orderId || '').toLowerCase().trim();
-      return id && !deletedSet.has(id);
-    });
+    return parsed
+      .filter((m) => {
+        const id = String(m.orderId || '').toLowerCase().trim();
+        return id && !deletedSet.has(id);
+      })
+      .map((m) => ({
+        ...m,
+        items: enrichManifestItems(m.items || [])
+      }));
   } catch (e) {
     return [];
   }
