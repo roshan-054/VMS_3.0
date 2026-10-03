@@ -493,7 +493,7 @@ function setupSystem() {
     [CONFIG.SECURITY_LOG_SHEET,['Timestamp','Email','Action','Result','Details']],
     [CONFIG.BRANDING_SHEET,['Setting Key','Setting Value','Last Updated','Description']],
     [CONFIG.TRASH_LOG_SHEET,['Timestamp','Order ID','Platform','Recording Type','Action','Original Sheet','Drive File ID','Playback URL','Cleaned By','Details']],
-    [CONFIG.ORDER_MANIFEST_SHEET,['Timestamp','Order ID','Platform','Assigned Packer Name','Assigned Packer Email','Processed By Name','Processed By Email','Total Items Count','Items Detail JSON','Status','Notes','Packed At','Packed By Name','Video Drive Link']],
+    [CONFIG.ORDER_MANIFEST_SHEET,['Timestamp','Order ID','Platform','Assigned Packer Name','Assigned Packer Email','Processed By Name','Processed By Email','Total Items Count','Items List','Status','Notes','Packed At','Packed By Name','Video Drive Link']],
     [CONFIG.PACK_VERIFICATION_LOG_SHEET,['Timestamp','Order ID','Platform','Assigned Packer','Verified By Packer','Packer Email','Processed By','Status','Total Required Items','Total Scanned Items','Items Summary','Scanned GTINs Log','Duration Seconds','Drive Video URL']],
     [CONFIG.GTIN_CATALOG_SHEET,['Timestamp','GTIN','SKU','Product Name','Short Name','Category','Image URL','Default Quantity','Notes']]
   ];
@@ -4227,6 +4227,30 @@ function handleScannerBroadcast_(p) {
 // VMS 3.0 ORDER MANIFEST & GTIN SYNC ENGINE
 // ==========================================
 
+function formatDateDDMMMYYYY_(dateVal) {
+  if (!dateVal) return '';
+  var d = dateVal instanceof Date ? dateVal : new Date(dateVal);
+  if (isNaN(d.getTime())) return String(dateVal);
+  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var day = ('0' + d.getDate()).slice(-2);
+  var month = months[d.getMonth()];
+  var year = d.getFullYear();
+  return day + '-' + month + '-' + year;
+}
+
+function formatItemsList_(items) {
+  if (!Array.isArray(items)) return '';
+  var list = [];
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i];
+    var name = it.shortName || it.productName || it.sku || it.gtin || 'Item';
+    var sku = it.sku ? '[' + it.sku + ']' : '';
+    var qty = it.quantity || 1;
+    list.push(name + (sku ? ' ' + sku : '') + ' x ' + qty);
+  }
+  return list.join('; ');
+}
+
 function getManifestSheet_() {
   return sheet_(CONFIG.ORDER_MANIFEST_SHEET);
 }
@@ -4256,8 +4280,8 @@ function saveOrderManifest_(p) {
     }
   }
 
-  var now = new Date();
-  var itemsJson = JSON.stringify(manifest.items || []);
+  var nowStr = formatDateDDMMMYYYY_(new Date());
+  var itemsStr = formatItemsList_(manifest.items || []);
   var totalItems = 0;
   if (Array.isArray(manifest.items)) {
     for (var k = 0; k < manifest.items.length; k++) {
@@ -4265,8 +4289,10 @@ function saveOrderManifest_(p) {
     }
   }
 
+  var packedAtStr = manifest.packedAt ? formatDateDDMMMYYYY_(manifest.packedAt) : '';
+
   var rowValues = [
-    now,
+    nowStr,
     orderId,
     manifest.platform || 'Amazon',
     manifest.assignedPackerName || '',
@@ -4274,10 +4300,10 @@ function saveOrderManifest_(p) {
     manifest.processedByName || '',
     manifest.processedByEmail || '',
     totalItems,
-    itemsJson,
+    itemsStr,
     manifest.status || 'Pending',
     manifest.notes || '',
-    manifest.packedAt || '',
+    packedAtStr,
     manifest.packedByName || '',
     manifest.videoDriveUrl || ''
   ];
@@ -4359,11 +4385,11 @@ function updateManifestStatus_(p) {
 
   if (targetRow > 0) {
     if (p.status) sh.getRange(targetRow, 10).setValue(p.status);
-    if (p.items) sh.getRange(targetRow, 9).setValue(JSON.stringify(p.items));
+    if (p.items) sh.getRange(targetRow, 9).setValue(formatItemsList_(p.items));
     if (p.packerDetails) {
       if (p.packerDetails.name) sh.getRange(targetRow, 13).setValue(p.packerDetails.name);
       if (p.packerDetails.videoDriveUrl) sh.getRange(targetRow, 14).setValue(p.packerDetails.videoDriveUrl);
-      if (p.status === 'Packed') sh.getRange(targetRow, 12).setValue(new Date().toISOString());
+      if (p.status === 'Packed') sh.getRange(targetRow, 12).setValue(formatDateDDMMMYYYY_(new Date()));
     }
     return { success: true, orderId: orderId };
   }
