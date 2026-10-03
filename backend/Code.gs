@@ -1640,7 +1640,7 @@ function logUpload_(row){
   }
 }
 
-function updateUploadLog_(uploadId, stage, progress, fileId, status, error, queueJobId, orderId, recType){
+function updateUploadLog_(uploadId, stage, progress, fileId, status, error, queueJobId, orderId, recType, createdAt){
   try {
     const sh = sheet_(CONFIG.UPLOAD_LOG_SHEET);
     const v = sh.getDataRange().getValues();
@@ -1648,6 +1648,7 @@ function updateUploadLog_(uploadId, stage, progress, fileId, status, error, queu
     const normJobId = normalize_(queueJobId);
     const normOrderId = normalizeOrderId_(orderId);
     const normType = normalize_(recType);
+    const fallbackDate = createdAt ? new Date(Number(createdAt)) : null;
 
     for (let i = v.length - 1; i >= 1; i--) {
       const rUploadId = normalize_(v[i][6]);
@@ -1661,7 +1662,9 @@ function updateUploadLog_(uploadId, stage, progress, fileId, status, error, queu
       else if (normOrderId && rOrderId === normOrderId && (!normType || rType === normType)) match = true;
 
       if (match) {
-        sh.getRange(i + 1, 1).setValue(new Date());
+        const existingTs = v[i][0];
+        const keepTs = (existingTs instanceof Date && !isNaN(existingTs.getTime())) ? existingTs : (fallbackDate || (existingTs ? new Date(existingTs) : new Date()));
+        sh.getRange(i + 1, 1).setValue(keepTs);
         sh.getRange(i + 1, 8, 1, 5).setValues([[stage || 'Uploaded to Google Drive', progress !== undefined ? progress : 100, fileId || '', status || 'Completed', error || '']]);
         SpreadsheetApp.flush();
         return;
@@ -1903,6 +1906,7 @@ function startUpload_(p){
       if (reservation) setReservationUpload_(reservation.key, uploadId);
 
       // Reuse existing unfinished or failed row if present, otherwise log new
+      const originalDate = p.createdAt ? new Date(Number(p.createdAt)) : new Date();
       const uploadSh = sheet_(CONFIG.UPLOAD_LOG_SHEET);
       const uploadData = uploadSh.getDataRange().getValues();
       let updatedExisting = false;
@@ -1914,8 +1918,10 @@ function startUpload_(p){
         const displaySize = formatFileSize_(size);
         if (normalize_(rOrder) === normalize_(order) && normalize_(rPlatform) === normalize_(platform) && normalize_(rType) === normalize_(type)) {
           if (rStatus === 'started' || rStatus === 'pending' || rStatus === 'in progress' || rStatus === 'failed' || rStatus.indexOf('fail') !== -1 || rStatus.indexOf('interrupt') !== -1 || rStatus.indexOf('stale') !== -1 || rStatus.indexOf('expired') !== -1) {
+            const existingTs = uploadData[i][0];
+            const rowTs = (existingTs instanceof Date && !isNaN(existingTs.getTime())) ? existingTs : originalDate;
             uploadSh.getRange(i + 1, 1, 1, 15).setValues([[
-              new Date(), order, platform, user.email, name, displaySize, uploadId, 'Session Created', 0, '', 'Started', '', type, source, queueJobId
+              rowTs, order, platform, user.email, name, displaySize, uploadId, 'Session Created', 0, '', 'Started', '', type, source, queueJobId
             ]]);
             updatedExisting = true;
             break;
@@ -1923,7 +1929,7 @@ function startUpload_(p){
         }
       }
       if (!updatedExisting) {
-        logUpload_([new Date(), order, platform, user.email, name, formatFileSize_(size), uploadId, 'Session Created', 0, '', 'Started', '', type, source, queueJobId]);
+        logUpload_([originalDate, order, platform, user.email, name, formatFileSize_(size), uploadId, 'Session Created', 0, '', 'Started', '', type, source, queueJobId]);
       }
 
       return {
@@ -2255,7 +2261,7 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
         ]);
       } catch(_) {}
     }
-    updateUploadLog_(uploadId, 'Uploaded to Google Drive', 100, fid, 'Completed', '', s.queueJobId, s.order, s.type);
+    updateUploadLog_(uploadId, 'Uploaded to Google Drive', 100, fid, 'Completed', '', s.queueJobId, s.order, s.type, s.createdAt);
     if(s.reservationKey) releaseReservation_(s.reservationKey);
     releaseReservation_(reservationKey_(s.order, s.platform, s.type));
     cleanupOldStartedUploads_(s.order, uploadId);

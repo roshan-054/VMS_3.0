@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { AnalyticsData, DailyMetricItem, VideoRecord } from '../types';
 import { requestApi } from '../lib/api';
+import { getStoredManifests, getStoredGtinCatalog, enrichManifestItems } from '../lib/manifestStorage';
 
 interface AnalyticsProps {
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
@@ -413,6 +414,142 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const [activeChartMode, setActiveChartMode] = useState<'total' | 'forward' | 'return'>('total');
 
+  // Advanced Intelligence State & Memos
+  const [activeTab, setActiveTab] = useState<'overview' | 'intelligence'>('overview');
+  const [skuSearchQuery, setSkuSearchQuery] = useState('');
+  const [skuSortMode, setSkuSortMode] = useState<'volume-desc' | 'name-asc'>('volume-desc');
+
+  const storedManifests = useMemo(() => getStoredManifests(), [data]);
+  const gtinCatalog = useMemo(() => getStoredGtinCatalog(), [data]);
+
+  const filteredManifests = useMemo(() => {
+    return storedManifests.filter((m) => {
+      const dateStr = (m.processedAt || m.packedAt || '').substring(0, 10);
+      if (dateStr && (dateStr < fromDate || dateStr > toDate)) return false;
+      if (platformFilter !== 'all' && m.platform?.toLowerCase() !== platformFilter.toLowerCase()) return false;
+      return true;
+    });
+  }, [storedManifests, fromDate, toDate, platformFilter]);
+
+  // 2. SKU Packed vs Processed with Image
+  const skuIntelligenceData = useMemo(() => {
+    const map = new Map<string, {
+      sku: string;
+      productName: string;
+      imageUrl: string;
+      gtin: string;
+      packedQty: number;
+      processedQty: number;
+    }>();
+
+    filteredManifests.forEach((m) => {
+      const isProcessed = m.status === 'Packed' || Boolean(m.processedAt) || Boolean(m.videoDriveUrl);
+      const isPacked = Boolean(m.packedAt) || isProcessed;
+
+      const items = enrichManifestItems(m.items || []);
+      items.forEach((it) => {
+        const k = (it.sku || it.productName || it.gtin || 'UNKNOWN').trim().toUpperCase();
+        if (!k) return;
+        const catalogMatch = gtinCatalog.find(
+          (p) => p.sku.toUpperCase() === k || p.productName.toUpperCase() === k || p.gtin === it.gtin
+        );
+        const name = it.productName || catalogMatch?.productName || it.sku || 'Product';
+        const skuCode = it.sku || catalogMatch?.sku || k;
+        const img = it.imageUrl || catalogMatch?.imageUrl || '';
+        const gtinCode = it.gtin || catalogMatch?.gtin || '';
+        const qty = Number(it.quantity || 1);
+
+        if (!map.has(k)) {
+          map.set(k, { sku: skuCode, productName: name, imageUrl: img, gtin: gtinCode, packedQty: 0, processedQty: 0 });
+        }
+        const entry = map.get(k)!;
+        if (isPacked) entry.packedQty += qty;
+        if (isProcessed) entry.processedQty += qty;
+      });
+    });
+
+    let list = Array.from(map.values());
+    if (skuSearchQuery.trim()) {
+      const q = skuSearchQuery.toLowerCase().trim();
+      list = list.filter(
+        (x) =>
+          x.sku.toLowerCase().includes(q) ||
+          x.productName.toLowerCase().includes(q) ||
+          x.gtin.toLowerCase().includes(q)
+      );
+    }
+
+    list.sort((a, b) => {
+      if (skuSortMode === 'name-asc') return a.productName.localeCompare(b.productName);
+      return b.packedQty - a.packedQty;
+    });
+
+    return list;
+  }, [filteredManifests, gtinCatalog, skuSearchQuery, skuSortMode]);
+
+  // 3. Single vs Multi-Order Packed & Processed (with Platform breakdown)
+  const orderTypeBreakdown = useMemo(() => {
+    const res: Record<string, { packedSingle: number; packedMulti: number; processedSingle: number; processedMulti: number }> = {
+      Amazon: { packedSingle: 0, packedMulti: 0, processedSingle: 0, processedMulti: 0 },
+      D2C: { packedSingle: 0, packedMulti: 0, processedSingle: 0, processedMulti: 0 },
+      JioMart: { packedSingle: 0, packedMulti: 0, processedSingle: 0, processedMulti: 0 },
+      Custom: { packedSingle: 0, packedMulti: 0, processedSingle: 0, processedMulti: 0 },
+    };
+
+    filteredManifests.forEach((m) => {
+      const pf = (m.platform || 'Custom') as keyof typeof res;
+      if (!res[pf]) res[pf] = { packedSingle: 0, packedMulti: 0, processedSingle: 0, processedMulti: 0 };
+
+      const totalQty = (m.items || []).reduce((acc, it) => acc + Number(it.quantity || 1), 0);
+      const isMulti = totalQty > 1 || (m.items || []).length > 1;
+
+      const isProcessed = m.status === 'Packed' || Boolean(m.processedAt) || Boolean(m.videoDriveUrl);
+      const isPacked = Boolean(m.packedAt) || isProcessed;
+
+      if (isPacked) {
+        if (isMulti) res[pf].packedMulti += 1;
+        else res[pf].packedSingle += 1;
+      }
+      if (isProcessed) {
+        if (isMulti) res[pf].processedMulti += 1;
+        else res[pf].processedSingle += 1;
+      }
+    });
+
+    return res;
+  }, [filteredManifests]);
+
+  // 4. Order Volume with Top SKU Overall and with Date Range
+  const topSkusVolume = useMemo(() => {
+    const map = new Map<string, { sku: string; name: string; image: string; volume: number; rangeVolume: number }>();
+    storedManifests.forEach((m) => {
+      const items = enrichManifestItems(m.items || []);
+      const dateStr = (m.processedAt || m.packedAt || '').substring(0, 10);
+      const inRange = !dateStr || (dateStr >= fromDate && dateStr <= toDate);
+
+      items.forEach((it) => {
+        const k = (it.sku || it.productName || 'UNKNOWN').trim().toUpperCase();
+        if (!k) return;
+        const catalogMatch = gtinCatalog.find((p) => p.sku.toUpperCase() === k || p.productName.toUpperCase() === k);
+        const img = it.imageUrl || catalogMatch?.imageUrl || '';
+        const name = it.productName || catalogMatch?.productName || it.sku || 'Product';
+        const skuCode = it.sku || catalogMatch?.sku || k;
+        const qty = Number(it.quantity || 1);
+
+        if (!map.has(k)) {
+          map.set(k, { sku: skuCode, name, image: img, volume: 0, rangeVolume: 0 });
+        }
+        const entry = map.get(k)!;
+        entry.volume += qty;
+        if (inRange) {
+          entry.rangeVolume += qty;
+        }
+      });
+    });
+
+    return Array.from(map.values()).sort((a, b) => b.rangeVolume - a.rangeVolume);
+  }, [storedManifests, gtinCatalog, fromDate, toDate]);
+
   const handlePresetSelect = (preset: typeof timePreset) => {
     setTimePreset(preset);
     const todayStr = getLocalDateStr(0);
@@ -618,6 +755,21 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
       };
     });
   }, [data, fromDate, toDate]);
+
+  // 1. Daily order process count with platform
+  const dailyPlatformMetrics = useMemo(() => {
+    return dailyList.map((d) => {
+      const pf = d.platforms || {};
+      return {
+        date: d.date,
+        total: d.total,
+        Amazon: pf.Amazon || pf.amazon || 0,
+        D2C: pf.D2C || pf.d2c || 0,
+        JioMart: pf.JioMart || pf.jiomart || 0,
+        Custom: pf.Custom || pf.custom || 0,
+      };
+    });
+  }, [dailyList]);
 
   // Daily shift timing metrics & summary stats
   const shiftMetrics = useMemo(() => {
@@ -909,7 +1061,268 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
         </div>
       </div>
 
-      {/* Dynamic Interactive Filter Toolbar with Custom Date Range */}
+      {/* Analytics Navigation Tabs */}
+      <div className="flex items-center gap-2 border-b border-slate-200 pb-3">
+        <button
+          onClick={() => setActiveTab('overview')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer ${
+            activeTab === 'overview'
+              ? 'bg-blue-600 text-white shadow-xs'
+              : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+          }`}
+        >
+          <LineChartIcon className="w-4 h-4" />
+          Overview Dashboard & Leaderboards
+        </button>
+        <button
+          onClick={() => setActiveTab('intelligence')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer ${
+            activeTab === 'intelligence'
+              ? 'bg-indigo-600 text-white shadow-xs'
+              : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+          }`}
+        >
+          <Sparkles className="w-4 h-4" />
+          Advanced Order & SKU Intelligence
+        </button>
+      </div>
+
+      {activeTab === 'intelligence' ? (
+        <div className="space-y-6">
+          {/* 1. Daily Order Process Count with Platform */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <CalendarDays className="w-4 h-4 text-blue-600" />
+                  Daily Order Process Count with Platform Breakdown
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Daily volume distribution across Amazon, D2C, JioMart, and Custom platforms for {fromDate} to {toDate}.
+                </p>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-500 uppercase">
+                    <th className="py-2.5 px-3">Date</th>
+                    <th className="py-2.5 px-3 text-right text-blue-700">Amazon</th>
+                    <th className="py-2.5 px-3 text-right text-purple-700">D2C</th>
+                    <th className="py-2.5 px-3 text-right text-emerald-700">JioMart</th>
+                    <th className="py-2.5 px-3 text-right text-amber-700">Custom</th>
+                    <th className="py-2.5 px-3 text-right font-extrabold text-slate-900">Total Orders</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-xs">
+                  {dailyPlatformMetrics.map((row) => (
+                    <tr key={row.date} className="hover:bg-slate-50 transition">
+                      <td className="py-2.5 px-3 font-mono font-bold text-slate-800">{formatDDMMYYYY(row.date)}</td>
+                      <td className="py-2.5 px-3 text-right font-mono text-blue-600 font-semibold">{row.Amazon}</td>
+                      <td className="py-2.5 px-3 text-right font-mono text-purple-600 font-semibold">{row.D2C}</td>
+                      <td className="py-2.5 px-3 text-right font-mono text-emerald-600 font-semibold">{row.JioMart}</td>
+                      <td className="py-2.5 px-3 text-right font-mono text-amber-600 font-semibold">{row.Custom}</td>
+                      <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900">{row.total}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* 2. SKU Packed in a Day vs Processed (with Image) */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <Package className="w-4 h-4 text-indigo-600" />
+                  SKU Intelligence: Packed vs Processed
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Compare packed quantities vs successfully processed & uploaded quantities per SKU.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={skuSearchQuery}
+                    onChange={(e) => setSkuSearchQuery(e.target.value)}
+                    placeholder="Search SKU or product name…"
+                    className="pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs w-48 sm:w-60 focus:bg-white focus:outline-none"
+                  />
+                </div>
+                <select
+                  value={skuSortMode}
+                  onChange={(e) => setSkuSortMode(e.target.value as any)}
+                  className="px-2 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700"
+                >
+                  <option value="volume-desc">Sort by Highest Volume</option>
+                  <option value="name-asc">Sort by Product Name</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="sticky top-0 bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase">
+                    <th className="py-2.5 px-3">Product / SKU</th>
+                    <th className="py-2.5 px-3">GTIN / Barcode</th>
+                    <th className="py-2.5 px-3 text-right font-bold text-indigo-700">Packed Qty</th>
+                    <th className="py-2.5 px-3 text-right font-bold text-emerald-700">Processed Qty</th>
+                    <th className="py-2.5 px-3 text-right">Variance</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-xs">
+                  {skuIntelligenceData.length > 0 ? (
+                    skuIntelligenceData.map((item, idx) => {
+                      const diff = item.packedQty - item.processedQty;
+                      return (
+                        <tr key={idx} className="hover:bg-slate-50 transition">
+                          <td className="py-3 px-3">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center shrink-0 overflow-hidden">
+                                {item.imageUrl ? (
+                                  <img src={item.imageUrl} alt={item.productName} className="w-full h-full object-cover" />
+                                ) : (
+                                  <Package className="w-5 h-5 text-slate-400" />
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="font-bold text-slate-900 truncate max-w-xs">{item.productName}</div>
+                                <div className="text-[11px] font-mono text-slate-500 truncate">SKU: {item.sku}</div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="py-3 px-3 font-mono text-slate-600">{item.gtin || '—'}</td>
+                          <td className="py-3 px-3 text-right font-mono font-bold text-indigo-700 text-sm">{item.packedQty}</td>
+                          <td className="py-3 px-3 text-right font-mono font-bold text-emerald-700 text-sm">{item.processedQty}</td>
+                          <td className="py-3 px-3 text-right font-mono">
+                            {diff === 0 ? (
+                              <span className="text-emerald-600 font-medium">Synced (0)</span>
+                            ) : (
+                              <span className="text-amber-600 font-bold">+{diff} pending</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  ) : (
+                    <tr>
+                      <td colSpan={5} className="py-8 text-center text-slate-400 text-xs">
+                        No SKU packing/processing records found for this date range.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* 3. Single vs Multi-Order Packed & Processed with Platform breakdown */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <Layers className="w-4 h-4 text-purple-600" />
+                  Single vs Multi-Order Packed & Processed (Platform Breakdown)
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Breakdown of single-item vs multi-item orders packed and successfully processed across platforms.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {(Object.entries(orderTypeBreakdown) as [string, { packedSingle: number; packedMulti: number; processedSingle: number; processedMulti: number }][]).map(([pf, stats]) => (
+                <div key={pf} className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-extrabold text-slate-800 uppercase tracking-wide">{pf}</span>
+                    <span className="text-[10px] font-bold bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full">
+                      {stats.packedSingle + stats.packedMulti} Total
+                    </span>
+                  </div>
+
+                  <div className="space-y-2 pt-1 text-xs">
+                    <div className="bg-white p-2 rounded-lg border border-slate-200/80 space-y-1">
+                      <div className="flex justify-between font-bold text-slate-700">
+                        <span>Single Orders:</span>
+                        <span className="font-mono text-blue-600">{stats.packedSingle} packed</span>
+                      </div>
+                      <div className="flex justify-between text-[11px] text-slate-500 font-medium">
+                        <span>Processed:</span>
+                        <span className="font-mono text-emerald-600">{stats.processedSingle}</span>
+                      </div>
+                    </div>
+
+                    <div className="bg-white p-2 rounded-lg border border-slate-200/80 space-y-1">
+                      <div className="flex justify-between font-bold text-slate-700">
+                        <span>Multi Orders:</span>
+                        <span className="font-mono text-purple-600">{stats.packedMulti} packed</span>
+                      </div>
+                      <div className="flex justify-between text-[11px] text-slate-500 font-medium">
+                        <span>Processed:</span>
+                        <span className="font-mono text-emerald-600">{stats.processedMulti}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 4. Order Volume with Top SKU Overall and with Date Range */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <Award className="w-4 h-4 text-amber-600" />
+                  Top SKUs & Order Volume (Overall vs Date Range)
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Ranking top performing SKUs by total volume ordered and packed.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {topSkusVolume.slice(0, 10).map((sku, idx) => (
+                <div key={idx} className="flex items-center justify-between p-3 rounded-xl border border-slate-200 bg-slate-50/60">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-800 font-bold text-xs flex items-center justify-center shrink-0 border border-amber-300">
+                      #{idx + 1}
+                    </div>
+                    <div className="w-10 h-10 rounded-lg bg-white border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center">
+                      {sku.image ? (
+                        <img src={sku.image} alt={sku.name} className="w-full h-full object-cover" />
+                      ) : (
+                        <Package className="w-4 h-4 text-slate-400" />
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold text-slate-900 truncate">{sku.name}</div>
+                      <div className="text-[11px] font-mono text-slate-500 truncate">SKU: {sku.sku}</div>
+                    </div>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <div className="text-xs font-bold text-indigo-600 font-mono">
+                      {sku.rangeVolume} units <span className="text-[10px] text-slate-400">(in range)</span>
+                    </div>
+                    <div className="text-[11px] text-slate-500 font-mono">
+                      {sku.volume} units overall
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-6">
       <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
         {/* Row 1: Time Presets */}
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1864,6 +2277,8 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
           </table>
         </div>
       </div>
+    </div>
+      )}
     </div>
   );
 };
