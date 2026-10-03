@@ -23,7 +23,9 @@ import {
   Search,
   ArrowUpDown,
   CheckCircle,
-  FileSpreadsheet
+  FileSpreadsheet,
+  X,
+  Tag
 } from 'lucide-react';
 import { AnalyticsData, DailyMetricItem, VideoRecord } from '../types';
 import { requestApi } from '../lib/api';
@@ -418,6 +420,17 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'intelligence'>('overview');
   const [skuSearchQuery, setSkuSearchQuery] = useState('');
   const [skuSortMode, setSkuSortMode] = useState<'volume-desc' | 'name-asc'>('volume-desc');
+  const [topSkuSearch, setTopSkuSearch] = useState('');
+  const [topSkuLimit, setTopSkuLimit] = useState<number | 'ALL'>(10);
+  const [selectedSkuDetail, setSelectedSkuDetail] = useState<{
+    sku: string;
+    name: string;
+    image: string;
+    volume: number;
+    rangeVolume: number;
+    platforms: Record<string, { overall: number; inRange: number; ordersCount: number }>;
+    orders: Array<{ orderId: string; platform: string; qty: number; status: string; date: string; packer: string }>;
+  } | null>(null);
 
   const storedManifests = useMemo(() => getStoredManifests(), [data]);
   const gtinCatalog = useMemo(() => getStoredGtinCatalog(), [data]);
@@ -521,11 +534,21 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
 
   // 4. Order Volume with Top SKU Overall and with Date Range
   const topSkusVolume = useMemo(() => {
-    const map = new Map<string, { sku: string; name: string; image: string; volume: number; rangeVolume: number }>();
+    const map = new Map<string, {
+      sku: string;
+      name: string;
+      image: string;
+      volume: number;
+      rangeVolume: number;
+      platforms: Record<string, { overall: number; inRange: number; ordersCount: number }>;
+      orders: Array<{ orderId: string; platform: string; qty: number; status: string; date: string; packer: string }>;
+    }>();
+
     storedManifests.forEach((m) => {
       const items = enrichManifestItems(m.items || []);
       const dateStr = (m.processedAt || m.packedAt || '').substring(0, 10);
       const inRange = !dateStr || (dateStr >= fromDate && dateStr <= toDate);
+      const pf = m.platform || 'Custom';
 
       items.forEach((it) => {
         const k = (it.sku || it.productName || 'UNKNOWN').trim().toUpperCase();
@@ -537,13 +560,44 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
         const qty = Number(it.quantity || 1);
 
         if (!map.has(k)) {
-          map.set(k, { sku: skuCode, name, image: img, volume: 0, rangeVolume: 0 });
+          map.set(k, {
+            sku: skuCode,
+            name,
+            image: img,
+            volume: 0,
+            rangeVolume: 0,
+            platforms: {
+              Amazon: { overall: 0, inRange: 0, ordersCount: 0 },
+              D2C: { overall: 0, inRange: 0, ordersCount: 0 },
+              JioMart: { overall: 0, inRange: 0, ordersCount: 0 },
+              Custom: { overall: 0, inRange: 0, ordersCount: 0 },
+            },
+            orders: [],
+          });
         }
         const entry = map.get(k)!;
         entry.volume += qty;
         if (inRange) {
           entry.rangeVolume += qty;
         }
+
+        if (!entry.platforms[pf]) {
+          entry.platforms[pf] = { overall: 0, inRange: 0, ordersCount: 0 };
+        }
+        entry.platforms[pf].overall += qty;
+        if (inRange) {
+          entry.platforms[pf].inRange += qty;
+          entry.platforms[pf].ordersCount += 1;
+        }
+
+        entry.orders.push({
+          orderId: m.orderId,
+          platform: pf,
+          qty,
+          status: m.status || 'Pending',
+          date: m.processedAt || m.packedAt || 'N/A',
+          packer: m.assignedPackerName || m.packedByName || 'Unassigned',
+        });
       });
     });
 
@@ -1407,49 +1461,280 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
 
           {/* 4. Order Volume with Top SKU Overall and with Date Range */}
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
               <div>
                 <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                   <Award className="w-4 h-4 text-amber-600" />
-                  Top SKUs & Order Volume (Overall vs Date Range)
+                  Top SKUs &amp; Order Volume (Overall vs Date Range)
                 </h3>
                 <p className="text-[11px] text-slate-500">
-                  Ranking top performing SKUs by total volume ordered and packed.
+                  Click any SKU card to inspect platform breakdown (Amazon, D2C, JioMart, Custom) and order history.
                 </p>
+              </div>
+
+              {/* Controls: Search & Show Limit */}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={topSkuSearch}
+                    onChange={(e) => setTopSkuSearch(e.target.value)}
+                    placeholder="Search SKU or name..."
+                    className="pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:border-indigo-500"
+                  />
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
+
+                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs font-bold text-slate-600">
+                  <span className="px-1 text-[10px] text-slate-400 uppercase font-mono">Show:</span>
+                  {[10, 25, 50, 100, 'ALL'].map((limit) => (
+                    <button
+                      key={String(limit)}
+                      type="button"
+                      onClick={() => setTopSkuLimit(limit as number | 'ALL')}
+                      className={`px-2 py-0.5 rounded-lg text-xs font-mono transition cursor-pointer ${
+                        topSkuLimit === limit
+                          ? 'bg-indigo-600 text-white shadow-xs'
+                          : 'hover:bg-slate-200 text-slate-700'
+                      }`}
+                    >
+                      {limit}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {topSkusVolume.slice(0, 10).map((sku, idx) => (
-                <div key={idx} className="flex items-center justify-between p-3 rounded-xl border border-slate-200 bg-slate-50/60">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-800 font-bold text-xs flex items-center justify-center shrink-0 border border-amber-300">
-                      #{idx + 1}
-                    </div>
-                    <div className="w-10 h-10 rounded-lg bg-white border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center">
-                      {sku.image ? (
-                        <img src={sku.image} alt={sku.name} className="w-full h-full object-cover" />
-                      ) : (
-                        <Package className="w-4 h-4 text-slate-400" />
-                      )}
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-xs font-bold text-slate-900 truncate">{sku.name}</div>
-                      <div className="text-[11px] font-mono text-slate-500 truncate">SKU: {sku.sku}</div>
-                    </div>
+            {(() => {
+              const filteredSkus = topSkusVolume.filter(
+                (sku) =>
+                  !topSkuSearch ||
+                  sku.name.toLowerCase().includes(topSkuSearch.toLowerCase()) ||
+                  sku.sku.toLowerCase().includes(topSkuSearch.toLowerCase())
+              );
+              const displayedSkus =
+                topSkuLimit === 'ALL' ? filteredSkus : filteredSkus.slice(0, Number(topSkuLimit));
+
+              if (displayedSkus.length === 0) {
+                return (
+                  <div className="p-8 text-center text-slate-400 text-xs font-medium">
+                    No matching SKUs found. Try adjusting your search query.
                   </div>
-                  <div className="text-right shrink-0">
-                    <div className="text-xs font-bold text-indigo-600 font-mono">
-                      {sku.rangeVolume} units <span className="text-[10px] text-slate-400">(in range)</span>
-                    </div>
-                    <div className="text-[11px] text-slate-500 font-mono">
-                      {sku.volume} units overall
-                    </div>
+                );
+              }
+
+              return (
+                <div className="space-y-2">
+                  <div className="text-[11px] font-mono text-slate-400 text-right">
+                    Showing {displayedSkus.length} of {filteredSkus.length} SKUs (click for platform breakdown)
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {displayedSkus.map((sku, idx) => (
+                      <div
+                        key={sku.sku + idx}
+                        onClick={() => setSelectedSkuDetail(sku)}
+                        className="flex items-center justify-between p-3.5 rounded-2xl border border-slate-200/90 bg-white hover:bg-indigo-50/40 hover:border-indigo-300 transition cursor-pointer group shadow-2xs active:scale-[0.99]"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-800 font-bold font-mono text-xs flex items-center justify-center shrink-0 border border-amber-300 shadow-2xs">
+                            #{idx + 1}
+                          </div>
+                          <div className="w-11 h-11 rounded-xl bg-slate-50 border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center group-hover:border-indigo-300 transition">
+                            {sku.image ? (
+                              <img src={sku.image} alt={sku.name} className="w-full h-full object-cover" />
+                            ) : (
+                              <Package className="w-5 h-5 text-slate-400" />
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-xs font-bold text-slate-900 group-hover:text-indigo-600 transition truncate">
+                              {sku.name}
+                            </div>
+                            <div className="text-[11px] font-mono text-slate-500 truncate flex items-center gap-1.5">
+                              <span>SKU: {sku.sku}</span>
+                              <span className="text-[10px] text-indigo-500 font-bold opacity-0 group-hover:opacity-100 transition">
+                                • View Platforms →
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="text-xs font-bold text-indigo-600 font-mono">
+                            {sku.rangeVolume} units <span className="text-[10px] text-slate-400">(range)</span>
+                          </div>
+                          <div className="text-[11px] text-slate-500 font-mono">
+                            {sku.volume} units overall
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
-              ))}
-            </div>
+              );
+            })()}
           </div>
+
+          {/* Interactive SKU Platform Breakdown Modal */}
+          {selectedSkuDetail && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+              <div className="bg-white rounded-3xl max-w-2xl w-full p-6 space-y-5 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-150 max-h-[90vh] flex flex-col">
+                {/* Modal Header */}
+                <div className="flex items-start justify-between border-b border-slate-100 pb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-14 h-14 rounded-2xl bg-slate-100 border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center">
+                      {selectedSkuDetail.image ? (
+                        <img
+                          src={selectedSkuDetail.image}
+                          alt={selectedSkuDetail.name}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <Package className="w-7 h-7 text-slate-400" />
+                      )}
+                    </div>
+                    <div>
+                      <h3 className="text-base font-black text-slate-900">{selectedSkuDetail.name}</h3>
+                      <p className="text-xs font-mono text-indigo-600 font-bold">
+                        SKU: {selectedSkuDetail.sku}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedSkuDetail(null)}
+                    className="p-1.5 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="overflow-y-auto space-y-5 pr-1">
+                  {/* Summary Cards */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    <div className="p-3 bg-indigo-50/60 border border-indigo-100 rounded-2xl">
+                      <div className="text-[11px] font-bold text-indigo-600">Range Volume</div>
+                      <div className="text-lg font-black font-mono text-indigo-900">
+                        {selectedSkuDetail.rangeVolume} <span className="text-xs font-normal">units</span>
+                      </div>
+                    </div>
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl">
+                      <div className="text-[11px] font-bold text-slate-500">Overall Volume</div>
+                      <div className="text-lg font-black font-mono text-slate-900">
+                        {selectedSkuDetail.volume} <span className="text-xs font-normal">units</span>
+                      </div>
+                    </div>
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl col-span-2 sm:col-span-1">
+                      <div className="text-[11px] font-bold text-slate-500">Associated Orders</div>
+                      <div className="text-lg font-black font-mono text-slate-900">
+                        {selectedSkuDetail.orders.length} <span className="text-xs font-normal">orders</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Platform Breakdown Section */}
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-black uppercase text-slate-700 tracking-wider flex items-center gap-1.5">
+                      <Tag className="w-3.5 h-3.5 text-indigo-600" />
+                      Platform Processing &amp; Quantity Breakdown
+                    </h4>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {['Amazon', 'D2C', 'JioMart', 'Custom'].map((pfKey) => {
+                        const pfData = selectedSkuDetail.platforms[pfKey] || {
+                          overall: 0,
+                          inRange: 0,
+                          ordersCount: 0,
+                        };
+                        const totalRange = selectedSkuDetail.rangeVolume || 1;
+                        const pct = Math.round((pfData.inRange / totalRange) * 100);
+
+                        return (
+                          <div
+                            key={pfKey}
+                            className="p-3.5 bg-slate-50/80 rounded-2xl border border-slate-200/90 space-y-2"
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-black text-slate-800">{pfKey}</span>
+                              <span className="text-xs font-bold font-mono text-indigo-600">
+                                {pfData.inRange} units ({pct}%)
+                              </span>
+                            </div>
+
+                            <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
+                              <div
+                                className="bg-indigo-600 h-full rounded-full transition-all duration-300"
+                                style={{ width: `${Math.min(pct, 100)}%` }}
+                              />
+                            </div>
+
+                            <div className="flex items-center justify-between text-[11px] text-slate-500 font-mono">
+                              <span>{pfData.ordersCount} orders in range</span>
+                              <span>{pfData.overall} units overall</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Recent Orders List */}
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-black uppercase text-slate-700 tracking-wider">
+                      Orders Containing This SKU
+                    </h4>
+                    {selectedSkuDetail.orders.length === 0 ? (
+                      <p className="text-xs text-slate-400 italic">No order records found for this SKU.</p>
+                    ) : (
+                      <div className="border border-slate-200 rounded-2xl overflow-hidden max-h-48 overflow-y-auto">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-slate-100 text-slate-600 font-bold text-[10px] uppercase border-b border-slate-200">
+                            <tr>
+                              <th className="p-2.5">Order ID</th>
+                              <th className="p-2.5">Platform</th>
+                              <th className="p-2.5">Qty</th>
+                              <th className="p-2.5">Status</th>
+                              <th className="p-2.5">Packer</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 font-medium">
+                            {selectedSkuDetail.orders.map((ord, idx) => (
+                              <tr key={ord.orderId + idx} className="hover:bg-slate-50">
+                                <td className="p-2.5 font-mono font-bold text-slate-800">{ord.orderId}</td>
+                                <td className="p-2.5 font-bold text-indigo-600">{ord.platform}</td>
+                                <td className="p-2.5 font-mono font-bold text-slate-900">{ord.qty}</td>
+                                <td className="p-2.5">
+                                  <span
+                                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                      ord.status === 'Packed'
+                                        ? 'bg-emerald-100 text-emerald-800'
+                                        : 'bg-amber-100 text-amber-800'
+                                    }`}
+                                  >
+                                    {ord.status}
+                                  </span>
+                                </td>
+                                <td className="p-2.5 text-slate-600">{ord.packer}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-slate-100 text-right">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedSkuDetail(null)}
+                    className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl cursor-pointer shadow-xs"
+                  >
+                    Close Inspection
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         <div className="space-y-6">

@@ -131,13 +131,16 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   const [isSyncingSheet, setIsSyncingSheet] = useState<boolean>(false);
   const [sheetSyncResult, setSheetSyncResult] = useState<{ success?: boolean; msg?: string } | null>(null);
 
-  // --- Search & Filters for Manifest List ---
+  // --- Search, Filters, Sorting & Pagination for Manifest List ---
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [packerFilter, setPackerFilter] = useState<string>(() =>
     isUserAdmin ? 'ALL' : (currentUser?.email || 'ALL')
   );
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [platformFilter, setPlatformFilter] = useState<string>('ALL');
+  const [manifestSortBy, setManifestSortBy] = useState<'newest' | 'oldest' | 'orderId' | 'orderIdDesc'>('newest');
+  const [itemsPerPage, setItemsPerPage] = useState<number | 'ALL'>(10);
+  const [currentPage, setCurrentPage] = useState<number>(1);
 
   // --- GTIN Catalog Tab States ---
   const [gtinSearchQuery, setGtinSearchQuery] = useState<string>('');
@@ -1126,9 +1129,9 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     });
   }, [manifests, isUserAdmin, currentUser]);
 
-  // Filtered Manifests List
+  // Filtered & Sorted Manifests List (Recent added orders on top by default)
   const filteredManifests = useMemo(() => {
-    return userScopedManifests.filter((m) => {
+    const list = userScopedManifests.filter((m) => {
       const q = searchQuery.trim().toLowerCase();
       const matchSearch =
         !q ||
@@ -1170,7 +1173,42 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
       return matchSearch && matchPacker && matchStatus && matchPlatform;
     });
-  }, [userScopedManifests, searchQuery, packerFilter, statusFilter, platformFilter, isUserAdmin]);
+
+    return list.sort((a, b) => {
+      if (manifestSortBy === 'oldest') {
+        const timeA = new Date(a.processedAt || a.packedAt || 0).getTime();
+        const timeB = new Date(b.processedAt || b.packedAt || 0).getTime();
+        return timeA - timeB;
+      }
+      if (manifestSortBy === 'orderId') {
+        return a.orderId.localeCompare(b.orderId);
+      }
+      if (manifestSortBy === 'orderIdDesc') {
+        return b.orderId.localeCompare(a.orderId);
+      }
+      // Default 'newest': Recent added or packed orders shown on top
+      const timeA = new Date(a.processedAt || a.packedAt || 0).getTime();
+      const timeB = new Date(b.processedAt || b.packedAt || 0).getTime();
+      if (timeA !== timeB) return timeB - timeA;
+      return (b.id || b.orderId).localeCompare(a.id || a.orderId);
+    });
+  }, [userScopedManifests, searchQuery, packerFilter, statusFilter, platformFilter, isUserAdmin, manifestSortBy]);
+
+  // Reset pagination on filter or sorting changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, packerFilter, statusFilter, platformFilter, manifestSortBy, itemsPerPage]);
+
+  const totalPages = useMemo(() => {
+    if (itemsPerPage === 'ALL' || itemsPerPage <= 0) return 1;
+    return Math.ceil(filteredManifests.length / itemsPerPage) || 1;
+  }, [filteredManifests.length, itemsPerPage]);
+
+  const paginatedManifests = useMemo(() => {
+    if (itemsPerPage === 'ALL') return filteredManifests;
+    const start = (currentPage - 1) * itemsPerPage;
+    return filteredManifests.slice(start, start + itemsPerPage);
+  }, [filteredManifests, currentPage, itemsPerPage]);
 
   // Statistics Summary (Accurately Scoped Per User)
   const stats = useMemo(() => {
@@ -1978,6 +2016,21 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                 </div>
               )}
 
+              {/* Sort By Dropdown */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] text-slate-400 font-bold">Sort:</span>
+                <select
+                  value={manifestSortBy}
+                  onChange={(e) => setManifestSortBy(e.target.value as any)}
+                  className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 cursor-pointer focus:outline-none focus:border-indigo-500"
+                >
+                  <option value="newest">Recent Added First</option>
+                  <option value="oldest">Oldest First</option>
+                  <option value="orderId">Order ID (A-Z)</option>
+                  <option value="orderIdDesc">Order ID (Z-A)</option>
+                </select>
+              </div>
+
               {/* Platform Filter */}
               <div className="flex items-center gap-1.5">
                 <span className="text-[11px] text-slate-400 font-bold">Platform:</span>
@@ -1994,7 +2047,27 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                 </select>
               </div>
 
-              {(statusFilter !== 'ALL' || (isUserAdmin && packerFilter !== 'ALL') || platformFilter !== 'ALL' || searchQuery) && (
+              {/* Page Format / Entries Per Page Dropdown */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] text-slate-400 font-bold">Show:</span>
+                <select
+                  value={String(itemsPerPage)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setItemsPerPage(val === 'ALL' ? 'ALL' : Number(val));
+                  }}
+                  className="px-2.5 py-1.5 bg-indigo-50/70 border border-indigo-200 rounded-lg text-xs font-bold text-indigo-800 cursor-pointer focus:outline-none focus:border-indigo-500"
+                >
+                  <option value="10">10 per page</option>
+                  <option value="25">25 per page</option>
+                  <option value="50">50 per page</option>
+                  <option value="100">100 per page</option>
+                  <option value="200">200 per page</option>
+                  <option value="ALL">All entries</option>
+                </select>
+              </div>
+
+              {(statusFilter !== 'ALL' || (isUserAdmin && packerFilter !== 'ALL') || platformFilter !== 'ALL' || searchQuery || manifestSortBy !== 'newest') && (
                 <button
                   type="button"
                   onClick={() => {
@@ -2002,6 +2075,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                     if (isUserAdmin) setPackerFilter('ALL');
                     setPlatformFilter('ALL');
                     setSearchQuery('');
+                    setManifestSortBy('newest');
                   }}
                   className="text-xs text-indigo-600 hover:text-indigo-800 font-bold underline cursor-pointer"
                 >
@@ -2021,8 +2095,9 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
               </p>
             </div>
           ) : (
-            <div className="space-y-3">
-              {filteredManifests.map((m) => {
+            <>
+              <div className="space-y-3">
+              {paginatedManifests.map((m) => {
                 const totalItemsCount = m.items.reduce((s, it) => s + it.quantity, 0);
                 const isPacked = m.status === 'Packed';
 
@@ -2209,6 +2284,69 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                 );
               })}
             </div>
+
+            {/* Pagination Controls Footer */}
+            {itemsPerPage !== 'ALL' && totalPages > 1 ? (
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-t border-slate-100 text-xs">
+                <div className="text-slate-500 font-medium">
+                  Showing <span className="font-bold text-slate-800">{(currentPage - 1) * Number(itemsPerPage) + 1}</span> to{' '}
+                  <span className="font-bold text-slate-800">
+                    {Math.min(currentPage * Number(itemsPerPage), filteredManifests.length)}
+                  </span>{' '}
+                  of <span className="font-bold text-slate-800">{filteredManifests.length}</span> orders
+                </div>
+
+                <div className="flex items-center gap-1.5 self-center sm:self-auto">
+                  <button
+                    type="button"
+                    disabled={currentPage === 1}
+                    onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
+                    className="px-3 py-1.5 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-transparent font-bold cursor-pointer transition"
+                  >
+                    Previous
+                  </button>
+
+                  <div className="flex items-center gap-1 px-1">
+                    {Array.from({ length: totalPages }, (_, i) => i + 1)
+                      .filter((p) => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 2)
+                      .reduce((acc: Array<number | string>, p, idx, arr) => {
+                        if (idx > 0 && typeof arr[idx - 1] === 'number' && (p as number) - (arr[idx - 1] as number) > 1) {
+                          acc.push('...');
+                        }
+                        acc.push(p);
+                        return acc;
+                      }, [])
+                      .map((p, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          disabled={typeof p !== 'number'}
+                          onClick={() => typeof p === 'number' && setCurrentPage(p)}
+                          className={`w-8 h-8 rounded-xl font-mono text-xs font-bold transition cursor-pointer ${
+                            p === currentPage
+                              ? 'bg-indigo-600 text-white shadow-xs'
+                              : typeof p === 'number'
+                              ? 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200'
+                              : 'text-slate-400 cursor-default'
+                          }`}
+                        >
+                          {p}
+                        </button>
+                      ))}
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={currentPage >= totalPages}
+                    onClick={() => setCurrentPage((p) => Math.min(p + 1, totalPages))}
+                    className="px-3 py-1.5 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-transparent font-bold cursor-pointer transition"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </>
           )}
         </div>
       )}
