@@ -404,7 +404,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
   const [loading, setLoading] = useState(false);
 
   // Time & Custom Date Range Filters
-  const [timePreset, setTimePreset] = useState<'today' | 'yesterday' | '7days' | '14days' | '30days' | '90days' | 'custom'>('7days');
+  const [timePreset, setTimePreset] = useState<'today' | 'yesterday' | 'thisWeek' | 'lastWeek' | 'thisMonth' | 'lastMonth' | '7days' | '14days' | '30days' | '90days' | 'custom'>('7days');
   const [fromDate, setFromDate] = useState<string>(() => getLocalDateStr(-7));
   const [toDate, setToDate] = useState<string>(() => getLocalDateStr(0));
 
@@ -552,6 +552,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
 
   const handlePresetSelect = (preset: typeof timePreset) => {
     setTimePreset(preset);
+    const today = new Date();
     const todayStr = getLocalDateStr(0);
 
     if (preset === 'today') {
@@ -561,6 +562,31 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
       const yStr = getLocalDateStr(-1);
       setFromDate(yStr);
       setToDate(yStr);
+    } else if (preset === 'thisWeek') {
+      const d = new Date(today);
+      const day = d.getDay();
+      const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+      const mon = new Date(d.setDate(diff));
+      setFromDate(`${mon.getFullYear()}-${String(mon.getMonth() + 1).padStart(2, '0')}-${String(mon.getDate()).padStart(2, '0')}`);
+      setToDate(todayStr);
+    } else if (preset === 'lastWeek') {
+      const d = new Date(today);
+      const day = d.getDay();
+      const diffToLastSun = d.getDate() - day;
+      const lastSun = new Date(d.setDate(diffToLastSun));
+      const lastMon = new Date(lastSun);
+      lastMon.setDate(lastSun.getDate() - 6);
+      setFromDate(`${lastMon.getFullYear()}-${String(lastMon.getMonth() + 1).padStart(2, '0')}-${String(lastMon.getDate()).padStart(2, '0')}`);
+      setToDate(`${lastSun.getFullYear()}-${String(lastSun.getMonth() + 1).padStart(2, '0')}-${String(lastSun.getDate()).padStart(2, '0')}`);
+    } else if (preset === 'thisMonth') {
+      const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+      setFromDate(`${firstDay.getFullYear()}-${String(firstDay.getMonth() + 1).padStart(2, '0')}-${String(firstDay.getDate()).padStart(2, '0')}`);
+      setToDate(todayStr);
+    } else if (preset === 'lastMonth') {
+      const firstDayLastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      const lastDayLastMonth = new Date(today.getFullYear(), today.getMonth(), 0);
+      setFromDate(`${firstDayLastMonth.getFullYear()}-${String(firstDayLastMonth.getMonth() + 1).padStart(2, '0')}-${String(firstDayLastMonth.getDate()).padStart(2, '0')}`);
+      setToDate(`${lastDayLastMonth.getFullYear()}-${String(lastDayLastMonth.getMonth() + 1).padStart(2, '0')}-${String(lastDayLastMonth.getDate()).padStart(2, '0')}`);
     } else if (preset === '7days') {
       setFromDate(getLocalDateStr(-7));
       setToDate(todayStr);
@@ -1061,6 +1087,110 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
         </div>
       </div>
 
+      {/* Master Advanced Date & Filter Toolbar */}
+      <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+        {/* Row 1: Advanced Time Range Presets */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs font-bold text-slate-700 mr-1 flex items-center gap-1">
+              <Calendar className="w-3.5 h-3.5 text-blue-600" />
+              Advanced Date Filter:
+            </span>
+            {[
+              { id: 'today', label: 'Today' },
+              { id: 'yesterday', label: 'Yesterday' },
+              { id: 'thisWeek', label: 'This Week' },
+              { id: 'lastWeek', label: 'Last Week' },
+              { id: 'thisMonth', label: 'This Month' },
+              { id: 'lastMonth', label: 'Last Month' },
+              { id: '7days', label: 'Last 7 Days' },
+              { id: '14days', label: 'Last 14 Days' },
+              { id: '30days', label: 'Last 30 Days' },
+              { id: '90days', label: 'Last 90 Days' },
+              { id: 'custom', label: 'Custom Range' },
+            ].map((p) => (
+              <button
+                key={p.id}
+                onClick={() => handlePresetSelect(p.id as any)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                  timePreset === p.id
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Platform and Type Selectors */}
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={platformFilter}
+              onChange={(e) => setPlatformFilter(e.target.value)}
+              className="px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 focus:bg-white focus:outline-none cursor-pointer"
+            >
+              <option value="all">All Platforms</option>
+              <option value="Amazon">Amazon</option>
+              <option value="D2C">D2C</option>
+              <option value="JioMart">JioMart</option>
+              <option value="Custom">Custom</option>
+            </select>
+
+            <select
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value)}
+              className="px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 focus:bg-white focus:outline-none cursor-pointer"
+            >
+              <option value="all">All Types</option>
+              <option value="Forward">Forward Only</option>
+              <option value="Return">Return Only</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Row 2: Custom Date Range Inputs */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-100 bg-slate-50/70 p-3 rounded-xl">
+          <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
+            <CalendarDays className="w-4 h-4 text-blue-600" />
+            <span>Active Range: <strong className="text-slate-900 font-mono">{fromDate}</strong> to <strong className="text-slate-900 font-mono">{toDate}</strong></span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2.5 py-1">
+              <span className="text-[11px] font-medium text-slate-400">From:</span>
+              <input
+                type="date"
+                value={fromDate}
+                max={toDate || getLocalDateStr(0)}
+                onChange={(e) => {
+                  setFromDate(e.target.value);
+                  setTimePreset('custom');
+                }}
+                className="text-xs font-semibold text-slate-700 focus:outline-none bg-transparent cursor-pointer"
+              />
+            </div>
+
+            <span className="text-xs text-slate-400 font-bold">→</span>
+
+            <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2.5 py-1">
+              <span className="text-[11px] font-medium text-slate-400">To:</span>
+              <input
+                type="date"
+                value={toDate}
+                min={fromDate}
+                max={getLocalDateStr(0)}
+                onChange={(e) => {
+                  setToDate(e.target.value);
+                  setTimePreset('custom');
+                }}
+                className="text-xs font-semibold text-slate-700 focus:outline-none bg-transparent cursor-pointer"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Analytics Navigation Tabs */}
       <div className="flex items-center gap-2 border-b border-slate-200 pb-3">
         <button
@@ -1323,116 +1453,6 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
         </div>
       ) : (
         <div className="space-y-6">
-      <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-        {/* Row 1: Time Presets */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-xs font-bold text-slate-600 mr-1 flex items-center gap-1">
-              <Calendar className="w-3.5 h-3.5 text-blue-600" />
-              Time Range:
-            </span>
-            {[
-              { id: 'today', label: 'Today' },
-              { id: 'yesterday', label: 'Yesterday' },
-              { id: '7days', label: '7 Days' },
-              { id: '14days', label: '14 Days' },
-              { id: '30days', label: '30 Days' },
-              { id: '90days', label: '90 Days' },
-              { id: 'custom', label: 'Custom Range' },
-            ].map((p) => (
-              <button
-                key={p.id}
-                onClick={() => handlePresetSelect(p.id as any)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
-                  timePreset === p.id
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                }`}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Platform and Type Selectors */}
-          <div className="flex flex-wrap items-center gap-2">
-            <select
-              value={platformFilter}
-              onChange={(e) => setPlatformFilter(e.target.value)}
-              className="px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 focus:bg-white focus:outline-none"
-            >
-              <option value="all">All Platforms</option>
-              <option value="Amazon">Amazon</option>
-              <option value="D2C">D2C</option>
-              <option value="JioMart">JioMart</option>
-              <option value="Custom">Custom</option>
-            </select>
-
-            <select
-              value={typeFilter}
-              onChange={(e) => setTypeFilter(e.target.value)}
-              className="px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 focus:bg-white focus:outline-none"
-            >
-              <option value="all">All Types</option>
-              <option value="Forward">Forward Only</option>
-              <option value="Return">Return Only</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Row 2: Custom Date Range Pickers (Always accessible or prominent when custom selected) */}
-        <div className="flex flex-wrap items-center gap-3 pt-3 border-t border-slate-100 bg-slate-50/70 p-3 rounded-xl">
-          <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
-            <CalendarDays className="w-4 h-4 text-blue-600" />
-            <span>Custom Date Range:</span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2.5 py-1">
-              <span className="text-[11px] font-medium text-slate-400">From:</span>
-              <input
-                type="date"
-                value={fromDate}
-                max={toDate || getLocalDateStr(0)}
-                onChange={(e) => {
-                  setFromDate(e.target.value);
-                  setTimePreset('custom');
-                }}
-                className="text-xs font-semibold text-slate-700 focus:outline-none bg-transparent"
-              />
-            </div>
-
-            <span className="text-xs text-slate-400 font-bold">→</span>
-
-            <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2.5 py-1">
-              <span className="text-[11px] font-medium text-slate-400">To:</span>
-              <input
-                type="date"
-                value={toDate}
-                min={fromDate}
-                max={getLocalDateStr(0)}
-                onChange={(e) => {
-                  setToDate(e.target.value);
-                  setTimePreset('custom');
-                }}
-                className="text-xs font-semibold text-slate-700 focus:outline-none bg-transparent"
-              />
-            </div>
-
-            <button
-              onClick={fetchAnalytics}
-              disabled={loading}
-              className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition cursor-pointer"
-            >
-              Apply Dates
-            </button>
-          </div>
-
-          <span className="text-[11px] text-slate-400 ml-auto hidden md:inline">
-            Active: <strong className="text-slate-600">{formatDDMMYYYY(fromDate)}</strong> to <strong className="text-slate-600">{formatDDMMYYYY(toDate)}</strong> ({dailyList.length} days)
-          </span>
-        </div>
-      </div>
 
       {/* Modern Dynamic KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
