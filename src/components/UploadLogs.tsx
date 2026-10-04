@@ -31,7 +31,8 @@ import {
   Film,
   X,
   Radio,
-  Share2
+  Share2,
+  ShoppingBag
 } from 'lucide-react';
 import { HighQualityVideoPlayer } from './HighQualityVideoPlayer';
 import { User, UploadLogItem, QueueItem, PlatformType, RecordingType } from '../types';
@@ -40,6 +41,7 @@ import { fetchUploadLogs, deleteLogEntry, formatFileSize, fetchDriveFileSize, no
 import { dbGetAllQueue, dbPutQueue, dbDeleteQueueItem, getStoredDriveFolderId, getStoredAutoRefreshInterval, manualFileCache } from '../lib/storage';
 import { canUserDeleteData } from '../lib/permissions';
 import { retryUploadItem, fixAndCleanAllStuckUploads, subscribeWorkerStatus, triggerUploadWorker } from '../lib/uploadWorker';
+import { getStoredManifests, getManifestByOrderId } from '../lib/manifestStorage';
 
 interface UploadLogsProps {
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
@@ -205,6 +207,20 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [showCleanDuplicatesModal, setShowCleanDuplicatesModal] = useState(false);
   const canDelete = currentUser ? canUserDeleteData(currentUser) : true;
+
+  // Lookup associated Manifest & Product Items for Selected Log
+  const selectedLogManifest = useMemo(() => {
+    if (!selectedLog || !selectedLog.orderId) return null;
+    const direct = getManifestByOrderId(selectedLog.orderId);
+    if (direct) return direct;
+    const alpha = selectedLog.orderId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    if (!alpha) return null;
+    return (
+      getStoredManifests().find(
+        (m) => m.orderId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() === alpha
+      ) || null
+    );
+  }, [selectedLog]);
 
   // Auto-resolve live file size from Google Drive if unrecorded or showing —
   useEffect(() => {
@@ -2458,6 +2474,67 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
                     <p className="mt-1 font-mono text-[11px]">{selectedLog.error}</p>
                   </div>
                 )}
+
+                {/* Product Information Section */}
+                <div className="pt-3 border-t border-slate-200/80 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                      <ShoppingBag className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Product Information</span>
+                    </span>
+                    {selectedLogManifest && (
+                      <span className="text-[10px] font-mono font-bold text-indigo-700 bg-indigo-50 border border-indigo-200/80 px-2 py-0.5 rounded-md">
+                        {selectedLogManifest.items.reduce((s, it) => s + (it.quantity || 1), 0)} Total Units ({selectedLogManifest.items.length} {selectedLogManifest.items.length === 1 ? 'SKU' : 'SKUs'})
+                      </span>
+                    )}
+                  </div>
+
+                  {selectedLogManifest && selectedLogManifest.items && selectedLogManifest.items.length > 0 ? (
+                    <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                      {selectedLogManifest.items.map((it, idx) => (
+                        <div
+                          key={it.id || it.sku || idx}
+                          className="bg-slate-50 p-2 rounded-xl border border-slate-200/80 flex items-center justify-between gap-2.5"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                            <div className="w-8 h-8 rounded-lg bg-white border border-slate-200 shrink-0 flex items-center justify-center overflow-hidden">
+                              {it.imageUrl ? (
+                                <img src={it.imageUrl} alt={it.productName} className="w-full h-full object-cover" />
+                              ) : (
+                                <ShoppingBag className="w-3.5 h-3.5 text-slate-400" />
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="text-xs font-bold text-slate-900 truncate" title={it.productName || it.shortName}>
+                                {it.productName || it.shortName}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-mono text-slate-500">
+                                {it.gtin && (
+                                  <span>
+                                    GTIN: <strong className="text-slate-800 font-bold">{it.gtin}</strong>
+                                  </span>
+                                )}
+                                {it.gtin && it.sku && <span>•</span>}
+                                {it.sku && (
+                                  <span>
+                                    SKU: <strong className="text-slate-800 font-bold">{it.sku}</strong>
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                          <span className="px-2 py-0.5 rounded-md text-xs font-mono font-black bg-indigo-100 text-indigo-900 border border-indigo-200 shrink-0">
+                            x{it.quantity || 1}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="p-3 text-center text-xs text-slate-400 font-medium bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                      No pre-entered product manifest recorded for Order #{selectedLog.orderId}.
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Action Buttons */}

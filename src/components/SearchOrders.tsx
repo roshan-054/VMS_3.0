@@ -28,7 +28,8 @@ import {
   Database,
   AlertTriangle,
   Loader2,
-  RotateCw
+  RotateCw,
+  ShoppingBag
 } from 'lucide-react';
 import { HighQualityVideoPlayer } from './HighQualityVideoPlayer';
 import { VideoRecord, User } from '../types';
@@ -36,6 +37,7 @@ import { CleanDuplicatesModal } from './CleanDuplicatesModal';
 import { AiVideoFocusModal } from './AiVideoFocusModal';
 import { requestApi, formatFileSize, deleteLogEntry, fetchDriveFileSize } from '../lib/api';
 import { canUserDeleteData } from '../lib/permissions';
+import { getStoredManifests, getManifestByOrderId } from '../lib/manifestStorage';
 
 interface SearchOrdersProps {
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
@@ -60,6 +62,20 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast, current
   const [aiFocusRecord, setAiFocusRecord] = useState<VideoRecord | null>(null);
   const [isResolvingSize, setIsResolvingSize] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  // Lookup associated Manifest & Product Items for Selected Record
+  const selectedRecordManifest = useMemo(() => {
+    if (!selectedRecord || !selectedRecord.orderId) return null;
+    const direct = getManifestByOrderId(selectedRecord.orderId);
+    if (direct) return direct;
+    const alpha = selectedRecord.orderId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    if (!alpha) return null;
+    return (
+      getStoredManifests().find(
+        (m) => m.orderId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() === alpha
+      ) || null
+    );
+  }, [selectedRecord]);
 
   // Auto-resolve live file size from Google Drive if unrecorded or showing —
   useEffect(() => {
@@ -919,6 +935,69 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast, current
                       </button>
                     )}
                   </div>
+                </div>
+
+                {/* Product Items Information Section */}
+                <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200/80 space-y-2.5">
+                  <div className="flex items-center justify-between border-b border-slate-200/60 pb-2">
+                    <div className="flex items-center gap-2">
+                      <ShoppingBag className="w-4 h-4 text-indigo-600 shrink-0" />
+                      <span className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                        Manifest Product Items Information
+                      </span>
+                    </div>
+                    {selectedRecordManifest && (
+                      <span className="text-[11px] font-mono font-bold text-indigo-700 bg-indigo-50 border border-indigo-200/80 px-2.5 py-0.5 rounded-md">
+                        {selectedRecordManifest.items.reduce((s, it) => s + (it.quantity || 1), 0)} Total Units ({selectedRecordManifest.items.length} {selectedRecordManifest.items.length === 1 ? 'SKU' : 'SKUs'})
+                      </span>
+                    )}
+                  </div>
+
+                  {selectedRecordManifest && selectedRecordManifest.items && selectedRecordManifest.items.length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-1">
+                      {selectedRecordManifest.items.map((it, idx) => (
+                        <div
+                          key={it.id || it.sku || idx}
+                          className="bg-white p-2.5 rounded-xl border border-slate-200 shadow-2xs flex items-center justify-between gap-2.5"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                            <div className="w-9 h-9 rounded-lg bg-slate-100 border border-slate-200 shrink-0 flex items-center justify-center overflow-hidden">
+                              {it.imageUrl ? (
+                                <img src={it.imageUrl} alt={it.productName} className="w-full h-full object-cover" />
+                              ) : (
+                                <ShoppingBag className="w-4 h-4 text-slate-400" />
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="text-xs font-bold text-slate-900 truncate" title={it.productName || it.shortName}>
+                                {it.productName || it.shortName}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2 text-[10px] font-mono text-slate-500 mt-0.5">
+                                {it.gtin && (
+                                  <span className="truncate">
+                                    GTIN: <strong className="text-slate-800 font-bold">{it.gtin}</strong>
+                                  </span>
+                                )}
+                                {it.gtin && it.sku && <span className="text-slate-300">•</span>}
+                                {it.sku && (
+                                  <span className="truncate">
+                                    SKU: <strong className="text-slate-800 font-bold">{it.sku}</strong>
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                          <span className="px-2 py-0.5 rounded-md text-xs font-mono font-black bg-indigo-50 text-indigo-900 border border-indigo-200 shrink-0">
+                            x{it.quantity || 1}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="p-3 text-center text-xs text-slate-400 font-medium bg-white rounded-xl border border-dashed border-slate-200">
+                      No pre-entered manifest product items recorded for Order #{selectedRecord.orderId}.
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
