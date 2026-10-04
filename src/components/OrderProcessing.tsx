@@ -141,6 +141,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   const [manifestSortBy, setManifestSortBy] = useState<'newest' | 'oldest' | 'orderId' | 'orderIdDesc'>('newest');
   const [itemsPerPage, setItemsPerPage] = useState<number | 'ALL'>(10);
   const [currentPage, setCurrentPage] = useState<number>(1);
+  const [selectedPreviewImage, setSelectedPreviewImage] = useState<string | null>(null);
 
   // --- GTIN Catalog Tab States ---
   const [gtinSearchQuery, setGtinSearchQuery] = useState<string>('');
@@ -732,6 +733,19 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     setIsEditManifestModalOpen(false);
     setEditingManifest(null);
     onShowToast(`Manifest Order ${updated.orderId} updated & synced to Google Sheet!`, 'success');
+  };
+
+  const handleQuickUpdateItemQty = async (m: OrderManifest, sku: string, delta: number) => {
+    const updatedItems = m.items.map((it) => {
+      if ((it.sku && it.sku === sku) || (it.id && it.id === sku)) {
+        const newQty = Math.max(1, it.quantity + delta);
+        return { ...it, quantity: newQty };
+      }
+      return it;
+    });
+    const updated: OrderManifest = { ...m, items: updatedItems };
+    await saveOrderManifest(updated);
+    setManifests(getStoredManifests());
   };
 
   const handleAddEditManifestItem = () => {
@@ -2104,173 +2118,243 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                 return (
                   <div
                     key={m.id || m.orderId}
-                    className={`border rounded-2xl p-3.5 transition space-y-2.5 ${
+                    className={`border rounded-2xl p-3 sm:p-3.5 transition-all duration-200 space-y-2.5 hover:shadow-md ${
                       isPacked
-                        ? 'bg-emerald-50/20 border-emerald-200/80 hover:border-emerald-300'
-                        : 'bg-white border-slate-200 hover:border-slate-300 shadow-2xs'
+                        ? 'bg-emerald-50/20 border-emerald-200/90 border-l-4 border-l-emerald-500'
+                        : 'bg-white border-slate-200 hover:border-slate-300 border-l-4 border-l-amber-500 shadow-2xs'
                     }`}
                   >
                     {/* Header Row: Order ID, Badges, Metadata & Actions */}
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border-b border-slate-100 pb-2.5">
+                      {/* Left: Order Info & Badges */}
                       <div className="flex flex-wrap items-center gap-2 min-w-0">
-                        <span className="text-sm font-mono font-black text-slate-900 tracking-wide flex items-center gap-1.5">
+                        <span className="text-sm font-mono font-black text-slate-900 tracking-wide flex items-center gap-1.5 bg-slate-100/80 px-2 py-0.5 rounded-lg border border-slate-200/60">
                           <span>{m.orderId}</span>
                           <button
                             type="button"
                             onClick={() => handleCopyText(m.orderId, 'Order ID')}
-                            className="p-1 text-slate-400 hover:text-indigo-600 rounded-lg bg-slate-100/80 hover:bg-indigo-50 transition cursor-pointer"
+                            className="p-0.5 text-slate-400 hover:text-indigo-600 rounded transition cursor-pointer"
                             title="Copy Order ID"
                           >
                             <Copy className="w-3 h-3" />
                           </button>
                         </span>
 
-                        <span className="px-2 py-0.5 rounded-md text-[10px] font-bold uppercase bg-slate-100 text-slate-700 border border-slate-200">
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase bg-slate-100 text-slate-700 border border-slate-200">
                           {m.platform}
                         </span>
 
                         <span
-                          className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase ${
+                          className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase flex items-center gap-1 ${
                             isPacked
                               ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                               : 'bg-amber-100 text-amber-800 border border-amber-300'
                           }`}
                         >
-                          {m.status}
+                          {isPacked ? <CheckCircle2 className="w-3 h-3 text-emerald-600" /> : <Clock className="w-3 h-3 text-amber-600" />}
+                          <span>{m.status}</span>
                         </span>
 
                         {/* Inline Assigned Packer & Processed Info */}
-                        <div className="hidden sm:flex items-center gap-2 text-[11px] text-slate-500 border-l border-slate-200 pl-2 ml-1">
-                          <span className="flex items-center gap-1 font-bold text-slate-700">
-                            <UserCheck className="w-3.5 h-3.5 text-indigo-600" />
-                            <span>{m.assignedPackerName || 'Unassigned'}</span>
+                        <div className="hidden md:flex items-center gap-1.5 text-[11px] border-l border-slate-200/80 pl-2 ml-1">
+                          {/* Assigned Packer Badge */}
+                          <span className="inline-flex items-center gap-1 bg-indigo-50/90 text-indigo-950 border border-indigo-200/80 px-2 py-0.5 rounded-md font-medium" title="Assigned Packer responsible for packing this order">
+                            <UserCheck className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                            <span className="text-indigo-500 font-bold">Assigned To:</span>
+                            <span className="font-extrabold text-indigo-950">{m.assignedPackerName || 'Unassigned'}</span>
                           </span>
+
+                          {/* Processed / Created By Badge */}
                           {m.processedByName && (
-                            <span className="text-slate-400">
-                              • By <span className="font-semibold text-slate-600">{m.processedByName}</span>
-                              {m.processedAt && ` (${new Date(m.processedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`}
+                            <span className="inline-flex items-center gap-1 bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded-md font-medium" title="Order Entry Operator who created/processed this order">
+                              <span className="text-slate-400 font-bold">Processed By:</span>
+                              <span className="font-bold text-slate-800">{m.processedByName}</span>
+                              {m.processedAt && (
+                                <span className="text-slate-400 text-[10px] font-mono">
+                                  ({new Date(m.processedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
+                                </span>
+                              )}
                             </span>
                           )}
                         </div>
                       </div>
 
                       {/* Right Side: Total Items Badge & Action Buttons */}
-                      <div className="flex items-center gap-2 shrink-0 ml-auto sm:ml-0">
-                        <span className="text-[11px] font-mono font-bold text-indigo-700 bg-indigo-50/80 border border-indigo-200/80 px-2.5 py-1 rounded-lg">
+                      <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0">
+                        <span className="text-[11px] font-mono font-bold text-indigo-700 bg-indigo-50/90 border border-indigo-200/80 px-2.5 py-1 rounded-lg">
                           {totalItemsCount} {totalItemsCount === 1 ? 'Item' : 'Items'} ({m.items.length} {m.items.length === 1 ? 'SKU' : 'SKUs'})
                         </span>
 
-                        {/* Start Packing / Verification Button */}
-                        {!isPacked ? (
-                          <button
-                            type="button"
-                            onClick={() => onStartPackingOrder && onStartPackingOrder(m.orderId, m)}
-                            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer shadow-emerald-600/20"
-                            title="Start packing this order & verify barcodes via live camera"
-                          >
-                            <Boxes className="w-3.5 h-3.5" />
-                            <span>Start Packing</span>
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => onStartPackingOrder && onStartPackingOrder(m.orderId, m)}
-                            className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer"
-                            title="Re-verify or re-record packing"
-                          >
-                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                            <span>Re-verify</span>
-                          </button>
-                        )}
+                        <div className="flex items-center gap-1.5">
+                          {/* Start Packing / Verification Button */}
+                          {!isPacked ? (
+                            <button
+                              type="button"
+                              onClick={() => onStartPackingOrder && onStartPackingOrder(m.orderId, m)}
+                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer shadow-emerald-600/20"
+                              title="Start packing this order & verify barcodes via live camera"
+                            >
+                              <Boxes className="w-3.5 h-3.5" />
+                              <span>Start Packing</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => onStartPackingOrder && onStartPackingOrder(m.orderId, m)}
+                              className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer"
+                              title="Re-verify or re-record packing"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>Re-verify</span>
+                            </button>
+                          )}
 
-                        {isUserAdmin && (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => handleStartEditManifest(m)}
-                              className="px-2 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs rounded-xl border border-indigo-200 transition flex items-center gap-1 cursor-pointer shadow-2xs"
-                              title="Edit manifest order, items, or assigned packer"
-                            >
-                              <Edit2 className="w-3.5 h-3.5" />
-                              <span>Edit</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteManifest(m.id, m.orderId)}
-                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
-                              title="Delete from manifest"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </>
-                        )}
+                          {isUserAdmin && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleStartEditManifest(m)}
+                                className="px-2 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs rounded-xl border border-indigo-200 transition flex items-center gap-1 cursor-pointer shadow-2xs"
+                                title="Edit manifest order"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                                <span className="hidden lg:inline">Edit</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteManifest(m.id, m.orderId)}
+                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                                title="Delete from manifest"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </div>
                     </div>
 
-                    {/* Mobile Only Packer Info */}
-                    <div className="flex sm:hidden items-center justify-between text-[11px] text-slate-500 bg-slate-50 p-1.5 rounded-lg border border-slate-100">
-                      <span className="flex items-center gap-1 font-bold text-slate-700">
-                        <UserCheck className="w-3 h-3 text-indigo-600" />
-                        <span>{m.assignedPackerName || 'Unassigned'}</span>
-                      </span>
+                    {/* Mobile/Tablet Packer Info */}
+                    <div className="flex md:hidden flex-wrap items-center justify-between gap-1.5 text-[11px] bg-slate-50 p-2 rounded-xl border border-slate-200/80">
+                      <div className="flex items-center gap-1 bg-indigo-50/90 text-indigo-950 border border-indigo-200 px-2 py-0.5 rounded-md">
+                        <UserCheck className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                        <span className="text-indigo-500 font-bold">Assigned To:</span>
+                        <span className="font-extrabold text-indigo-950">{m.assignedPackerName || 'Unassigned'}</span>
+                      </div>
+
                       {m.processedByName && (
-                        <span>By {m.processedByName}</span>
+                        <div className="flex items-center gap-1 text-slate-600 bg-white border border-slate-200 px-2 py-0.5 rounded-md">
+                          <span className="text-slate-400 font-bold">Processed By:</span>
+                          <span className="font-bold text-slate-800">{m.processedByName}</span>
+                          {m.processedAt && (
+                            <span className="text-slate-400 text-[10px] font-mono">
+                              ({new Date(m.processedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
+                            </span>
+                          )}
+                        </div>
                       )}
                     </div>
 
-                    {/* Products Grid: Smart Responsive Layout (Single-item orders span full width cleanly) */}
-                    <div className="space-y-1">
-                      <div
-                        className={
-                          m.items.length === 1
-                            ? 'grid grid-cols-1'
-                            : m.items.length === 2
-                            ? 'grid grid-cols-1 sm:grid-cols-2 gap-2'
-                            : 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2'
-                        }
-                      >
+                    {/* Multi-Column Responsive Grid for Product Items (Eliminates empty horizontal space) */}
+                    <div className="bg-slate-50/60 border border-slate-200/80 rounded-xl p-2">
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
                         {m.items.map((it) => (
                           <div
                             key={it.id || it.sku}
-                            className="flex items-center gap-2.5 bg-slate-50/70 border border-slate-200/80 hover:border-indigo-200 hover:bg-white transition rounded-xl p-2 shadow-2xs"
+                            className="bg-white border border-slate-200/90 hover:border-indigo-300 rounded-xl p-2.5 shadow-2xs hover:shadow-xs transition duration-150 flex flex-col justify-between gap-2 group relative"
                           >
-                            {it.imageUrl ? (
-                              <img
-                                src={it.imageUrl}
-                                alt="Item"
-                                className="w-9 h-9 rounded-lg object-contain bg-white border border-slate-200 p-0.5 shrink-0"
-                              />
-                            ) : (
-                              <div className="w-9 h-9 rounded-lg bg-white border border-slate-200 text-slate-400 flex items-center justify-center shrink-0">
-                                <ShoppingBag className="w-4 h-4" />
-                              </div>
-                            )}
-
-                            <div className="flex-1 min-w-0">
-                              <div className="text-xs font-bold text-slate-900 truncate">
-                                {it.shortName || it.productName}
-                              </div>
-                              <div className="text-[10px] font-mono text-slate-500 truncate flex items-center gap-1.5">
-                                <span>GTIN: {it.gtin || 'N/A'}</span>
-                                <span>•</span>
-                                <span>SKU: {it.sku || 'N/A'}</span>
-                                {it.sku && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleCopyText(it.sku, 'SKU')}
-                                    className="p-0.5 text-slate-400 hover:text-indigo-600 rounded hover:bg-indigo-50 transition cursor-pointer inline-flex items-center"
-                                    title="Copy SKU"
-                                  >
-                                    <Copy className="w-2.5 h-2.5" />
-                                  </button>
+                            {/* Product Header: Thumbnail & Title */}
+                            <div className="flex items-start gap-2 min-w-0">
+                              <div
+                                onClick={() => it.imageUrl && setSelectedPreviewImage(it.imageUrl)}
+                                className={`w-9 h-9 rounded-lg bg-slate-50 border border-slate-200 p-0.5 shrink-0 flex items-center justify-center overflow-hidden ${
+                                  it.imageUrl ? 'cursor-pointer hover:border-indigo-400 hover:scale-105 transition' : ''
+                                }`}
+                                title={it.imageUrl ? 'Click to view full image' : ''}
+                              >
+                                {it.imageUrl ? (
+                                  <img src={it.imageUrl} alt={it.productName} className="w-full h-full object-cover rounded-md" />
+                                ) : (
+                                  <ShoppingBag className="w-4 h-4 text-slate-400" />
                                 )}
+                              </div>
+
+                              <div className="min-w-0 flex-1">
+                                <div className="text-xs font-bold text-slate-900 line-clamp-2 leading-tight" title={it.productName || it.shortName}>
+                                  {it.productName || it.shortName}
+                                </div>
                               </div>
                             </div>
 
-                            <div className="text-right shrink-0">
-                              <span className="text-xs font-mono font-black text-indigo-700 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-lg">
-                                Qty: {it.quantity}
+                            {/* Middle: GTIN & SKU Info */}
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-500 font-mono bg-slate-50/80 p-1.5 rounded-lg border border-slate-100">
+                              {it.gtin && (
+                                <span
+                                  onClick={() => handleCopyText(it.gtin, 'GTIN Barcode')}
+                                  className="hover:text-indigo-600 cursor-pointer transition flex items-center gap-1 min-w-0 truncate"
+                                  title="Click to copy GTIN Barcode"
+                                >
+                                  <span className="text-slate-400">GTIN:</span>
+                                  <span className="font-semibold text-slate-700 truncate">{it.gtin}</span>
+                                  <Copy className="w-2.5 h-2.5 text-slate-400 group-hover:text-indigo-500 transition shrink-0" />
+                                </span>
+                              )}
+                              {it.gtin && it.sku && <span className="text-slate-300">•</span>}
+                              {it.sku && (
+                                <span
+                                  onClick={() => handleCopyText(it.sku, 'SKU Code')}
+                                  className="hover:text-indigo-600 cursor-pointer transition flex items-center gap-1 min-w-0 truncate"
+                                  title="Click to copy SKU"
+                                >
+                                  <span className="text-slate-400">SKU:</span>
+                                  <span className="font-semibold text-slate-700 truncate">{it.sku}</span>
+                                  <Copy className="w-2.5 h-2.5 text-slate-400 group-hover:text-indigo-500 transition shrink-0" />
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Bottom Bar: Interactive & Functional QTY Unit Stepper */}
+                            <div className="flex items-center justify-between pt-1 border-t border-slate-100 mt-0.5">
+                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                                Pack Quantity
                               </span>
+
+                              {/* Interactive Unit Qty Control */}
+                              <div className="flex items-center gap-1 bg-slate-100/90 rounded-lg p-0.5 border border-slate-200">
+                                {isUserAdmin && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleQuickUpdateItemQty(m, it.sku || it.id, -1)}
+                                    disabled={it.quantity <= 1}
+                                    className="w-5 h-5 flex items-center justify-center rounded text-slate-600 hover:text-indigo-700 hover:bg-white disabled:opacity-40 transition cursor-pointer font-bold text-xs"
+                                    title="Decrease Quantity"
+                                  >
+                                    -
+                                  </button>
+                                )}
+
+                                <span
+                                  className={`px-2 py-0.5 rounded text-xs font-mono font-black transition ${
+                                    it.quantity > 1
+                                      ? 'bg-amber-500 text-white shadow-2xs'
+                                      : 'bg-white text-slate-800 border border-slate-200 shadow-2xs'
+                                  }`}
+                                  title={it.quantity > 1 ? 'Multi-unit item: Ensure multiple units are picked!' : 'Quantity'}
+                                >
+                                  QTY: {it.quantity}
+                                </span>
+
+                                {isUserAdmin && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleQuickUpdateItemQty(m, it.sku || it.id, 1)}
+                                    className="w-5 h-5 flex items-center justify-center rounded text-slate-600 hover:text-indigo-700 hover:bg-white transition cursor-pointer font-bold text-xs"
+                                    title="Increase Quantity"
+                                  >
+                                    +
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           </div>
                         ))}
@@ -3870,6 +3954,49 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* Product Image Fullscreen Zoom Modal */}
+      {selectedPreviewImage && (
+        <div
+          onClick={() => setSelectedPreviewImage(null)}
+          className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-in fade-in duration-150 cursor-pointer"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white rounded-3xl p-4 max-w-lg w-full space-y-3 shadow-2xl border border-slate-200 relative overflow-hidden"
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+              <span className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                <ShoppingBag className="w-4 h-4 text-indigo-600" />
+                Product Image Preview
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedPreviewImage(null)}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="w-full h-80 bg-slate-50 rounded-2xl border border-slate-200 overflow-hidden flex items-center justify-center p-2">
+              <img
+                src={selectedPreviewImage}
+                alt="Full Preview"
+                className="max-w-full max-h-full object-contain rounded-xl"
+              />
+            </div>
+            <div className="text-right">
+              <button
+                type="button"
+                onClick={() => setSelectedPreviewImage(null)}
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl cursor-pointer shadow-xs"
+              >
+                Close Preview
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

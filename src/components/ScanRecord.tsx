@@ -1911,7 +1911,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                             </span>
                           </div>
                           <span className="text-[10px] text-slate-500 font-mono block">
-                            Assigned to: <span className="font-bold text-slate-700">{activeManifest.assignedPackerName}</span> • By: {activeManifest.processedByName}
+                            Assigned To: <span className="font-bold text-indigo-700">{activeManifest.assignedPackerName || 'Unassigned'}</span> · Processed By: <span className="font-bold text-slate-700">{activeManifest.processedByName || 'System'}</span>
                           </span>
                         </div>
                       </div>
