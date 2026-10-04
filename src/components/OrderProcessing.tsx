@@ -32,7 +32,8 @@ import {
   LayoutGrid,
   List,
   Tag,
-  Copy
+  Copy,
+  Calendar
 } from 'lucide-react';
 import { PlatformType, User, OrderManifest, ManifestItem, GtinCatalogProduct, PackVerificationLog } from '../types';
 import {
@@ -142,6 +143,11 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   const [itemsPerPage, setItemsPerPage] = useState<number | 'ALL'>(10);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [selectedPreviewImage, setSelectedPreviewImage] = useState<string | null>(null);
+
+  // --- Date Filter State ---
+  const [dateFilterPreset, setDateFilterPreset] = useState<'ALL' | 'TODAY' | 'YESTERDAY' | 'LAST_7_DAYS' | 'THIS_MONTH' | 'CUSTOM'>('ALL');
+  const [customStartDate, setCustomStartDate] = useState<string>('');
+  const [customEndDate, setCustomEndDate] = useState<string>('');
 
   // --- GTIN Catalog Tab States ---
   const [gtinSearchQuery, setGtinSearchQuery] = useState<string>('');
@@ -1143,9 +1149,52 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     });
   }, [manifests, isUserAdmin, currentUser]);
 
+  // Date Filtered Manifests
+  const dateFilteredManifests = useMemo(() => {
+    if (dateFilterPreset === 'ALL') return userScopedManifests;
+
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+
+    return userScopedManifests.filter((m) => {
+      const dateStr = m.processedAt || m.packedAt;
+      if (!dateStr) return true;
+      const mDate = new Date(dateStr);
+      if (isNaN(mDate.getTime())) return true;
+
+      if (dateFilterPreset === 'TODAY') {
+        return mDate >= todayStart && mDate <= todayEnd;
+      }
+      if (dateFilterPreset === 'YESTERDAY') {
+        const yestStart = new Date(todayStart);
+        yestStart.setDate(yestStart.getDate() - 1);
+        const yestEnd = new Date(todayEnd);
+        yestEnd.setDate(yestEnd.getDate() - 1);
+        return mDate >= yestStart && mDate <= yestEnd;
+      }
+      if (dateFilterPreset === 'LAST_7_DAYS') {
+        const sevenDaysAgo = new Date(todayStart);
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+        return mDate >= sevenDaysAgo && mDate <= todayEnd;
+      }
+      if (dateFilterPreset === 'THIS_MONTH') {
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        return mDate >= monthStart && mDate <= todayEnd;
+      }
+      if (dateFilterPreset === 'CUSTOM') {
+        if (!customStartDate && !customEndDate) return true;
+        const start = customStartDate ? new Date(`${customStartDate}T00:00:00`) : new Date(0);
+        const end = customEndDate ? new Date(`${customEndDate}T23:59:59`) : new Date(8640000000000000);
+        return mDate >= start && mDate <= end;
+      }
+      return true;
+    });
+  }, [userScopedManifests, dateFilterPreset, customStartDate, customEndDate]);
+
   // Filtered & Sorted Manifests List (Recent added orders on top by default)
   const filteredManifests = useMemo(() => {
-    const list = userScopedManifests.filter((m) => {
+    const list = dateFilteredManifests.filter((m) => {
       const q = searchQuery.trim().toLowerCase();
       const matchSearch =
         !q ||
@@ -1206,12 +1255,12 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
       if (timeA !== timeB) return timeB - timeA;
       return (b.id || b.orderId).localeCompare(a.id || a.orderId);
     });
-  }, [userScopedManifests, searchQuery, packerFilter, statusFilter, platformFilter, isUserAdmin, manifestSortBy]);
+  }, [dateFilteredManifests, searchQuery, packerFilter, statusFilter, platformFilter, isUserAdmin, manifestSortBy]);
 
   // Reset pagination on filter or sorting changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, packerFilter, statusFilter, platformFilter, manifestSortBy, itemsPerPage]);
+  }, [searchQuery, packerFilter, statusFilter, platformFilter, manifestSortBy, itemsPerPage, dateFilterPreset, customStartDate, customEndDate]);
 
   const totalPages = useMemo(() => {
     if (itemsPerPage === 'ALL' || itemsPerPage <= 0) return 1;
@@ -1224,18 +1273,18 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     return filteredManifests.slice(start, start + itemsPerPage);
   }, [filteredManifests, currentPage, itemsPerPage]);
 
-  // Statistics Summary (Accurately Scoped Per User)
+  // Statistics Summary (Accurately Scoped Per User & Date Filter)
   const stats = useMemo(() => {
-    const total = userScopedManifests.length;
-    const pending = userScopedManifests.filter((m) => (m.status || 'Pending') === 'Pending').length;
-    const inProgress = userScopedManifests.filter((m) => m.status === 'In Progress').length;
-    const packed = userScopedManifests.filter((m) => m.status === 'Packed' || (m.status as string) === 'Completed').length;
-    const totalItems = userScopedManifests.reduce(
+    const total = dateFilteredManifests.length;
+    const pending = dateFilteredManifests.filter((m) => (m.status || 'Pending') === 'Pending').length;
+    const inProgress = dateFilteredManifests.filter((m) => m.status === 'In Progress').length;
+    const packed = dateFilteredManifests.filter((m) => m.status === 'Packed' || (m.status as string) === 'Completed').length;
+    const totalItems = dateFilteredManifests.reduce(
       (acc, m) => acc + (m.items || []).reduce((s, it) => s + (it.quantity || 1), 0),
       0
     );
     return { total, pending, inProgress, packed, totalItems };
-  }, [userScopedManifests]);
+  }, [dateFilteredManifests]);
 
   return (
     <div className="flex-1 bg-slate-50 min-h-screen p-4 sm:p-6 lg:p-8 space-y-6">
@@ -1311,6 +1360,96 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
             </button>
           </div>
         )}
+      </div>
+
+      {/* Date Filter Bar for Summary Stats & Manifests */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-3.5 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 shrink-0">
+            <Calendar className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+              <span>Date Range Filter</span>
+              {dateFilterPreset !== 'ALL' && (
+                <span className="px-2 py-0.2 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800 uppercase">
+                  Active Filter
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-slate-500">
+              Filter Total Manifest, Pending, and Packed metrics by date
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Preset Buttons */}
+          <div className="flex items-center gap-1 bg-slate-100/80 p-1 rounded-xl border border-slate-200/60 flex-wrap">
+            {(
+              [
+                { key: 'ALL', label: 'All Time' },
+                { key: 'TODAY', label: 'Today' },
+                { key: 'YESTERDAY', label: 'Yesterday' },
+                { key: 'LAST_7_DAYS', label: 'Last 7 Days' },
+                { key: 'THIS_MONTH', label: 'This Month' },
+                { key: 'CUSTOM', label: 'Custom Range' }
+              ] as const
+            ).map((p) => {
+              const isActive = dateFilterPreset === p.key;
+              return (
+                <button
+                  key={p.key}
+                  type="button"
+                  onClick={() => setDateFilterPreset(p.key)}
+                  className={`px-2.5 py-1 text-xs font-bold rounded-lg transition cursor-pointer ${
+                    isActive
+                      ? 'bg-indigo-600 text-white shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Custom Date Pickers */}
+          {dateFilterPreset === 'CUSTOM' && (
+            <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 p-1 rounded-xl">
+              <input
+                type="date"
+                value={customStartDate}
+                onChange={(e) => setCustomStartDate(e.target.value)}
+                className="px-2 py-1 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                title="Start Date"
+              />
+              <span className="text-xs text-slate-400 font-bold">to</span>
+              <input
+                type="date"
+                value={customEndDate}
+                onChange={(e) => setCustomEndDate(e.target.value)}
+                className="px-2 py-1 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                title="End Date"
+              />
+            </div>
+          )}
+
+          {dateFilterPreset !== 'ALL' && (
+            <button
+              type="button"
+              onClick={() => {
+                setDateFilterPreset('ALL');
+                setCustomStartDate('');
+                setCustomEndDate('');
+              }}
+              className="px-2.5 py-1 text-xs font-bold text-rose-600 hover:text-rose-700 hover:bg-rose-50 rounded-lg border border-rose-200/80 transition cursor-pointer"
+              title="Reset Date Filter"
+            >
+              Reset Date
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Stats Summary Cards (Interactive Filters) */}
