@@ -27,6 +27,7 @@ import {
   X,
   Tag
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { AnalyticsData, DailyMetricItem, VideoRecord } from '../types';
 import { requestApi } from '../lib/api';
 import { getStoredManifests, getStoredGtinCatalog, enrichManifestItems } from '../lib/manifestStorage';
@@ -1007,6 +1008,110 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
     document.body.removeChild(link);
     onShowToast('Daily shift summary exported successfully', 'success');
   };
+
+  const handleExportPlatformDailyCsv = () => {
+    if (!dailyPlatformMetrics.length) {
+      onShowToast('No daily platform records to export', 'error');
+      return;
+    }
+    const headers = ['Date', 'Amazon', 'D2C', 'JioMart', 'Custom', 'Total Orders'];
+    const rows = dailyPlatformMetrics.map((row) => [
+      formatDDMMYYYY(row.date),
+      row.Amazon,
+      row.D2C,
+      row.JioMart,
+      row.Custom,
+      row.total
+    ]);
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map((e) => e.join(','))].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `VMS_Daily_Platform_Breakdown_${fromDate}_to_${toDate}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    onShowToast('Daily platform breakdown exported to CSV', 'success');
+  };
+
+  const handleExportPlatformDailyExcel = () => {
+    if (!dailyPlatformMetrics.length) {
+      onShowToast('No daily platform records to export', 'error');
+      return;
+    }
+    try {
+      const data = dailyPlatformMetrics.map((row) => ({
+        'Date': formatDDMMYYYY(row.date),
+        'Amazon': row.Amazon,
+        'D2C': row.D2C,
+        'JioMart': row.JioMart,
+        'Custom': row.Custom,
+        'Total Orders': row.total
+      }));
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(data);
+      ws['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 14 }];
+      XLSX.utils.book_append_sheet(wb, ws, 'Platform Breakdown');
+      XLSX.writeFile(wb, `VMS_Daily_Platform_Breakdown_${fromDate}_to_${toDate}.xlsx`);
+      onShowToast('Daily platform breakdown exported to Excel (.xlsx)', 'success');
+    } catch (e: any) {
+      onShowToast('Excel export failed: ' + (e?.message || 'unknown error'), 'error');
+    }
+  };
+
+  const handleExportSkuIntelligenceCsv = () => {
+    if (!skuIntelligenceData.length) {
+      onShowToast('No SKU intelligence data to export', 'error');
+      return;
+    }
+    const headers = ['SKU', 'Product Name', 'GTIN Barcode', 'Packed Quantity', 'Processed Quantity', 'Variance'];
+    const rows = skuIntelligenceData.map((item) => [
+      `"${(item.sku || '').replace(/"/g, '""')}"`,
+      `"${(item.productName || '').replace(/"/g, '""')}"`,
+      `"${(item.gtin || '').replace(/"/g, '""')}"`,
+      item.packedQty,
+      item.processedQty,
+      item.packedQty - item.processedQty
+    ]);
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map((e) => e.join(','))].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `VMS_SKU_Intelligence_${fromDate}_to_${toDate}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    onShowToast('SKU intelligence report exported to CSV', 'success');
+  };
+
+  const handleExportSkuIntelligenceExcel = () => {
+    if (!skuIntelligenceData.length) {
+      onShowToast('No SKU intelligence data to export', 'error');
+      return;
+    }
+    try {
+      const data = skuIntelligenceData.map((item) => ({
+        'SKU': item.sku || '',
+        'Product Name': item.productName || '',
+        'GTIN Barcode': item.gtin || '',
+        'Packed Quantity': item.packedQty,
+        'Processed Quantity': item.processedQty,
+        'Variance': item.packedQty - item.processedQty
+      }));
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(data);
+      ws['!cols'] = [{ wch: 22 }, { wch: 32 }, { wch: 20 }, { wch: 16 }, { wch: 18 }, { wch: 14 }];
+      XLSX.utils.book_append_sheet(wb, ws, 'SKU Intelligence');
+      XLSX.writeFile(wb, `VMS_SKU_Intelligence_${fromDate}_to_${toDate}.xlsx`);
+      onShowToast('SKU intelligence report exported to Excel (.xlsx)', 'success');
+    } catch (e: any) {
+      onShowToast('Excel export failed: ' + (e?.message || 'unknown error'), 'error');
+    }
+  };
   const actualPeakVolume = useMemo(() => {
     if (!dailyList.length) return 0;
     return Math.max(
@@ -1275,7 +1380,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
         <div className="space-y-6">
           {/* 1. Daily Order Process Count with Platform */}
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
               <div>
                 <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                   <CalendarDays className="w-4 h-4 text-blue-600" />
@@ -1284,6 +1389,28 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
                 <p className="text-[11px] text-slate-500">
                   Daily volume distribution across Amazon, D2C, JioMart, and Custom platforms for {fromDate} to {toDate}.
                 </p>
+              </div>
+
+              {/* Download buttons for Daily Platform Breakdown */}
+              <div className="flex items-center gap-1.5 self-start sm:self-auto">
+                <button
+                  type="button"
+                  onClick={handleExportPlatformDailyCsv}
+                  className="px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-bold border border-slate-200 transition flex items-center gap-1 cursor-pointer"
+                  title="Download Daily Platform Breakdown in CSV format"
+                >
+                  <Download className="w-3.5 h-3.5 text-slate-500" />
+                  <span>CSV</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportPlatformDailyExcel}
+                  className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shadow-2xs transition flex items-center gap-1 cursor-pointer"
+                  title="Download Daily Platform Breakdown in Excel (.xlsx) format"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-white" />
+                  <span>Excel (.xlsx)</span>
+                </button>
               </div>
             </div>
 
@@ -1347,6 +1474,28 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
                   <option value="volume-desc">Sort by Highest Volume</option>
                   <option value="name-asc">Sort by Product Name</option>
                 </select>
+
+                {/* SKU Intelligence Export CSV & Excel */}
+                <div className="inline-flex rounded-lg border border-slate-200 overflow-hidden bg-white shadow-2xs">
+                  <button
+                    type="button"
+                    onClick={handleExportSkuIntelligenceCsv}
+                    className="px-2.5 py-1.5 hover:bg-slate-50 text-slate-700 text-xs font-bold transition flex items-center gap-1 border-r border-slate-200 cursor-pointer"
+                    title="Download SKU Intelligence Report in CSV format"
+                  >
+                    <Download className="w-3.5 h-3.5 text-slate-500" />
+                    <span>CSV</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleExportSkuIntelligenceExcel}
+                    className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                    title="Download SKU Intelligence Report in Excel (.xlsx) format"
+                  >
+                    <FileSpreadsheet className="w-3.5 h-3.5 text-white" />
+                    <span>Excel</span>
+                  </button>
+                </div>
               </div>
             </div>
 

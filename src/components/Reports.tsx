@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import * as XLSX from 'xlsx';
 import {
   FileSpreadsheet,
   Download,
@@ -264,6 +265,23 @@ export const Reports: React.FC<ReportsProps> = ({ onShowToast }) => {
     onShowToast('CSV Report exported successfully!', 'success');
   };
 
+  const handleDownloadExcel = () => {
+    if (displayRows.length === 0) {
+      onShowToast('No data to export', 'error');
+      return;
+    }
+
+    try {
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(displayRows);
+      XLSX.utils.book_append_sheet(wb, ws, 'Audit Report');
+      XLSX.writeFile(wb, `Packing_Audit_Report_${fromDate}_to_${toDate}.xlsx`);
+      onShowToast('Excel Report (.xlsx) exported successfully!', 'success');
+    } catch (e: any) {
+      onShowToast('Excel export failed: ' + (e?.message || 'unknown error'), 'error');
+    }
+  };
+
   const toggleSort = (col: string) => {
     if (sortColumn === col) {
       setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
@@ -287,15 +305,25 @@ export const Reports: React.FC<ReportsProps> = ({ onShowToast }) => {
           </p>
         </div>
 
-        {/* Download CSV Action */}
+        {/* Download CSV & Excel Actions */}
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={handleDownloadCsv}
             disabled={displayRows.length === 0}
-            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+            className="px-3.5 py-2 bg-slate-700 hover:bg-slate-800 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+            title="Download report in CSV format"
           >
             <Download className="w-4 h-4" />
             Export CSV
+          </button>
+          <button
+            onClick={handleDownloadExcel}
+            disabled={displayRows.length === 0}
+            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+            title="Download report in Excel (.xlsx) format"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            Export Excel (.xlsx)
           </button>
         </div>
       </div>

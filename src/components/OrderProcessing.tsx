@@ -36,6 +36,7 @@ import {
   Copy,
   Calendar
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { PlatformType, User, OrderManifest, ManifestItem, GtinCatalogProduct, PackVerificationLog } from '../types';
 import {
   getStoredManifests,
@@ -146,7 +147,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   const [selectedPreviewImage, setSelectedPreviewImage] = useState<string | null>(null);
 
   // --- Date Filter State ---
-  const [dateFilterPreset, setDateFilterPreset] = useState<'ALL' | 'TODAY' | 'YESTERDAY' | 'LAST_7_DAYS' | 'THIS_MONTH' | 'CUSTOM'>('ALL');
+  const [dateFilterPreset, setDateFilterPreset] = useState<'ALL' | 'TODAY' | 'YESTERDAY' | 'LAST_7_DAYS' | 'THIS_MONTH' | 'CUSTOM'>('TODAY');
   const [customStartDate, setCustomStartDate] = useState<string>('');
   const [customEndDate, setCustomEndDate] = useState<string>('');
 
@@ -982,6 +983,164 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  // Export Manifest Orders Report as CSV
+  const handleDownloadManifestCsv = () => {
+    if (filteredManifests.length === 0) {
+      onShowToast('No manifest orders found matching current filters to export', 'error');
+      return;
+    }
+
+    const headers = [
+      'Order ID',
+      'Platform',
+      'Status',
+      'Total Items (Units)',
+      'Unique SKUs',
+      'SKU List',
+      'GTIN List',
+      'Products Details',
+      'Assigned Packer',
+      'Assigned Packer Email',
+      'Processed By',
+      'Processed Date & Time',
+      'Packed By',
+      'Packed Date & Time',
+      'Special Notes'
+    ];
+
+    const rows = filteredManifests.map((m) => {
+      const totalUnits = m.items.reduce((s, it) => s + (it.quantity || 1), 0);
+      const skuList = m.items.map((it) => it.sku).filter(Boolean).join('; ');
+      const gtinList = m.items.map((it) => it.gtin).filter(Boolean).join('; ');
+      const productsDetails = m.items
+        .map((it) => `${it.productName || it.shortName || it.sku} (Qty: ${it.quantity || 1}${it.sku ? ', SKU: ' + it.sku : ''})`)
+        .join(' | ');
+
+      return [
+        `"${(m.orderId || '').replace(/"/g, '""')}"`,
+        `"${(m.platform || '').replace(/"/g, '""')}"`,
+        `"${(m.status || 'Pending').replace(/"/g, '""')}"`,
+        totalUnits,
+        m.items.length,
+        `"${skuList.replace(/"/g, '""')}"`,
+        `"${gtinList.replace(/"/g, '""')}"`,
+        `"${productsDetails.replace(/"/g, '""')}"`,
+        `"${(m.assignedPackerName || 'Unassigned').replace(/"/g, '""')}"`,
+        `"${(m.assignedPackerEmail || '').replace(/"/g, '""')}"`,
+        `"${(m.processedByName || '').replace(/"/g, '""')}"`,
+        `"${m.processedAt ? new Date(m.processedAt).toLocaleString() : ''}"`,
+        `"${(m.packedByName || '').replace(/"/g, '""')}"`,
+        `"${m.packedAt ? new Date(m.packedAt).toLocaleString() : ''}"`,
+        `"${(m.notes || '').replace(/"/g, '""')}"`
+      ];
+    });
+
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    const dateStr = new Date().toISOString().slice(0, 10);
+    link.setAttribute('download', `VMS_Manifest_Report_${statusFilter}_${dateFilterPreset}_${dateStr}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    onShowToast(`Exported ${filteredManifests.length} manifest orders to CSV successfully`, 'success');
+  };
+
+  // Export Manifest Orders Report as Genuine Excel (.xlsx)
+  const handleDownloadManifestExcel = () => {
+    if (filteredManifests.length === 0) {
+      onShowToast('No manifest orders found matching current filters to export', 'error');
+      return;
+    }
+
+    try {
+      // Sheet 1: Orders Summary
+      const ordersSummaryData = filteredManifests.map((m) => {
+        const totalUnits = m.items.reduce((s, it) => s + (it.quantity || 1), 0);
+        const skuList = m.items.map((it) => it.sku).filter(Boolean).join('; ');
+        const gtinList = m.items.map((it) => it.gtin).filter(Boolean).join('; ');
+        const productsDetails = m.items
+          .map((it) => `${it.productName || it.shortName || it.sku} (Qty: ${it.quantity || 1})`)
+          .join(' | ');
+
+        return {
+          'Order ID': m.orderId || '',
+          'Platform': m.platform || '',
+          'Status': m.status || 'Pending',
+          'Total Units': totalUnits,
+          'Total SKUs': m.items.length,
+          'SKU List': skuList,
+          'GTIN List': gtinList,
+          'Products Details': productsDetails,
+          'Assigned Packer': m.assignedPackerName || 'Unassigned',
+          'Packer Email': m.assignedPackerEmail || '',
+          'Processed By': m.processedByName || '',
+          'Processed Time': m.processedAt ? new Date(m.processedAt).toLocaleString() : '',
+          'Packed By': m.packedByName || '',
+          'Packed Time': m.packedAt ? new Date(m.packedAt).toLocaleString() : '',
+          'Special Notes': m.notes || ''
+        };
+      });
+
+      // Sheet 2: Item-Level Breakdown
+      const itemsBreakdownData: any[] = [];
+      filteredManifests.forEach((m) => {
+        m.items.forEach((it, idx) => {
+          itemsBreakdownData.push({
+            'Order ID': m.orderId,
+            'Platform': m.platform,
+            'Status': m.status,
+            'Item #': idx + 1,
+            'Product Name': it.productName || it.shortName || '',
+            'SKU': it.sku || '',
+            'GTIN Barcode': it.gtin || '',
+            'Unit Quantity': it.quantity || 1,
+            'Assigned Packer': m.assignedPackerName || 'Unassigned',
+            'Processed By': m.processedByName || '',
+            'Processed Time': m.processedAt ? new Date(m.processedAt).toLocaleString() : '',
+            'Packed Time': m.packedAt ? new Date(m.packedAt).toLocaleString() : ''
+          });
+        });
+      });
+
+      const wb = XLSX.utils.book_new();
+      const wsOrders = XLSX.utils.json_to_sheet(ordersSummaryData);
+      const wsItems = XLSX.utils.json_to_sheet(itemsBreakdownData);
+
+      // Auto column width estimation
+      wsOrders['!cols'] = [
+        { wch: 22 }, // Order ID
+        { wch: 12 }, // Platform
+        { wch: 12 }, // Status
+        { wch: 12 }, // Total Units
+        { wch: 10 }, // Total SKUs
+        { wch: 24 }, // SKU List
+        { wch: 22 }, // GTIN List
+        { wch: 35 }, // Products Details
+        { wch: 18 }, // Assigned Packer
+        { wch: 22 }, // Packer Email
+        { wch: 18 }, // Processed By
+        { wch: 20 }, // Processed Time
+        { wch: 18 }, // Packed By
+        { wch: 20 }, // Packed Time
+        { wch: 25 }, // Notes
+      ];
+
+      XLSX.utils.book_append_sheet(wb, wsOrders, 'Manifest Orders');
+      XLSX.utils.book_append_sheet(wb, wsItems, 'Items Breakdown');
+
+      const dateStr = new Date().toISOString().slice(0, 10);
+      XLSX.writeFile(wb, `VMS_Manifest_Report_${statusFilter}_${dateFilterPreset}_${dateStr}.xlsx`);
+      onShowToast(`Exported ${filteredManifests.length} manifest orders to Excel (.xlsx) successfully`, 'success');
+    } catch (err: any) {
+      console.error('Failed to export Excel file:', err);
+      onShowToast('Could not generate Excel export: ' + (err?.message || 'unknown error'), 'error');
+    }
   };
 
   const handleCsvUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2061,25 +2220,50 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
               </p>
             </div>
 
-            {/* Search Input */}
-            <div className="relative w-full sm:w-72">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search Order ID, SKU, Packer..."
-                className="w-full pl-9 pr-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:border-indigo-500 shadow-inner"
-              />
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-              {searchQuery && (
+            {/* Top Right: Export Report Buttons & Search Input */}
+            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+              {/* Download Report in CSV and Excel */}
+              <div className="inline-flex rounded-xl shadow-2xs border border-slate-200 overflow-hidden bg-white">
                 <button
                   type="button"
-                  onClick={() => setSearchQuery('')}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  onClick={handleDownloadManifestCsv}
+                  className="px-3 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold transition flex items-center gap-1.5 border-r border-slate-200 cursor-pointer"
+                  title="Download filtered manifest report in CSV format"
                 >
-                  <X className="w-3.5 h-3.5" />
+                  <Download className="w-3.5 h-3.5 text-slate-600" />
+                  <span>Export CSV</span>
                 </button>
-              )}
+                <button
+                  type="button"
+                  onClick={handleDownloadManifestExcel}
+                  className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                  title="Download complete manifest report in Excel (.xlsx) format"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-white" />
+                  <span>Export Excel</span>
+                </button>
+              </div>
+
+              {/* Search Input */}
+              <div className="relative w-full sm:w-64">
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search Order ID, SKU, Packer..."
+                  className="w-full pl-9 pr-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:border-indigo-500 shadow-inner"
+                />
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 
@@ -2300,6 +2484,28 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                   <option value="200">200 per page</option>
                   <option value="ALL">All entries</option>
                 </select>
+              </div>
+
+              {/* Download Report in CSV and Excel */}
+              <div className="flex items-center gap-1 bg-slate-100/90 p-0.5 rounded-xl border border-slate-200">
+                <button
+                  type="button"
+                  onClick={handleDownloadManifestCsv}
+                  className="px-2.5 py-1.5 bg-white hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-bold border border-slate-200 shadow-2xs transition flex items-center gap-1 cursor-pointer"
+                  title="Download Manifest Report as CSV"
+                >
+                  <Download className="w-3.5 h-3.5 text-slate-500" />
+                  <span>CSV</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadManifestExcel}
+                  className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shadow-2xs transition flex items-center gap-1 cursor-pointer"
+                  title="Download Manifest Report as Excel (.xlsx)"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-white" />
+                  <span>Excel (.xlsx)</span>
+                </button>
               </div>
 
               {(statusFilter !== 'ALL' || (isUserAdmin && packerFilter !== 'ALL') || platformFilter !== 'ALL' || searchQuery || manifestSortBy !== 'newest') && (
@@ -2535,48 +2741,62 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                               )}
                             </div>
 
-                            {/* Bottom Bar: Interactive & Functional QTY Unit Stepper */}
+                            {/* Bottom Bar: QTY Unit Display / Stepper */}
                             <div className="flex items-center justify-between pt-1 border-t border-slate-100 mt-0.5">
                               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                                 Pack Quantity
                               </span>
 
-                              {/* Interactive Unit Qty Control */}
-                              <div className="flex items-center gap-1 bg-slate-100/90 rounded-lg p-0.5 border border-slate-200">
-                                {isUserAdmin && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleQuickUpdateItemQty(m, it.sku || it.id, -1)}
-                                    disabled={it.quantity <= 1}
-                                    className="w-5 h-5 flex items-center justify-center rounded text-slate-600 hover:text-indigo-700 hover:bg-white disabled:opacity-40 transition cursor-pointer font-bold text-xs"
-                                    title="Decrease Quantity"
-                                  >
-                                    -
-                                  </button>
-                                )}
-
+                              {isPacked ? (
+                                /* For completed / packed record manifest: read-only clean quantity badge, no edit buttons */
                                 <span
-                                  className={`px-2 py-0.5 rounded text-xs font-mono font-black transition ${
+                                  className={`px-2.5 py-0.5 rounded text-xs font-mono font-black transition ${
                                     it.quantity > 1
                                       ? 'bg-amber-500 text-white shadow-2xs'
-                                      : 'bg-white text-slate-800 border border-slate-200 shadow-2xs'
+                                      : 'bg-slate-100 text-slate-800 border border-slate-200 shadow-2xs'
                                   }`}
-                                  title={it.quantity > 1 ? 'Multi-unit item: Ensure multiple units are picked!' : 'Quantity'}
+                                  title={it.quantity > 1 ? 'Multi-unit item: Ensure multiple units are packed!' : 'Quantity'}
                                 >
                                   QTY: {it.quantity}
                                 </span>
+                              ) : (
+                                /* Interactive Unit Qty Control for Pending Orders */
+                                <div className="flex items-center gap-1 bg-slate-100/90 rounded-lg p-0.5 border border-slate-200">
+                                  {isUserAdmin && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleQuickUpdateItemQty(m, it.sku || it.id, -1)}
+                                      disabled={it.quantity <= 1}
+                                      className="w-5 h-5 flex items-center justify-center rounded text-slate-600 hover:text-indigo-700 hover:bg-white disabled:opacity-40 transition cursor-pointer font-bold text-xs"
+                                      title="Decrease Quantity"
+                                    >
+                                      -
+                                    </button>
+                                  )}
 
-                                {isUserAdmin && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleQuickUpdateItemQty(m, it.sku || it.id, 1)}
-                                    className="w-5 h-5 flex items-center justify-center rounded text-slate-600 hover:text-indigo-700 hover:bg-white transition cursor-pointer font-bold text-xs"
-                                    title="Increase Quantity"
+                                  <span
+                                    className={`px-2 py-0.5 rounded text-xs font-mono font-black transition ${
+                                      it.quantity > 1
+                                        ? 'bg-amber-500 text-white shadow-2xs'
+                                        : 'bg-white text-slate-800 border border-slate-200 shadow-2xs'
+                                    }`}
+                                    title={it.quantity > 1 ? 'Multi-unit item: Ensure multiple units are picked!' : 'Quantity'}
                                   >
-                                    +
-                                  </button>
-                                )}
-                              </div>
+                                    QTY: {it.quantity}
+                                  </span>
+
+                                  {isUserAdmin && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleQuickUpdateItemQty(m, it.sku || it.id, 1)}
+                                      className="w-5 h-5 flex items-center justify-center rounded text-slate-600 hover:text-indigo-700 hover:bg-white transition cursor-pointer font-bold text-xs"
+                                      title="Increase Quantity"
+                                    >
+                                      +
+                                    </button>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           </div>
                         ))}
