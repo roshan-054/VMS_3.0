@@ -744,6 +744,10 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   };
 
   const handleQuickUpdateItemQty = async (m: OrderManifest, sku: string, delta: number) => {
+    if (m.status === 'Packed' || Boolean(m.packedAt)) {
+      onShowToast('Quantities cannot be edited for completed / packed orders', 'error');
+      return;
+    }
     const updatedItems = m.items.map((it) => {
       if ((it.sku && it.sku === sku) || (it.id && it.id === sku)) {
         const newQty = Math.max(1, it.quantity + delta);
@@ -758,6 +762,10 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
   const handleAddEditManifestItem = () => {
     if (!editingManifest) return;
+    if (editingManifest.status === 'Packed') {
+      onShowToast('Cannot add items to an already completed/packed manifest', 'error');
+      return;
+    }
     setEditingManifest({
       ...editingManifest,
       items: [
@@ -786,6 +794,9 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
   const handleEditManifestItemChange = (itemIdx: number, field: string, value: any) => {
     if (!editingManifest) return;
+    if (editingManifest.status === 'Packed' && field === 'quantity') {
+      return;
+    }
     const updatedItems = [...editingManifest.items];
     updatedItems[itemIdx] = {
       ...updatedItems[itemIdx],
@@ -2540,7 +2551,19 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
               <div className="space-y-3">
               {paginatedManifests.map((m) => {
                 const totalItemsCount = m.items.reduce((s, it) => s + it.quantity, 0);
-                const isPacked = m.status === 'Packed';
+                const isPacked = m.status === 'Packed' || Boolean(m.packedAt);
+
+                const userEmail = (currentUser?.email || '').trim().toLowerCase();
+                const userName = (currentUser?.name || '').trim().toLowerCase();
+                const assignedEmail = (m.assignedPackerEmail || '').trim().toLowerCase();
+                const assignedName = (m.assignedPackerName || '').trim().toLowerCase();
+
+                const isAssignedToMe = Boolean(
+                  (assignedEmail && userEmail && assignedEmail === userEmail) ||
+                  (assignedName && userName && assignedName === userName)
+                );
+                const isUnassigned = !assignedEmail && (!assignedName || assignedName === 'unassigned');
+                const isAssignedToOtherUser = !isUnassigned && !isAssignedToMe;
 
                 return (
                   <div
@@ -2614,8 +2637,21 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                         </span>
 
                         <div className="flex items-center gap-1.5">
-                          {/* Start Packing / Verification Button */}
-                          {!isPacked ? (
+                          {/* Packing Status / Action Button */}
+                          {isPacked ? (
+                            <div className="px-2.5 py-1.5 bg-emerald-50 border border-emerald-300/80 text-emerald-800 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-2xs select-none" title="Order is already packed & completed">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>Packed</span>
+                            </div>
+                          ) : isAssignedToOtherUser ? (
+                            <div
+                              className="px-2.5 py-1.5 bg-slate-100 border border-slate-200 text-slate-600 rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-2xs select-none"
+                              title={`This order is assigned to ${m.assignedPackerName || 'another packer'}`}
+                            >
+                              <UserCheck className="w-3.5 h-3.5 text-indigo-500" />
+                              <span>Assigned to <strong className="font-bold text-slate-800">{m.assignedPackerName || 'Packer'}</strong></span>
+                            </div>
+                          ) : (
                             <button
                               type="button"
                               onClick={() => onStartPackingOrder && onStartPackingOrder(m.orderId, m)}
@@ -2624,16 +2660,6 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                             >
                               <Boxes className="w-3.5 h-3.5" />
                               <span>Start Packing</span>
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => onStartPackingOrder && onStartPackingOrder(m.orderId, m)}
-                              className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer"
-                              title="Re-verify or re-record packing"
-                            >
-                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                              <span>Re-verify</span>
                             </button>
                           )}
 
@@ -4254,15 +4280,29 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                   <label className="text-xs font-bold text-slate-800 uppercase tracking-wider block">
                     Products in This Manifest ({editingManifest.items.length})
                   </label>
-                  <button
-                    type="button"
-                    onClick={handleAddEditManifestItem}
-                    className="px-3 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs rounded-xl border border-indigo-200 transition flex items-center gap-1 cursor-pointer shadow-2xs"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Add Item</span>
-                  </button>
+                  {editingManifest.status !== 'Packed' ? (
+                    <button
+                      type="button"
+                      onClick={handleAddEditManifestItem}
+                      className="px-3 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs rounded-xl border border-indigo-200 transition flex items-center gap-1 cursor-pointer shadow-2xs"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Item</span>
+                    </button>
+                  ) : (
+                    <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-lg flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                      <span>Completed Record (Locked)</span>
+                    </span>
+                  )}
                 </div>
+
+                {editingManifest.status === 'Packed' && (
+                  <div className="p-2.5 bg-emerald-50 border border-emerald-200/90 rounded-xl text-emerald-800 text-xs flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span><strong>Complete Record Manifest:</strong> Quantities and line items are finalized and locked from editing.</span>
+                  </div>
+                )}
 
                 <div className="space-y-2">
                   {editingManifest.items.map((item, idx) => (
@@ -4293,12 +4333,13 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                         <input
                           type="text"
                           required
+                          disabled={editingManifest.status === 'Packed'}
                           value={item.productName}
                           onChange={(e) =>
                             handleEditManifestItemChange(idx, 'productName', e.target.value)
                           }
                           placeholder="Product Name..."
-                          className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-900 focus:outline-none focus:border-indigo-500"
+                          className="w-full px-2.5 py-1.5 bg-white disabled:bg-slate-100 disabled:text-slate-600 border border-slate-300 rounded-lg text-xs font-semibold text-slate-900 focus:outline-none focus:border-indigo-500"
                         />
                       </div>
 
@@ -4310,12 +4351,13 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                         <input
                           type="text"
                           required
+                          disabled={editingManifest.status === 'Packed'}
                           value={item.sku}
                           onChange={(e) =>
                             handleEditManifestItemChange(idx, 'sku', e.target.value)
                           }
                           placeholder="SKU..."
-                          className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800 uppercase focus:outline-none focus:border-indigo-500"
+                          className="w-full px-2.5 py-1.5 bg-white disabled:bg-slate-100 disabled:text-slate-600 border border-slate-300 rounded-lg text-xs font-bold text-slate-800 uppercase focus:outline-none focus:border-indigo-500"
                         />
                       </div>
 
@@ -4327,12 +4369,13 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                         <input
                           type="text"
                           required
+                          disabled={editingManifest.status === 'Packed'}
                           value={item.gtin}
                           onChange={(e) =>
                             handleEditManifestItemChange(idx, 'gtin', e.target.value)
                           }
                           placeholder="Barcode..."
-                          className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-900 focus:outline-none focus:border-indigo-500"
+                          className="w-full px-2.5 py-1.5 bg-white disabled:bg-slate-100 disabled:text-slate-600 border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-900 focus:outline-none focus:border-indigo-500"
                         />
                       </div>
 
@@ -4342,23 +4385,32 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                           <label className="text-[10px] text-slate-500 font-bold block mb-0.5 text-center">
                             Qty
                           </label>
-                          <input
-                            type="number"
-                            min={1}
-                            required
-                            value={item.quantity}
-                            onChange={(e) =>
-                              handleEditManifestItemChange(
-                                idx,
-                                'quantity',
-                                Math.max(1, parseInt(e.target.value) || 1)
-                              )
-                            }
-                            className="w-14 px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-black text-indigo-700 text-center focus:outline-none focus:border-indigo-500"
-                          />
+                          {editingManifest.status === 'Packed' ? (
+                            <div
+                              className="w-14 px-2 py-1.5 bg-slate-100 border border-slate-300 rounded-lg text-xs font-mono font-black text-slate-700 text-center select-none"
+                              title="Quantities are locked on completed record manifests"
+                            >
+                              {item.quantity}
+                            </div>
+                          ) : (
+                            <input
+                              type="number"
+                              min={1}
+                              required
+                              value={item.quantity}
+                              onChange={(e) =>
+                                handleEditManifestItemChange(
+                                  idx,
+                                  'quantity',
+                                  Math.max(1, parseInt(e.target.value) || 1)
+                                )
+                              }
+                              className="w-14 px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-black text-indigo-700 text-center focus:outline-none focus:border-indigo-500"
+                            />
+                          )}
                         </div>
 
-                        {editingManifest.items.length > 1 && (
+                        {editingManifest.status !== 'Packed' && editingManifest.items.length > 1 && (
                           <button
                             type="button"
                             onClick={() => handleRemoveEditManifestItem(idx)}

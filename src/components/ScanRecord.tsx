@@ -148,6 +148,36 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
         detectPlatformAndType(clean);
         const manifest = getManifestByOrderId(clean);
         if (manifest) {
+          if (manifest.status === 'Packed' || (manifest as any).status === 'Completed') {
+            const packerInfo = manifest.packedByName || manifest.assignedPackerName || 'Packer';
+            const packedTime = manifest.packedAt ? ` on ${new Date(manifest.packedAt).toLocaleString()}` : '';
+            onShowToast(`Order ${clean} is ALREADY PACKED & VERIFIED by ${packerInfo}${packedTime}. Packing is complete!`, 'success');
+            setStatusMessage({
+              text: `Order ${clean} has already been packed & verified by ${packerInfo}${packedTime}.`,
+              type: 'success'
+            });
+            onClearInitialOrderId?.();
+            return;
+          }
+
+          const isAssigned =
+            !manifest.assignedPackerEmail ||
+            !currentUser?.email ||
+            manifest.assignedPackerEmail.toLowerCase().trim() === currentUser.email.toLowerCase().trim() ||
+            currentUser.role === 'Admin' ||
+            currentUser.role === 'Master Admin';
+
+          if (!isAssigned) {
+            const assignedName = manifest.assignedPackerName || manifest.assignedPackerEmail;
+            onShowToast(`⛔ Order ${clean} is assigned to ${assignedName}. Not assigned to your workstation.`, 'error');
+            setStatusMessage({
+              text: `Order ${clean} is assigned to ${assignedName}.`,
+              type: 'error'
+            });
+            onClearInitialOrderId?.();
+            return;
+          }
+
           setActiveManifest(manifest);
           setVerifiedOrderItems(null);
           setIsPackVerificationOpen(true);
@@ -167,6 +197,36 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     // 1. Direct match: Check if scanned string is an Order ID in the pre-pack manifest
     const manifest = getManifestByOrderId(clean);
     if (manifest) {
+      // Guard 1: Already packed orders
+      if (manifest.status === 'Packed' || (manifest as any).status === 'Completed') {
+        const packerName = manifest.packedByName || manifest.assignedPackerName || 'Packer';
+        const packedDate = manifest.packedAt ? ` on ${new Date(manifest.packedAt).toLocaleString()}` : '';
+        onShowToast(`✓ Order ${clean} is ALREADY PACKED & VERIFIED by ${packerName}${packedDate}! Packing is complete.`, 'success');
+        setStatusMessage({
+          text: `Order ${clean} has already been packed & verified by ${packerName}${packedDate}.`,
+          type: 'success'
+        });
+        return true;
+      }
+
+      // Guard 2: Assignment check
+      const isAssigned =
+        !manifest.assignedPackerEmail ||
+        !currentUser?.email ||
+        manifest.assignedPackerEmail.toLowerCase().trim() === currentUser.email.toLowerCase().trim() ||
+        currentUser.role === 'Admin' ||
+        currentUser.role === 'Master Admin';
+
+      if (!isAssigned) {
+        const assignedName = manifest.assignedPackerName || manifest.assignedPackerEmail;
+        onShowToast(`⛔ Order ${clean} is assigned to ${assignedName}. You are logged in as ${currentUser?.name || currentUser?.email}.`, 'error');
+        setStatusMessage({
+          text: `Order ${clean} is assigned to ${assignedName}, not your workstation.`,
+          type: 'error'
+        });
+        return false;
+      }
+
       setActiveManifest(manifest);
       setVerifiedOrderItems(null);
       setIsPackVerificationOpen(true);
@@ -178,10 +238,17 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     const catalogProduct = findProductInCatalog(clean);
     const allManifests = getStoredManifests();
 
-    // Check if any pending manifest assigned to this operator (or in queue) requires this item
+    // Check if any pending manifest assigned to this operator requires this item
     const matchingManifest = allManifests.find((m) => {
       const isPending = (m.status || 'Pending') === 'Pending' || m.status === 'In Progress';
       if (!isPending) return false;
+
+      // Must be assigned to this user if assigned
+      const isAssigned =
+        !m.assignedPackerEmail ||
+        !currentUser?.email ||
+        m.assignedPackerEmail.toLowerCase().trim() === currentUser.email.toLowerCase().trim();
+      if (!isAssigned) return false;
 
       return (m.items || []).some((it) => {
         const itGtin = (it.gtin || '').trim().toUpperCase();

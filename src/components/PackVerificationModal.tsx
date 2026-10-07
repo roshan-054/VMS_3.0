@@ -118,16 +118,20 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
   const [isFullyVerified, setIsFullyVerified] = useState<boolean>(false);
   const [scannedHistory, setScannedHistory] = useState<string[]>([]);
   const [lastScannedCode, setLastScannedCode] = useState<string>('');
+  const [adminOverride, setAdminOverride] = useState<boolean>(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const startTimeRef = useRef<number>(Date.now());
 
-  // Check if current user is authorized for this order
-  const isAssignedToCurrent =
+  // Check if order is already packed
+  const isOrderPacked = manifest.status === 'Packed' || (manifest as any).status === 'Completed';
+
+  // Check if current user is directly assigned for this order
+  const isDirectlyAssigned =
     !manifest.assignedPackerEmail ||
     !currentUser?.email ||
-    manifest.assignedPackerEmail.toLowerCase().trim() === currentUser.email.toLowerCase().trim() ||
-    currentUser.role === 'Admin' ||
-    currentUser.role === 'Master Admin';
+    manifest.assignedPackerEmail.toLowerCase().trim() === currentUser.email.toLowerCase().trim();
+
+  const isAssignedToCurrent = isDirectlyAssigned || adminOverride;
 
   // Keep input focused so USB scanner keystrokes land automatically
   useEffect(() => {
@@ -315,9 +319,73 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
   };
 
   // ==========================================
+  // CASE 0: ORDER ALREADY PACKED & VERIFIED
+  // ==========================================
+  if (isOrderPacked) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fade-in select-none">
+        <div className="w-full max-w-lg bg-slate-950 border-2 border-emerald-500 rounded-3xl p-6 sm:p-8 shadow-[0_0_50px_rgba(16,185,129,0.3)] text-center space-y-5 text-white">
+          <div className="w-20 h-20 rounded-3xl bg-emerald-500/20 border-2 border-emerald-500 text-emerald-400 flex items-center justify-center mx-auto shadow-lg shadow-emerald-500/30">
+            <CheckCircle2 className="w-10 h-10" />
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="inline-block px-3 py-1 rounded-full text-xs font-mono font-bold uppercase tracking-widest bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
+              ✓ Order Already Packed
+            </div>
+            <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
+              Packing is Already Complete!
+            </h2>
+            <p className="text-xs text-slate-300 max-w-md mx-auto">
+              This order has already been physically verified, packed, and recorded. No further packing action is required.
+            </p>
+          </div>
+
+          <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 text-left space-y-2.5 font-mono text-xs">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+              <span className="text-slate-400">Order ID:</span>
+              <span className="font-bold text-white text-sm">{manifest.orderId}</span>
+            </div>
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+              <span className="text-slate-400">Platform:</span>
+              <span className="font-bold text-indigo-400">{manifest.platform}</span>
+            </div>
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+              <span className="text-slate-400">Assigned Packer:</span>
+              <span className="font-bold text-slate-300">{manifest.assignedPackerName || manifest.assignedPackerEmail || 'Unassigned'}</span>
+            </div>
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+              <span className="text-slate-400">Packed By:</span>
+              <span className="font-bold text-emerald-400">{manifest.packedByName || manifest.assignedPackerName || 'Packer'}</span>
+            </div>
+            {manifest.packedAt && (
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Packed At:</span>
+                <span className="font-bold text-slate-300">{new Date(manifest.packedAt).toLocaleString()}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="pt-2">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="w-full py-3.5 bg-slate-800 hover:bg-slate-700 text-white font-bold text-sm rounded-xl transition cursor-pointer border border-slate-700"
+            >
+              Close &amp; Return to Workstation
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ==========================================
   // CASE 1: UNAUTHORIZED ORDER ASSIGNMENT SCREEN
   // ==========================================
   if (!isAssignedToCurrent) {
+    const isUserAdmin = currentUser?.role === 'Admin' || currentUser?.role === 'Master Admin';
+
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in select-none">
         <div className="w-full max-w-lg bg-slate-950 border-2 border-red-500 rounded-3xl p-6 sm:p-8 shadow-[0_0_50px_rgba(239,68,68,0.4)] text-center space-y-6">
@@ -328,13 +396,13 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
 
           <div className="space-y-2">
             <div className="inline-block px-3 py-1 rounded-full text-xs font-mono font-bold uppercase tracking-widest bg-red-500/20 text-red-400 border border-red-500/40">
-              🚨 Unauthorized Packing Attempt
+              🚨 Order Assigned to Another Packer
             </div>
             <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
               Order Not Assigned to You!
             </h2>
             <p className="text-xs text-slate-300 max-w-md mx-auto">
-              This order has been pre-assigned to a different packing operator on the physical label. You cannot pack this order.
+              This order has been pre-assigned to <strong className="text-white font-bold">{manifest.assignedPackerName || manifest.assignedPackerEmail}</strong>. You cannot pack this order.
             </p>
           </div>
 
@@ -352,7 +420,7 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
 
             <div className="flex items-center justify-between border-b border-slate-800 pb-2">
               <span className="text-slate-400">Assigned Packer:</span>
-              <span className="font-bold text-red-400">{manifest.assignedPackerName || manifest.assignedPackerEmail}</span>
+              <span className="font-bold text-amber-400">{manifest.assignedPackerName || manifest.assignedPackerEmail}</span>
             </div>
 
             <div className="flex items-center justify-between">
@@ -361,11 +429,20 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
             </div>
           </div>
 
-          <div className="pt-2">
+          <div className="pt-2 flex flex-col gap-2">
+            {isUserAdmin && (
+              <button
+                type="button"
+                onClick={() => setAdminOverride(true)}
+                className="w-full py-3 bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs rounded-xl transition shadow-lg shadow-amber-600/20 cursor-pointer"
+              >
+                Supervisor Override: Pack on Behalf of {manifest.assignedPackerName || 'User'}
+              </button>
+            )}
             <button
               type="button"
               onClick={onCancel}
-              className="w-full py-3.5 bg-red-600 hover:bg-red-500 text-white font-bold text-sm rounded-xl transition shadow-lg shadow-red-600/30 cursor-pointer"
+              className="w-full py-3 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl transition cursor-pointer border border-slate-700"
             >
               Return to Packing Station
             </button>
@@ -402,7 +479,7 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-400 font-mono">
-                Order <strong className="text-white font-bold">{manifest.orderId}</strong> • Assigned to: <span className="text-emerald-400 font-semibold">{currentUser?.name || 'You'}</span>
+                Order <strong className="text-white font-bold">{manifest.orderId}</strong> • Assigned to: <span className="text-indigo-400 font-semibold">{manifest.assignedPackerName || manifest.assignedPackerEmail || 'Unassigned'}{isDirectlyAssigned ? ' (You)' : ''}</span>
               </p>
             </div>
           </div>

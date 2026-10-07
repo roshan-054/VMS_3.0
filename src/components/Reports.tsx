@@ -28,8 +28,8 @@ export const Reports: React.FC<ReportsProps> = ({ onShowToast }) => {
   const today = new Date().toISOString().slice(0, 10);
   const lastWeek = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
-  const [datePreset, setDatePreset] = useState<'today' | 'yesterday' | '7days' | '14days' | '30days' | 'thisMonth' | 'lastMonth' | 'custom'>('7days');
-  const [fromDate, setFromDate] = useState(lastWeek);
+  const [datePreset, setDatePreset] = useState<'today' | 'yesterday' | '7days' | '14days' | '30days' | 'thisMonth' | 'lastMonth' | 'custom'>('today');
+  const [fromDate, setFromDate] = useState(today);
   const [toDate, setToDate] = useState(today);
   const [platformFilter, setPlatformFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');

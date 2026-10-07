@@ -406,9 +406,9 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Time & Custom Date Range Filters
-  const [timePreset, setTimePreset] = useState<'today' | 'yesterday' | 'thisWeek' | 'lastWeek' | 'thisMonth' | 'lastMonth' | '7days' | '14days' | '30days' | '90days' | 'custom'>('7days');
-  const [fromDate, setFromDate] = useState<string>(() => getLocalDateStr(-7));
+  // Time & Custom Date Range Filters (Defaults to Today)
+  const [timePreset, setTimePreset] = useState<'today' | 'yesterday' | 'thisWeek' | 'lastWeek' | 'thisMonth' | 'lastMonth' | '7days' | '14days' | '30days' | '90days' | 'custom'>('today');
+  const [fromDate, setFromDate] = useState<string>(() => getLocalDateStr(0));
   const [toDate, setToDate] = useState<string>(() => getLocalDateStr(0));
 
   const [platformFilter, setPlatformFilter] = useState('all');
