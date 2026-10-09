@@ -2614,15 +2614,25 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                             <span className="font-extrabold text-indigo-950">{m.assignedPackerName || 'Unassigned'}</span>
                           </span>
 
-                          {/* Processed / Created By Badge */}
-                          {m.processedByName && (
-                            <span className="inline-flex items-center gap-1 bg-slate-100/90 text-slate-800 border border-slate-200/90 px-2.5 py-1 rounded-md font-medium shadow-2xs" title="Order Entry Operator who created/processed this order">
+                          {/* Processed / Created By Badge with Date & Time */}
+                          {(m.processedByName || m.processedAt) && (
+                            <span
+                              className="inline-flex items-center gap-1.5 bg-slate-100/90 text-slate-800 border border-slate-200/90 px-2.5 py-1 rounded-md font-medium shadow-2xs"
+                              title={`Created & Processed${m.processedByName ? ` by ${m.processedByName}` : ''}${m.processedAt ? ` on ${new Date(m.processedAt).toLocaleDateString([], { day: '2-digit', month: 'short', year: 'numeric' })} at ${new Date(m.processedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`}
+                            >
                               <Shield className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                               <span className="text-slate-500 font-bold">Processed By:</span>
-                              <span className="font-bold text-slate-900">{m.processedByName}</span>
+                              <span className="font-bold text-slate-900">{m.processedByName || 'Operator'}</span>
                               {m.processedAt && (
-                                <span className="text-slate-400 text-[10px] font-mono">
-                                  ({new Date(m.processedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
+                                <span className="inline-flex items-center gap-1 text-slate-600 text-[10px] font-mono bg-white px-1.5 py-0.5 rounded border border-slate-200/80 ml-0.5">
+                                  <Calendar className="w-2.5 h-2.5 text-indigo-500 shrink-0" />
+                                  <span className="font-semibold text-slate-800">
+                                    {new Date(m.processedAt).toLocaleDateString([], { day: '2-digit', month: 'short', year: 'numeric' })}
+                                  </span>
+                                  <span className="text-slate-300">•</span>
+                                  <span>
+                                    {new Date(m.processedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  </span>
                                 </span>
                               )}
                             </span>
@@ -2696,13 +2706,20 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                         <span className="font-extrabold text-indigo-950">{m.assignedPackerName || 'Unassigned'}</span>
                       </div>
 
-                      {m.processedByName && (
-                        <div className="flex items-center gap-1 text-slate-600 bg-white border border-slate-200 px-2 py-0.5 rounded-md">
+                      {(m.processedByName || m.processedAt) && (
+                        <div className="flex flex-wrap items-center gap-1.5 text-slate-600 bg-white border border-slate-200 px-2 py-0.5 rounded-md">
                           <span className="text-slate-400 font-bold">Processed By:</span>
-                          <span className="font-bold text-slate-800">{m.processedByName}</span>
+                          <span className="font-bold text-slate-800">{m.processedByName || 'Operator'}</span>
                           {m.processedAt && (
-                            <span className="text-slate-400 text-[10px] font-mono">
-                              ({new Date(m.processedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
+                            <span className="text-slate-600 text-[10px] font-mono flex items-center gap-1 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">
+                              <Calendar className="w-2.5 h-2.5 text-indigo-500 shrink-0" />
+                              <span className="font-semibold text-slate-800">
+                                {new Date(m.processedAt).toLocaleDateString([], { day: '2-digit', month: 'short', year: 'numeric' })}
+                              </span>
+                              <span className="text-slate-300">•</span>
+                              <span>
+                                {new Date(m.processedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </span>
                             </span>
                           )}
                         </div>
