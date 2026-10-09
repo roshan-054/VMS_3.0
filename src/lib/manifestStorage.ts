@@ -1,5 +1,6 @@
-import { OrderManifest, ManifestItem, GtinCatalogProduct, PackVerificationLog } from '../types';
-import { requestApi } from './api';
+import { OrderManifest, ManifestItem, GtinCatalogProduct, PackVerificationLog, VideoRecord } from '../types';
+import { requestApi, normalizeOrderId, checkDuplicate } from './api';
+import { dbGetAllQueue } from './storage';
 
 const STORAGE_KEY_MANIFESTS = 'vms_order_manifests_v1';
 const STORAGE_KEY_GTIN_CATALOG = 'vms_gtin_catalog_v1';
@@ -215,11 +216,22 @@ export async function saveMultipleManifests(manifests: OrderManifest[]): Promise
   return addedCount;
 }
 
+export interface ReconciledVideoMatch {
+  orderId: string;
+  source: 'local_queue' | 'remote_logs' | 'verification_log' | 'manual';
+  fileName?: string;
+  videoDriveUrl?: string;
+  timestamp?: string;
+  packerEmail?: string;
+  packerName?: string;
+  fileId?: string;
+}
+
 export async function updateManifestStatus(
   orderId: string,
   status: OrderManifest['status'],
   items?: ManifestItem[],
-  packerDetails?: { name: string; email: string; videoDriveUrl?: string }
+  packerDetails?: { name?: string; email?: string; videoDriveUrl?: string; packedAt?: string }
 ): Promise<void> {
   const list = getStoredManifests();
   const cleanId = orderId.trim();
@@ -229,14 +241,16 @@ export async function updateManifestStatus(
     target.status = status;
     if (items) target.items = items;
     if (packerDetails) {
-      target.packedByName = packerDetails.name;
-      target.packedByEmail = packerDetails.email;
+      if (packerDetails.name) target.packedByName = packerDetails.name;
+      if (packerDetails.email) target.packedByEmail = packerDetails.email;
       if (packerDetails.videoDriveUrl) {
         target.videoDriveUrl = packerDetails.videoDriveUrl;
       }
       if (status === 'Packed') {
-        target.packedAt = new Date().toISOString();
+        target.packedAt = packerDetails.packedAt || target.packedAt || new Date().toISOString();
       }
+    } else if (status === 'Packed' && !target.packedAt) {
+      target.packedAt = new Date().toISOString();
     }
     saveStoredManifests(list);
 
@@ -250,6 +264,152 @@ export async function updateManifestStatus(
       }).catch(() => {});
     } catch (_) {}
   }
+}
+
+/**
+ * Searches local indexed upload queue, remote video logs, and verification logs
+ * to find if a packing video was already recorded & uploaded for the given order ID.
+ */
+export async function findMatchingVideoForOrderId(orderId: string): Promise<ReconciledVideoMatch | null> {
+  if (!orderId || !orderId.trim()) return null;
+  const normTarget = normalizeOrderId(orderId);
+  if (!normTarget) return null;
+
+  // 1. Search local completed queue
+  try {
+    const queue = await dbGetAllQueue();
+    const localMatch = queue.find(
+      (item) =>
+        normalizeOrderId(item.orderId) === normTarget &&
+        (item.status === 'completed' || Boolean(item.fileId || item.webViewLink))
+    );
+    if (localMatch) {
+      const url =
+        localMatch.webViewLink ||
+        (localMatch.fileId ? `https://drive.google.com/file/d/${localMatch.fileId}/preview` : '');
+      return {
+        orderId: localMatch.orderId,
+        source: 'local_queue',
+        fileName: localMatch.fileName,
+        videoDriveUrl: url,
+        timestamp: localMatch.createdAt ? new Date(localMatch.createdAt).toISOString() : new Date().toISOString(),
+        packerEmail: localMatch.source || '',
+        fileId: localMatch.fileId,
+      };
+    }
+  } catch (e) {
+    console.warn('Queue search check note:', e);
+  }
+
+  // 2. Search remote Google Sheet / Drive records via checkDuplicate
+  try {
+    const dup = await checkDuplicate({
+      orderId: orderId,
+      platform: '',
+      recordingType: 'Forward',
+    });
+    if (dup && (dup.driveLink || dup.webViewLink || dup.playbackUrl || dup.fileId)) {
+      const url =
+        dup.webViewLink ||
+        dup.driveLink ||
+        dup.playbackUrl ||
+        (dup.fileId ? `https://drive.google.com/file/d/${dup.fileId}/preview` : '');
+      return {
+        orderId: dup.orderId,
+        source: 'remote_logs',
+        fileName: dup.fileName,
+        videoDriveUrl: url,
+        timestamp: dup.timestamp,
+        packerEmail: dup.packerEmail,
+        fileId: dup.fileId,
+      };
+    }
+  } catch (e) {}
+
+  // 3. Fallback to advancedSearch query
+  try {
+    const res = await requestApi<{ results?: VideoRecord[] }>('advancedSearch', {
+      orderId: orderId,
+      limit: 5,
+    });
+    if (res && Array.isArray(res.results) && res.results.length > 0) {
+      const match = res.results.find((r) => normalizeOrderId(r.orderId) === normTarget);
+      if (match && (match.driveLink || match.webViewLink || match.playbackUrl || match.fileId)) {
+        const url =
+          match.webViewLink ||
+          match.driveLink ||
+          match.playbackUrl ||
+          (match.fileId ? `https://drive.google.com/file/d/${match.fileId}/preview` : '');
+        return {
+          orderId: match.orderId,
+          source: 'remote_logs',
+          fileName: match.fileName,
+          videoDriveUrl: url,
+          timestamp: match.timestamp,
+          packerEmail: match.packerEmail,
+          fileId: match.fileId,
+        };
+      }
+    }
+  } catch (e) {}
+
+  // 4. Check Pack Verification Logs
+  try {
+    const vLogs = getStoredVerificationLogs();
+    const vMatch = vLogs.find((l) => normalizeOrderId(l.orderId) === normTarget && Boolean(l.videoDriveUrl));
+    if (vMatch && vMatch.videoDriveUrl) {
+      return {
+        orderId: vMatch.orderId,
+        source: 'verification_log',
+        videoDriveUrl: vMatch.videoDriveUrl,
+        timestamp: vMatch.timestamp,
+        packerEmail: vMatch.packerEmail,
+        packerName: vMatch.verifiedByPacker || vMatch.assignedPacker,
+      };
+    }
+  } catch (e) {}
+
+  return null;
+}
+
+/**
+ * Batch-reconciles all pending manifests against recorded and uploaded videos.
+ * Automatically marks matching manifests as 'Packed' and links their Google Drive video URL!
+ */
+export async function reconcilePendingManifests(): Promise<{
+  reconciledCount: number;
+  checkedCount: number;
+  reconciledOrders: Array<{ orderId: string; videoDriveUrl: string }>;
+}> {
+  const manifests = getStoredManifests();
+  const pending = manifests.filter((m) => m.status !== 'Packed' && !m.packedAt);
+  const reconciledOrders: Array<{ orderId: string; videoDriveUrl: string }> = [];
+
+  for (const item of pending) {
+    try {
+      const match = await findMatchingVideoForOrderId(item.orderId);
+      if (match && (match.videoDriveUrl || match.fileId)) {
+        const videoUrl =
+          match.videoDriveUrl ||
+          (match.fileId ? `https://drive.google.com/file/d/${match.fileId}/preview` : '');
+        await updateManifestStatus(item.orderId, 'Packed', undefined, {
+          name: match.packerName || match.packerEmail || item.assignedPackerName || 'Packer',
+          email: match.packerEmail || item.assignedPackerEmail || '',
+          videoDriveUrl: videoUrl,
+          packedAt: match.timestamp || new Date().toISOString(),
+        });
+        reconciledOrders.push({ orderId: item.orderId, videoDriveUrl: videoUrl });
+      }
+    } catch (e) {
+      console.warn(`Error auto-reconciling manifest order ${item.orderId}:`, e);
+    }
+  }
+
+  return {
+    reconciledCount: reconciledOrders.length,
+    checkedCount: pending.length,
+    reconciledOrders,
+  };
 }
 
 export function deleteManifest(orderId: string): void {

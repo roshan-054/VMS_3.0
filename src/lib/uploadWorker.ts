@@ -10,6 +10,7 @@ import {
   manualFileCache,
 } from './storage';
 import { requestApi, checkDuplicate, normalizeOrderId, cleanupStuckUploads } from './api';
+import { updateManifestStatus } from './manifestStorage';
 
 export type WorkerToastHandler = (msg: string, type: 'info' | 'success' | 'error') => void;
 
@@ -1045,6 +1046,22 @@ export async function triggerUploadWorker(): Promise<void> {
                 detail: { orderId: currentItem.orderId, uploadId: uploadId, fileId: resolvedFileId },
               })
             );
+
+            // Automatically link uploaded video to manifest order if it exists
+            if (currentItem.orderId && currentItem.orderId.trim()) {
+              try {
+                updateManifestStatus(
+                  currentItem.orderId.trim(),
+                  'Packed',
+                  undefined,
+                  {
+                    name: currentItem.source || 'Packer',
+                    email: currentItem.source || '',
+                    videoDriveUrl: resolvedWebLink || `https://drive.google.com/file/d/${resolvedFileId}/preview`,
+                  }
+                ).catch(() => {});
+              } catch (_) {}
+            }
 
             notify(`✅ Successfully uploaded ${currentItem.fileName} to Google Drive!`, 'success');
             break;

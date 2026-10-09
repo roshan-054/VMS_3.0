@@ -34,7 +34,10 @@ import {
   List,
   Tag,
   Copy,
-  Calendar
+  Calendar,
+  Video,
+  Wrench,
+  CheckCheck
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { PlatformType, User, OrderManifest, ManifestItem, GtinCatalogProduct, PackVerificationLog } from '../types';
@@ -60,7 +63,11 @@ import {
   syncManifestsWithCloud,
   syncVerificationLogsWithCloud,
   getStoredVerificationLogs,
-  extractSpreadsheetId
+  extractSpreadsheetId,
+  findMatchingVideoForOrderId,
+  reconcilePendingManifests,
+  updateManifestStatus,
+  ReconciledVideoMatch
 } from '../lib/manifestStorage';
 import { requestApi } from '../lib/api';
 import { isAdmin, isMasterAdmin } from '../lib/permissions';
@@ -175,6 +182,18 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   // --- Edit Manifest State (Admin Only) ---
   const [editingManifest, setEditingManifest] = useState<OrderManifest | null>(null);
   const [isEditManifestModalOpen, setIsEditManifestModalOpen] = useState<boolean>(false);
+
+  // --- Resolve Order / Video Reconciliation State ---
+  const [resolvingManifest, setResolvingManifest] = useState<OrderManifest | null>(null);
+  const [isResolveModalOpen, setIsResolveModalOpen] = useState<boolean>(false);
+  const [isSearchingVideoMatch, setIsSearchingVideoMatch] = useState<boolean>(false);
+  const [matchedVideo, setMatchedVideo] = useState<ReconciledVideoMatch | null>(null);
+  const [resolveVideoDriveUrl, setResolveVideoDriveUrl] = useState<string>('');
+  const [resolvePackerName, setResolvePackerName] = useState<string>('');
+  const [resolvePackerEmail, setResolvePackerEmail] = useState<string>('');
+  const [resolvePackedAt, setResolvePackedAt] = useState<string>('');
+  const [resolveActionType, setResolveActionType] = useState<'mark_packed' | 'remove_from_manifest'>('mark_packed');
+  const [isReconcilingAll, setIsReconcilingAll] = useState<boolean>(false);
 
   // --- Multi-Product Manual Entry & Excel Paste State ---
   const [isBulkManualModalOpen, setIsBulkManualModalOpen] = useState<boolean>(false);
@@ -733,7 +752,8 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
       ...editingManifest,
       orderId: trimmedOrderId,
       assignedPackerName: assignedUser ? assignedUser.name : editingManifest.assignedPackerName || 'Packer',
-      assignedPackerEmail: editingManifest.assignedPackerEmail
+      assignedPackerEmail: editingManifest.assignedPackerEmail,
+      packedAt: editingManifest.status === 'Packed' ? (editingManifest.packedAt || new Date().toISOString()) : editingManifest.packedAt,
     };
 
     await saveOrderManifest(updated);
@@ -741,6 +761,114 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     setIsEditManifestModalOpen(false);
     setEditingManifest(null);
     onShowToast(`Manifest Order ${updated.orderId} updated & synced to Google Sheet!`, 'success');
+  };
+
+  // --- Resolve Order / Video Reconciliation Handlers ---
+  const handleOpenResolveModal = async (manifest: OrderManifest) => {
+    setResolvingManifest(manifest);
+    setIsResolveModalOpen(true);
+    setResolvePackerName(manifest.assignedPackerName || currentUser?.name || 'Packer');
+    setResolvePackerEmail(manifest.assignedPackerEmail || currentUser?.email || '');
+    setResolvePackedAt(
+      manifest.packedAt
+        ? new Date(manifest.packedAt).toISOString().slice(0, 16)
+        : new Date().toISOString().slice(0, 16)
+    );
+    setResolveVideoDriveUrl(manifest.videoDriveUrl || '');
+    setResolveActionType('mark_packed');
+    setMatchedVideo(null);
+    setIsSearchingVideoMatch(true);
+
+    try {
+      const match = await findMatchingVideoForOrderId(manifest.orderId);
+      if (match) {
+        setMatchedVideo(match);
+        if (match.videoDriveUrl) {
+          setResolveVideoDriveUrl(match.videoDriveUrl);
+        }
+        if (match.packerEmail) {
+          setResolvePackerEmail(match.packerEmail);
+        }
+        if (match.packerName) {
+          setResolvePackerName(match.packerName);
+        }
+        if (match.timestamp) {
+          try {
+            setResolvePackedAt(new Date(match.timestamp).toISOString().slice(0, 16));
+          } catch (_) {}
+        }
+      }
+    } catch (e) {
+      console.warn('Video search match error:', e);
+    } finally {
+      setIsSearchingVideoMatch(false);
+    }
+  };
+
+  const handleConfirmResolution = async () => {
+    if (!resolvingManifest) return;
+
+    if (resolveActionType === 'mark_packed') {
+      let targetTime = new Date().toISOString();
+      if (resolvePackedAt) {
+        try {
+          targetTime = new Date(resolvePackedAt).toISOString();
+        } catch (_) {}
+      }
+      await updateManifestStatus(
+        resolvingManifest.orderId,
+        'Packed',
+        undefined,
+        {
+          name: resolvePackerName.trim() || 'Packer',
+          email: resolvePackerEmail.trim(),
+          videoDriveUrl: resolveVideoDriveUrl.trim() || undefined,
+          packedAt: targetTime,
+        }
+      );
+      setManifests(getStoredManifests());
+      setIsResolveModalOpen(false);
+      const targetId = resolvingManifest.orderId;
+      setResolvingManifest(null);
+      onShowToast(
+        `Order ${targetId} resolved & marked as Packed!${resolveVideoDriveUrl ? ' Video link attached.' : ''}`,
+        'success'
+      );
+    } else {
+      // Remove from manifest queue completely
+      deleteManifest(resolvingManifest.orderId);
+      setManifests(getStoredManifests());
+      setIsResolveModalOpen(false);
+      const targetId = resolvingManifest.orderId;
+      setResolvingManifest(null);
+      onShowToast(`Order ${targetId} removed from active manifest queue.`, 'info');
+    }
+  };
+
+  const handleAutoReconcileAllPending = async () => {
+    setIsReconcilingAll(true);
+    try {
+      const res = await reconcilePendingManifests();
+      setManifests(getStoredManifests());
+      if (res.reconciledCount > 0) {
+        const orderIds = res.reconciledOrders.map((o) => o.orderId).slice(0, 3).join(', ');
+        const extra = res.reconciledCount > 3 ? ` and ${res.reconciledCount - 3} more` : '';
+        onShowToast(
+          `🎉 Reconciled ${res.reconciledCount} order(s) (${orderIds}${extra})! Automatically linked with uploaded Drive videos & marked Packed.`,
+          'success'
+        );
+      } else {
+        onShowToast(
+          `Checked ${res.checkedCount} pending order(s). All orders are in sync (no unlinked uploaded videos found in logs).`,
+          'info'
+        );
+      }
+    } catch (err: any) {
+      console.error('Auto reconcile error:', err);
+      onShowToast(`Reconciliation error: ${err?.message || 'Check failed'}`, 'error');
+    } finally {
+      setIsReconcilingAll(false);
+    }
   };
 
   const handleQuickUpdateItemQty = async (m: OrderManifest, sku: string, delta: number) => {
@@ -2233,7 +2361,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
             {/* Top Right: Export Report Buttons & Search Input */}
             <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-              {/* Download Report in CSV and Excel */}
+              {/* Download Report in CSV and Excel & Auto-Reconcile */}
               <div className="inline-flex rounded-xl shadow-2xs border border-slate-200 overflow-hidden bg-white">
                 <button
                   type="button"
@@ -2247,11 +2375,21 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                 <button
                   type="button"
                   onClick={handleDownloadManifestExcel}
-                  className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                  className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5 border-r border-emerald-700 cursor-pointer shadow-2xs"
                   title="Download complete manifest report in Excel (.xlsx) format"
                 >
                   <FileSpreadsheet className="w-3.5 h-3.5 text-white" />
                   <span>Export Excel</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={isReconcilingAll}
+                  onClick={handleAutoReconcileAllPending}
+                  className="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  title="Scan & automatically reconcile pending manifest orders that already have uploaded videos in the system"
+                >
+                  <Sparkles className={`w-3.5 h-3.5 text-indigo-600 ${isReconcilingAll ? 'animate-spin' : ''}`} />
+                  <span>{isReconcilingAll ? 'Checking Videos...' : 'Auto-Reconcile Videos'}</span>
                 </button>
               </div>
 
@@ -2649,28 +2787,87 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                         <div className="flex items-center gap-1.5">
                           {/* Packing Status / Action Button */}
                           {isPacked ? (
-                            <div className="px-2.5 py-1.5 bg-emerald-50 border border-emerald-300/80 text-emerald-800 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-2xs select-none" title="Order is already packed & completed">
-                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                              <span>Packed</span>
+                            <div className="flex items-center gap-1.5">
+                              <div className="px-2.5 py-1.5 bg-emerald-50 border border-emerald-300/80 text-emerald-800 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-2xs select-none" title="Order is already packed & completed">
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                                <span>Packed</span>
+                              </div>
+
+                              {m.videoDriveUrl ? (
+                                <a
+                                  href={m.videoDriveUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-xs rounded-xl border border-blue-200/90 transition flex items-center gap-1.5 shadow-2xs hover:shadow-xs"
+                                  title="Open recorded packing video in Google Drive"
+                                >
+                                  <Video className="w-3.5 h-3.5 text-blue-600" />
+                                  <span className="hidden sm:inline">Drive Video</span>
+                                  <ExternalLink className="w-3 h-3 text-blue-400" />
+                                </a>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenResolveModal(m)}
+                                  className="px-2 py-1.5 bg-slate-50 hover:bg-indigo-50 text-slate-600 hover:text-indigo-700 font-bold text-xs rounded-xl border border-slate-200 transition flex items-center gap-1 shadow-2xs cursor-pointer"
+                                  title="Check or link recorded video URL to this packed order"
+                                >
+                                  <Video className="w-3.5 h-3.5 text-slate-400 hover:text-indigo-600" />
+                                  <span className="hidden sm:inline">Link Video</span>
+                                </button>
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={() => handleOpenResolveModal(m)}
+                                className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition cursor-pointer"
+                                title="Check or update linked video URL"
+                              >
+                                <Wrench className="w-3.5 h-3.5" />
+                              </button>
                             </div>
                           ) : isAssignedToOtherUser ? (
-                            <div
-                              className="px-2.5 py-1.5 bg-slate-100 border border-slate-200 text-slate-600 rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-2xs select-none"
-                              title={`This order is assigned to ${m.assignedPackerName || 'another packer'}`}
-                            >
-                              <UserCheck className="w-3.5 h-3.5 text-indigo-500" />
-                              <span>Assigned to <strong className="font-bold text-slate-800">{m.assignedPackerName || 'Packer'}</strong></span>
-                            </div>
+                            <>
+                              <div
+                                className="px-2.5 py-1.5 bg-slate-100 border border-slate-200 text-slate-600 rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-2xs select-none"
+                                title={`This order is assigned to ${m.assignedPackerName || 'another packer'}`}
+                              >
+                                <UserCheck className="w-3.5 h-3.5 text-indigo-500" />
+                                <span>Assigned to <strong className="font-bold text-slate-800">{m.assignedPackerName || 'Packer'}</strong></span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenResolveModal(m)}
+                                className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold text-xs rounded-xl border border-amber-300/80 transition flex items-center gap-1.5 cursor-pointer shadow-2xs hover:shadow-xs"
+                                title="Already packed & video uploaded? Click to link video and mark as Packed & Resolved"
+                              >
+                                <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                                <span className="hidden sm:inline">Resolve / Link Video</span>
+                                <span className="sm:hidden">Resolve</span>
+                              </button>
+                            </>
                           ) : (
-                            <button
-                              type="button"
-                              onClick={() => onStartPackingOrder && onStartPackingOrder(m.orderId, m)}
-                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer shadow-emerald-600/20"
-                              title="Start packing this order & verify barcodes via live camera"
-                            >
-                              <Boxes className="w-3.5 h-3.5" />
-                              <span>Start Packing</span>
-                            </button>
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => onStartPackingOrder && onStartPackingOrder(m.orderId, m)}
+                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer shadow-emerald-600/20"
+                                title="Start packing this order & verify barcodes via live camera"
+                              >
+                                <Boxes className="w-3.5 h-3.5" />
+                                <span>Start Packing</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenResolveModal(m)}
+                                className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold text-xs rounded-xl border border-amber-300/80 transition flex items-center gap-1.5 cursor-pointer shadow-2xs hover:shadow-xs"
+                                title="Already packed & video uploaded? Click to link video and mark as Packed & Resolved"
+                              >
+                                <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                                <span className="hidden sm:inline">Resolve / Link Video</span>
+                                <span className="sm:hidden">Resolve</span>
+                              </button>
+                            </>
                           )}
 
                           {isUserAdmin && (
@@ -4291,6 +4488,53 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                 />
               </div>
 
+              {/* Google Drive Video Link (URL) */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-bold text-slate-700">
+                    Google Drive Video URL / Link
+                  </label>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!editingManifest) return;
+                      const match = await findMatchingVideoForOrderId(editingManifest.orderId);
+                      if (match && match.videoDriveUrl) {
+                        setEditingManifest({
+                          ...editingManifest,
+                          videoDriveUrl: match.videoDriveUrl,
+                          status: 'Packed',
+                          packedAt: match.timestamp || editingManifest.packedAt || new Date().toISOString(),
+                        });
+                        onShowToast('Matching video found & Drive URL populated!', 'success');
+                      } else {
+                        onShowToast('No matching video found in logs for this Order ID', 'info');
+                      }
+                    }}
+                    className="text-[11px] text-indigo-600 hover:text-indigo-800 font-bold flex items-center gap-1 cursor-pointer"
+                    title="Search uploaded logs for this Order ID and auto-fill video URL"
+                  >
+                    <Sparkles className="w-3 h-3 text-indigo-500" />
+                    <span>Auto-Detect Video</span>
+                  </button>
+                </div>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={editingManifest.videoDriveUrl || ''}
+                    onChange={(e) =>
+                      setEditingManifest({
+                        ...editingManifest,
+                        videoDriveUrl: e.target.value
+                      })
+                    }
+                    placeholder="https://drive.google.com/file/d/.../view"
+                    className="w-full pl-8 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono text-slate-800 focus:bg-white focus:outline-none focus:border-indigo-500"
+                  />
+                  <Video className="w-4 h-4 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
+              </div>
+
               {/* Items in Manifest Table */}
               <div className="space-y-2 pt-2 border-t border-slate-100">
                 <div className="flex items-center justify-between">
@@ -4465,6 +4709,265 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* RESOLVE ORDER ISSUE / VIDEO RECONCILIATION MODAL */}
+      {isResolveModalOpen && resolvingManifest && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-xl w-full max-h-[92vh] flex flex-col overflow-hidden border border-slate-200">
+            {/* Modal Header */}
+            <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-amber-50/70 via-indigo-50/40 to-white">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center shadow-md shadow-amber-500/20 shrink-0">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-900 tracking-tight flex items-center gap-2">
+                    <span>Resolve Order Issue</span>
+                    <span className="text-xs font-mono bg-white text-indigo-700 px-2 py-0.5 rounded-lg border border-slate-200 font-bold">
+                      {resolvingManifest.orderId}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Already packed &amp; video uploaded? Link video and mark as complete or clear from queue.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsResolveModalOpen(false);
+                  setResolvingManifest(null);
+                }}
+                className="p-2 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="p-4 sm:p-6 overflow-y-auto space-y-4 text-xs">
+              {/* Order Details Summary Card */}
+              <div className="bg-slate-50 border border-slate-200/90 rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-2.5">
+                <div>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Order ID &amp; Platform</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-mono font-black text-slate-900">{resolvingManifest.orderId}</span>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-extrabold uppercase bg-slate-200 text-slate-700">
+                      {resolvingManifest.platform}
+                    </span>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Current Status</span>
+                  <span className={`px-2 py-0.5 rounded text-xs font-bold ${resolvingManifest.status === 'Packed' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+                    {resolvingManifest.status}
+                  </span>
+                </div>
+              </div>
+
+              {/* Real-time System Video Scanner Status */}
+              <div className="border border-slate-200 rounded-2xl p-4 bg-white shadow-2xs">
+                {isSearchingVideoMatch ? (
+                  <div className="flex items-center gap-3 py-2 text-indigo-700">
+                    <RefreshCw className="w-5 h-5 animate-spin text-indigo-600 shrink-0" />
+                    <div>
+                      <span className="font-bold text-sm block">Scanning Video Records &amp; Google Drive Logs...</span>
+                      <span className="text-[11px] text-slate-500">Checking for recorded packing video with Order ID "{resolvingManifest.orderId}"</span>
+                    </div>
+                  </div>
+                ) : matchedVideo ? (
+                  <div className="bg-emerald-50/90 border border-emerald-300 rounded-xl p-3.5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-black text-emerald-900 text-xs flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span>Matching Uploaded Video Found in System!</span>
+                      </span>
+                      <span className="text-[10px] uppercase font-bold px-2 py-0.5 bg-emerald-200 text-emerald-900 rounded">
+                        {matchedVideo.source.replace(/_/g, ' ')}
+                      </span>
+                    </div>
+
+                    {matchedVideo.fileName && (
+                      <div className="text-xs text-slate-700 font-mono">
+                        <span className="font-bold text-slate-500">Video File: </span>
+                        <span className="font-semibold text-slate-900">{matchedVideo.fileName}</span>
+                      </div>
+                    )}
+
+                    {matchedVideo.videoDriveUrl && (
+                      <div className="flex items-center justify-between gap-2 bg-white p-2 rounded-lg border border-emerald-200">
+                        <span className="truncate text-[11px] font-mono text-indigo-700 select-all">
+                          {matchedVideo.videoDriveUrl}
+                        </span>
+                        <a
+                          href={matchedVideo.videoDriveUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="shrink-0 px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded text-[11px] font-bold flex items-center gap-1 border border-indigo-200"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                          <span>Preview Video</span>
+                        </a>
+                      </div>
+                    )}
+
+                    <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-600 pt-1">
+                      {matchedVideo.timestamp && (
+                        <span>
+                          <strong>Recorded:</strong> {new Date(matchedVideo.timestamp).toLocaleString()}
+                        </span>
+                      )}
+                      {matchedVideo.packerEmail && (
+                        <span>
+                          <strong>Packer:</strong> {matchedVideo.packerEmail}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1">
+                    <div className="flex items-center gap-2 text-slate-700 font-bold">
+                      <AlertCircle className="w-4 h-4 text-slate-400 shrink-0" />
+                      <span>No automated video log found for "{resolvingManifest.orderId}"</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      The video may have been uploaded manually or saved with custom naming. You can enter or paste the Google Drive link below, or mark as complete directly.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Resolution Action Selection */}
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-800 block text-xs">Choose Resolution Action:</label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setResolveActionType('mark_packed')}
+                    className={`p-3 rounded-2xl border text-left transition cursor-pointer ${
+                      resolveActionType === 'mark_packed'
+                        ? 'border-emerald-500 bg-emerald-50/60 shadow-xs'
+                        : 'border-slate-200 bg-white hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="font-bold text-slate-900 flex items-center gap-1.5 text-xs">
+                      <CheckCircle2 className={`w-4 h-4 ${resolveActionType === 'mark_packed' ? 'text-emerald-600' : 'text-slate-400'}`} />
+                      <span>Mark as Packed &amp; Verified</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Updates manifest to Packed, attaches video link, locks quantities, and moves to completed records.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setResolveActionType('remove_from_manifest')}
+                    className={`p-3 rounded-2xl border text-left transition cursor-pointer ${
+                      resolveActionType === 'remove_from_manifest'
+                        ? 'border-rose-500 bg-rose-50/60 shadow-xs'
+                        : 'border-slate-200 bg-white hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="font-bold text-slate-900 flex items-center gap-1.5 text-xs">
+                      <Trash2 className={`w-4 h-4 ${resolveActionType === 'remove_from_manifest' ? 'text-rose-600' : 'text-slate-400'}`} />
+                      <span>Remove from Active Queue</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Completely removes from active manifest queue (ideal if already fulfilled or imported by mistake).
+                    </p>
+                  </button>
+                </div>
+              </div>
+
+              {/* Details Form (When marking as Packed) */}
+              {resolveActionType === 'mark_packed' && (
+                <div className="space-y-3 pt-2 border-t border-slate-100">
+                  {/* Google Drive Video Link */}
+                  <div>
+                    <label className="block font-bold text-slate-700 text-xs mb-1">
+                      Google Drive Video Link / URL (Optional or Auto-Detected)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={resolveVideoDriveUrl}
+                        onChange={(e) => setResolveVideoDriveUrl(e.target.value)}
+                        placeholder="https://drive.google.com/file/d/.../view or preview link"
+                        className="w-full pl-8 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800 focus:bg-white focus:outline-none focus:border-indigo-500 font-mono"
+                      />
+                      <Video className="w-4 h-4 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    </div>
+                  </div>
+
+                  {/* Packed By & Packed Time */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block font-bold text-slate-700 text-xs mb-1">
+                        Packed By (Packer Name)
+                      </label>
+                      <input
+                        type="text"
+                        value={resolvePackerName}
+                        onChange={(e) => setResolvePackerName(e.target.value)}
+                        placeholder="e.g. John Doe"
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800 focus:bg-white focus:outline-none focus:border-indigo-500 font-medium"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-slate-700 text-xs mb-1">
+                        Packing Completion Date &amp; Time
+                      </label>
+                      <input
+                        type="datetime-local"
+                        value={resolvePackedAt}
+                        onChange={(e) => setResolvePackedAt(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800 focus:bg-white focus:outline-none focus:border-indigo-500 font-mono"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer Actions */}
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsResolveModalOpen(false);
+                  setResolvingManifest(null);
+                }}
+                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-200 rounded-xl transition cursor-pointer"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={handleConfirmResolution}
+                className={`px-5 py-2.5 text-white font-bold text-xs rounded-xl shadow-md transition flex items-center gap-2 cursor-pointer ${
+                  resolveActionType === 'mark_packed'
+                    ? 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/20'
+                    : 'bg-rose-600 hover:bg-rose-500 shadow-rose-600/20'
+                }`}
+              >
+                {resolveActionType === 'mark_packed' ? (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Confirm &amp; Mark as Packed</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4" />
+                    <span>Confirm &amp; Remove from Queue</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
