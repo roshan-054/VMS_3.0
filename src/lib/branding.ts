@@ -22,20 +22,89 @@ export const DEFAULT_BRANDING: BrandingConfig = {
 
 let isCloudSynced = false;
 
+/**
+ * Extracts a Google Drive File ID from any Google Drive sharing link, web view URL, or raw ID.
+ */
+export function extractDriveFileId(urlOrId: string): string | null {
+  if (!urlOrId || typeof urlOrId !== 'string') return null;
+  const trimmed = urlOrId.trim();
+  if (!trimmed) return null;
+
+  // Raw file ID check (typical Drive file IDs are 25-55 alphanumeric characters, hyphens, and underscores)
+  if (/^[a-zA-Z0-9_-]{25,55}$/.test(trimmed)) {
+    return trimmed;
+  }
+
+  // /file/d/{id} pattern
+  const matchD = trimmed.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+  if (matchD && matchD[1]) return matchD[1];
+
+  // /d/{id} pattern (e.g. lh3.googleusercontent.com/d/{id} or drive.google.com/d/{id})
+  const matchLh3 = trimmed.match(/(?:googleusercontent\.com|drive\.google\.com)\/d\/([a-zA-Z0-9_-]+)/);
+  if (matchLh3 && matchLh3[1]) return matchLh3[1];
+
+  // id= or docid= query parameter
+  const matchParam = trimmed.match(/[?&](?:id|docid)=([a-zA-Z0-9_-]+)/);
+  if (matchParam && matchParam[1]) return matchParam[1];
+
+  // open?id={id}
+  const matchOpen = trimmed.match(/\/open\?id=([a-zA-Z0-9_-]+)/);
+  if (matchOpen && matchOpen[1]) return matchOpen[1];
+
+  return null;
+}
+
+/**
+ * Converts any Google Drive web page, share link, or raw ID into a direct image CDN URL.
+ * Works without requiring the user to be signed into Google.
+ */
+export function getDirectImageUrl(rawUrl: string): string {
+  if (!rawUrl || typeof rawUrl !== 'string') return '';
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return '';
+
+  // Direct data URIs and blob URIs are already directly displayable
+  if (trimmed.startsWith('data:') || trimmed.startsWith('blob:')) {
+    return trimmed;
+  }
+
+  const driveId = extractDriveFileId(trimmed);
+  if (driveId) {
+    // Primary direct CDN endpoint: Google UserContent direct image
+    return `https://lh3.googleusercontent.com/d/${driveId}`;
+  }
+
+  return trimmed;
+}
+
+/**
+ * High-resolution fallback endpoint for Drive images if the primary CDN endpoint fails.
+ */
+export function getAlternativeDirectImageUrl(rawUrl: string): string {
+  const driveId = extractDriveFileId(rawUrl);
+  if (driveId) {
+    return `https://drive.google.com/thumbnail?id=${driveId}&sz=w1000`;
+  }
+  return '';
+}
+
 export async function syncCloudBranding(): Promise<BrandingConfig> {
   const local = getStoredBranding();
   try {
     const cloud = await fetchCloudBranding();
     if (cloud) {
+      const cloudLogo = cloud.logoUrl && cloud.logoUrl.trim() ? getDirectImageUrl(cloud.logoUrl.trim()) : '';
+      const cloudFavicon = cloud.faviconUrl && cloud.faviconUrl.trim() ? getDirectImageUrl(cloud.faviconUrl.trim()) : '';
+
       const merged: BrandingConfig = {
-        logoUrl: cloud.logoUrl !== undefined && cloud.logoUrl !== null ? cloud.logoUrl : local.logoUrl,
-        faviconUrl: cloud.faviconUrl !== undefined && cloud.faviconUrl !== null ? cloud.faviconUrl : local.faviconUrl,
-        appName: cloud.appName || local.appName || DEFAULT_BRANDING.appName,
-        appSubtitle: cloud.appSubtitle || local.appSubtitle || DEFAULT_BRANDING.appSubtitle,
-        videoDriveFolderId: cloud.videoDriveFolderId || local.videoDriveFolderId || getStoredDriveFolderId(),
+        logoUrl: cloudLogo || local.logoUrl,
+        faviconUrl: cloudFavicon || local.faviconUrl,
+        appName: (cloud.appName && cloud.appName.trim()) || local.appName || DEFAULT_BRANDING.appName,
+        appSubtitle: (cloud.appSubtitle && cloud.appSubtitle.trim()) || local.appSubtitle || DEFAULT_BRANDING.appSubtitle,
+        videoDriveFolderId: (cloud.videoDriveFolderId && cloud.videoDriveFolderId.trim()) || local.videoDriveFolderId || getStoredDriveFolderId(),
       };
-      if (cloud.videoDriveFolderId) {
-        setStoredDriveFolderId(cloud.videoDriveFolderId);
+      if (cloud.videoDriveFolderId && cloud.videoDriveFolderId.trim()) {
+        setStoredDriveFolderId(cloud.videoDriveFolderId.trim());
       }
       localStorage.setItem(BRANDING_STORAGE_KEY, JSON.stringify(merged));
       applyFavicon(merged.faviconUrl);
@@ -64,9 +133,11 @@ export function getStoredBranding(): BrandingConfig {
     const raw = localStorage.getItem(BRANDING_STORAGE_KEY);
     if (!raw) return DEFAULT_BRANDING;
     const parsed = JSON.parse(raw);
+    const logo = parsed.logoUrl ? getDirectImageUrl(parsed.logoUrl) : '';
+    const favicon = parsed.faviconUrl ? getDirectImageUrl(parsed.faviconUrl) : '';
     return {
-      logoUrl: parsed.logoUrl || '',
-      faviconUrl: parsed.faviconUrl || '',
+      logoUrl: logo,
+      faviconUrl: favicon,
       appName: parsed.appName || DEFAULT_BRANDING.appName,
       appSubtitle: parsed.appSubtitle || DEFAULT_BRANDING.appSubtitle,
       videoDriveFolderId: parsed.videoDriveFolderId || getStoredDriveFolderId(),
@@ -85,8 +156,9 @@ export function applyFavicon(faviconUrl: string): void {
       link.rel = 'shortcut icon';
       document.getElementsByTagName('head')[0].appendChild(link);
     }
-    if (faviconUrl && faviconUrl.trim()) {
-      link.href = faviconUrl.trim();
+    const directFavicon = faviconUrl ? getDirectImageUrl(faviconUrl) : '';
+    if (directFavicon && directFavicon.trim()) {
+      link.href = directFavicon.trim();
     } else {
       // Default SVG camera/video favicon
       link.href = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%232563eb"><path d="M4 4h10a2 2 0 0 1 2 2v2.5l4-2.5v12l-4-2.5V18a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg>';
@@ -98,9 +170,17 @@ export function applyFavicon(faviconUrl: string): void {
 
 export function setStoredBranding(config: Partial<BrandingConfig>): BrandingConfig {
   const current = getStoredBranding();
+  const normalizedConfig: Partial<BrandingConfig> = { ...config };
+  if (normalizedConfig.logoUrl) {
+    normalizedConfig.logoUrl = getDirectImageUrl(normalizedConfig.logoUrl);
+  }
+  if (normalizedConfig.faviconUrl) {
+    normalizedConfig.faviconUrl = getDirectImageUrl(normalizedConfig.faviconUrl);
+  }
+
   const updated: BrandingConfig = {
     ...current,
-    ...config,
+    ...normalizedConfig,
   };
 
   try {

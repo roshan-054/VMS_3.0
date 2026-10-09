@@ -55,6 +55,8 @@ import {
   resetStoredBranding,
   subscribeBranding,
   syncCloudBranding,
+  getDirectImageUrl,
+  getAlternativeDirectImageUrl,
   BrandingConfig,
   DEFAULT_BRANDING
 } from '../lib/branding';
@@ -2130,11 +2132,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                   <div className="bg-white text-slate-900 rounded-xl p-3.5 border border-slate-200 flex items-center gap-3">
                     {logoUrlInput ? (
                       <img
-                        src={logoUrlInput}
+                        src={getDirectImageUrl(logoUrlInput)}
                         alt="Logo preview"
                         className="w-9 h-9 rounded-xl object-contain bg-slate-50 border border-slate-100 p-0.5"
                         onError={(e) => {
-                          (e.target as HTMLElement).style.display = 'none';
+                          const img = e.target as HTMLImageElement;
+                          const alt = getAlternativeDirectImageUrl(logoUrlInput);
+                          if (alt && img.src !== alt) {
+                            img.src = alt;
+                          } else {
+                            img.style.display = 'none';
+                          }
                         }}
                       />
                     ) : (
@@ -2165,9 +2173,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                       <div className="w-5 h-5 flex items-center justify-center text-slate-600">☰</div>
                       {logoUrlInput ? (
                         <img
-                          src={logoUrlInput}
+                          src={getDirectImageUrl(logoUrlInput)}
                           alt="Mobile logo"
                           className="w-7 h-7 rounded-md object-contain bg-slate-50 border border-slate-100 p-0.5"
+                          onError={(e) => {
+                            const img = e.target as HTMLImageElement;
+                            const alt = getAlternativeDirectImageUrl(logoUrlInput);
+                            if (alt && img.src !== alt) {
+                              img.src = alt;
+                            } else {
+                              img.style.display = 'none';
+                            }
+                          }}
                         />
                       ) : (
                         <div className="w-7 h-7 rounded-md bg-blue-600 text-white flex items-center justify-center text-xs font-bold">

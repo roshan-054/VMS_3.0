@@ -12,7 +12,14 @@ import {
 } from 'lucide-react';
 import { requestApi } from '../lib/api';
 import { setStoredToken } from '../lib/storage';
-import { getStoredBranding, subscribeBranding, syncCloudBranding, BrandingConfig } from '../lib/branding';
+import {
+  getStoredBranding,
+  subscribeBranding,
+  syncCloudBranding,
+  getDirectImageUrl,
+  getAlternativeDirectImageUrl,
+  BrandingConfig
+} from '../lib/branding';
 import { User } from '../types';
 
 interface AuthViewProps {
@@ -72,6 +79,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
           password,
         });
         setStoredToken(loginRes.token);
+        syncCloudBranding().catch(() => {});
         onLoginSuccess(loginRes.user);
       } else {
         const res = await requestApi<{ token: string; user: User }>('login', {
@@ -79,6 +87,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
           password,
         });
         setStoredToken(res.token);
+        syncCloudBranding().catch(() => {});
         onLoginSuccess(res.user);
         onShowToast(`Welcome, ${res.user.name || res.user.email}!`, 'success');
       }
@@ -91,25 +100,38 @@ export const AuthView: React.FC<AuthViewProps> = ({
     }
   };
 
+  const directLogo = branding.logoUrl ? getDirectImageUrl(branding.logoUrl) : '';
+
   return (
     <div className="relative min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 sm:p-6">
       <div className="w-full max-w-md space-y-6">
         {/* Brand Header */}
         <div className="text-center space-y-2">
-          {branding.logoUrl ? (
+          {directLogo ? (
             <img
-              src={branding.logoUrl}
+              src={directLogo}
               alt="App Logo"
               className="w-14 h-14 rounded-2xl object-contain bg-white/10 p-1 border border-white/20 mx-auto shadow-lg"
               onError={(e) => {
-                (e.target as HTMLElement).style.display = 'none';
+                const img = e.target as HTMLImageElement;
+                const alt = getAlternativeDirectImageUrl(branding.logoUrl);
+                if (alt && img.src !== alt) {
+                  img.src = alt;
+                } else {
+                  img.style.display = 'none';
+                  const fb = document.getElementById('auth-logo-fallback');
+                  if (fb) fb.style.display = 'flex';
+                }
               }}
             />
-          ) : (
-            <div className="w-12 h-12 rounded-xl bg-blue-600 text-white flex items-center justify-center mx-auto shadow-lg shadow-blue-500/30">
-              <Video className="w-6 h-6" />
-            </div>
-          )}
+          ) : null}
+          <div
+            id="auth-logo-fallback"
+            style={{ display: directLogo ? 'none' : 'flex' }}
+            className="w-12 h-12 rounded-xl bg-blue-600 text-white items-center justify-center mx-auto shadow-lg shadow-blue-500/30"
+          >
+            <Video className="w-6 h-6" />
+          </div>
           <h1 className="text-2xl font-bold text-white tracking-tight">
             {branding.appName || 'VMS 3.0'}
           </h1>

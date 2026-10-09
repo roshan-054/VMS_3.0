@@ -29,7 +29,15 @@ import {
 } from 'lucide-react';
 import { User, QueueItem } from './types';
 import { getStoredToken, setStoredToken, dbGetAllQueue, getStoredAutoRefreshInterval, getStoredNightMode, setStoredNightMode, clearUserCache } from './lib/storage';
-import { getStoredBranding, subscribeBranding, applyFavicon, BrandingConfig } from './lib/branding';
+import {
+  getStoredBranding,
+  subscribeBranding,
+  syncCloudBranding,
+  getDirectImageUrl,
+  getAlternativeDirectImageUrl,
+  applyFavicon,
+  BrandingConfig
+} from './lib/branding';
 import { getStoredManifests } from './lib/manifestStorage';
 import { initUploadWorker } from './lib/uploadWorker';
 import { ScanRecord } from './components/ScanRecord';
@@ -138,6 +146,15 @@ export function App() {
     if (initial.appName) {
       document.title = `${initial.appName} - Order Packing Video System`;
     }
+
+    // Always fetch freshest cloud branding (ensures non-admin logged in users get latest logo/assets)
+    syncCloudBranding()
+      .then((cloudBranding) => {
+        if (cloudBranding) {
+          setBranding(cloudBranding);
+        }
+      })
+      .catch(() => {});
 
     const unsubscribe = subscribeBranding((updated) => {
       setBranding(updated);
@@ -302,18 +319,29 @@ export function App() {
           <div className="flex items-center gap-2">
             {branding.logoUrl ? (
               <img
-                src={branding.logoUrl}
+                src={getDirectImageUrl(branding.logoUrl)}
                 alt="App Logo"
                 className="w-8 h-8 rounded-lg object-contain bg-slate-50 border border-slate-200 p-0.5"
                 onError={(e) => {
-                  (e.target as HTMLElement).style.display = 'none';
+                  const img = e.target as HTMLImageElement;
+                  const alt = getAlternativeDirectImageUrl(branding.logoUrl);
+                  if (alt && img.src !== alt) {
+                    img.src = alt;
+                  } else {
+                    img.style.display = 'none';
+                    const fallback = document.getElementById('mobile-logo-fallback');
+                    if (fallback) fallback.style.display = 'flex';
+                  }
                 }}
               />
-            ) : (
-              <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center shadow-xs">
-                <Video className="w-4 h-4" />
-              </div>
-            )}
+            ) : null}
+            <div
+              id="mobile-logo-fallback"
+              style={{ display: branding.logoUrl ? 'none' : 'flex' }}
+              className="w-8 h-8 rounded-lg bg-blue-600 text-white items-center justify-center shadow-xs"
+            >
+              <Video className="w-4 h-4" />
+            </div>
             <div>
               <span className="font-bold text-slate-900 tracking-tight text-sm">
                 {branding.appName || 'VMS 3.0'}
@@ -373,18 +401,29 @@ export function App() {
           <div className="flex items-center gap-3">
             {branding.logoUrl ? (
               <img
-                src={branding.logoUrl}
+                src={getDirectImageUrl(branding.logoUrl)}
                 alt="App Logo"
                 className="w-9 h-9 rounded-xl object-contain bg-slate-50 border border-slate-200 p-0.5 shadow-xs"
                 onError={(e) => {
-                  (e.target as HTMLElement).style.display = 'none';
+                  const img = e.target as HTMLImageElement;
+                  const alt = getAlternativeDirectImageUrl(branding.logoUrl);
+                  if (alt && img.src !== alt) {
+                    img.src = alt;
+                  } else {
+                    img.style.display = 'none';
+                    const fallback = document.getElementById('sidebar-logo-fallback');
+                    if (fallback) fallback.style.display = 'flex';
+                  }
                 }}
               />
-            ) : (
-              <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-xs">
-                <Video className="w-5 h-5" />
-              </div>
-            )}
+            ) : null}
+            <div
+              id="sidebar-logo-fallback"
+              style={{ display: branding.logoUrl ? 'none' : 'flex' }}
+              className="w-9 h-9 rounded-xl bg-blue-600 text-white items-center justify-center shadow-xs"
+            >
+              <Video className="w-5 h-5" />
+            </div>
             <div>
               <div className="flex items-center gap-1.5">
                 <span className="font-bold text-slate-900 tracking-tight text-base truncate max-w-[160px]">
