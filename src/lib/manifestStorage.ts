@@ -506,6 +506,17 @@ export function isBarcodeEqual(codeA: any, codeB: any): boolean {
   return false;
 }
 
+export function isOrderCatalogRecord(item: { gtin?: string; sku?: string; productName?: string }): boolean {
+  if (!item) return false;
+  const gtin = (item.gtin || '').trim();
+  const sku = (item.sku || '').trim().toUpperCase();
+  const name = (item.productName || '').trim().toUpperCase();
+  if (gtin.startsWith('#OD-') || gtin.startsWith('#') || /^\d{3}-\d{7}-\d{7}$/.test(gtin)) return true;
+  if (sku === 'AMAZON' || sku === 'D2C' || sku === 'JIOMART' || sku === 'CUSTOM') return true;
+  if (name === 'AMAZON' || name === 'D2C' || name === 'JIOMART' || name === 'CUSTOM') return true;
+  return false;
+}
+
 export function getStoredGtinCatalog(): GtinCatalogProduct[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_GTIN_CATALOG);
@@ -515,10 +526,10 @@ export function getStoredGtinCatalog(): GtinCatalogProduct[] {
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
       const deletedSet = getDeletedGtinCodes();
-      // Filter out any deleted items and legacy dummy sample data
+      // Filter out any deleted items, legacy dummy sample data, and accidental order log entries
       const cleaned = parsed.filter((p) => {
-        const gtin = normalizeBarcode(p.gtin);
-        return gtin && !SAMPLE_GTIN_SET.has(gtin) && !deletedSet.has(gtin.toLowerCase());
+        const gtin = normalizeBarcode(p.gtin || p.sku);
+        return gtin && !SAMPLE_GTIN_SET.has(gtin) && !deletedSet.has(gtin.toLowerCase()) && !isOrderCatalogRecord(p);
       });
       return cleaned;
     }
@@ -532,14 +543,36 @@ export function saveStoredGtinCatalog(catalog: GtinCatalogProduct[]): void {
   try {
     const deletedSet = getDeletedGtinCodes();
     const cleaned = catalog.filter((p) => {
-      const gtin = normalizeBarcode(p.gtin);
-      return gtin && !SAMPLE_GTIN_SET.has(gtin) && !deletedSet.has(gtin.toLowerCase());
+      const gtin = normalizeBarcode(p.gtin || p.sku);
+      return gtin && !SAMPLE_GTIN_SET.has(gtin) && !deletedSet.has(gtin.toLowerCase()) && !isOrderCatalogRecord(p);
     });
     localStorage.setItem(STORAGE_KEY_GTIN_CATALOG, JSON.stringify(cleaned));
     window.dispatchEvent(new CustomEvent('vms_gtin_catalog_updated', { detail: { count: cleaned.length } }));
   } catch (e) {
     console.warn('Could not save GTIN catalog:', e);
   }
+}
+
+export async function purgeOrderPollutionFromCatalog(): Promise<number> {
+  let catalog: GtinCatalogProduct[] = [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_GTIN_CATALOG);
+    if (raw) catalog = JSON.parse(raw) || [];
+  } catch (e) {}
+
+  const validProducts = catalog.filter((p) => !isOrderCatalogRecord(p));
+  const pollutedGtins = catalog.filter((p) => isOrderCatalogRecord(p)).map((p) => p.gtin).filter(Boolean);
+  const removedCount = catalog.length - validProducts.length;
+
+  saveStoredGtinCatalog(validProducts);
+
+  if (pollutedGtins.length > 0) {
+    try {
+      await requestApi('deleteGtinProductsBatch', { gtins: pollutedGtins });
+    } catch (_) {}
+  }
+
+  return removedCount;
 }
 
 export function findProductInCatalog(query: string): GtinCatalogProduct | null {

@@ -4664,6 +4664,7 @@ function getGtinCatalog_(p) {
     if (!rawSku) rawSku = rawGtin;
 
     var rawName = nameIdx >= 0 && r[nameIdx] ? String(r[nameIdx]).trim() : rawSku || rawGtin;
+    if (isOrderRecord_(rawGtin, rawSku, rawName)) continue;
     var rawShort = shortNameIdx >= 0 && r[shortNameIdx] ? String(r[shortNameIdx]).trim() : rawName;
     var rawImg = imgIdx >= 0 ? convertDriveImageUrl_(r[imgIdx]) : '';
     var rawTag = tagIdx >= 0 ? String(r[tagIdx] || '').trim() : '';
@@ -4758,6 +4759,16 @@ function deleteGtinProduct_(p) {
   return { success: true, deleted: deleted, gtin: gtin };
 }
 
+function isOrderRecord_(gtin, sku, productName) {
+  var g = String(gtin || '').trim();
+  var s = String(sku || '').trim().toUpperCase();
+  var n = String(productName || '').trim().toUpperCase();
+  if (g.indexOf('#OD-') === 0 || g.indexOf('#') === 0 || /^\d{3}-\d{7}-\d{7}$/.test(g)) return true;
+  if (s === 'AMAZON' || s === 'D2C' || s === 'JIOMART' || s === 'CUSTOM') return true;
+  if (n === 'AMAZON' || n === 'D2C' || n === 'JIOMART' || n === 'CUSTOM') return true;
+  return false;
+}
+
 function deleteGtinProductsBatch_(p) {
   var gtins = p.gtins || [];
   if (!Array.isArray(gtins) || gtins.length === 0) {
@@ -4772,14 +4783,26 @@ function deleteGtinProductsBatch_(p) {
 
   var sh = getGtinCatalogSheet_();
   var data = sh.getDataRange().getValues();
+  if (data.length <= 1) return { success: true, count: 0 };
+
+  var newValues = [data[0]]; // keep header
   var deletedCount = 0;
 
-  for (var i = data.length - 1; i >= 1; i--) {
+  for (var i = 1; i < data.length; i++) {
     var rowGtin = String(data[i][1] || '').trim().toUpperCase();
-    if (rowGtin && set[rowGtin]) {
-      sh.deleteRow(i + 1);
+    var rowSku = String(data[i][2] || '').trim().toUpperCase();
+    var rowName = String(data[i][3] || '').trim().toUpperCase();
+
+    if ((rowGtin && set[rowGtin]) || isOrderRecord_(rowGtin, rowSku, rowName)) {
       deletedCount++;
+    } else {
+      newValues.push(data[i]);
     }
+  }
+
+  sh.clearContents();
+  if (newValues.length > 0 && newValues[0].length > 0) {
+    sh.getRange(1, 1, newValues.length, newValues[0].length).setValues(newValues);
   }
 
   return { success: true, count: deletedCount };
@@ -4801,10 +4824,11 @@ function saveGtinCatalogBatch_(p) {
   }
 
   var now = new Date();
+  var batchAdded = 0;
   for (var j = 0; j < products.length; j++) {
     var prod = products[j];
     var gtin = String(prod.gtin || '').trim();
-    if (!gtin) continue;
+    if (!gtin || isOrderRecord_(gtin, prod.sku, prod.productName)) continue;
 
     var rowValues = [
       now,
@@ -4824,9 +4848,10 @@ function saveGtinCatalogBatch_(p) {
       sh.appendRow(rowValues);
       existingMap[gtin] = sh.getLastRow();
     }
+    batchAdded++;
   }
 
-  return { success: true, count: products.length };
+  return { success: true, count: batchAdded };
 }
 
 /**
@@ -4925,6 +4950,7 @@ function syncExternalGtinSheet_(p) {
     if (!rawSku) rawSku = rawGtin;
 
     var rawName = nameIdx >= 0 ? String(row[nameIdx] || '').trim() : rawSku || rawGtin;
+    if (isOrderRecord_(rawGtin, rawSku, rawName)) continue;
     var rawShort = shortNameIdx >= 0 && row[shortNameIdx] ? String(row[shortNameIdx]).trim() : rawName;
     var rawImg = imgIdx >= 0 ? convertDriveImageUrl_(row[imgIdx]) : '';
     var rawTag = tagIdx >= 0 ? String(row[tagIdx] || '').trim() : '';

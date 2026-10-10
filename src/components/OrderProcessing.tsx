@@ -67,6 +67,8 @@ import {
   findMatchingVideoForOrderId,
   reconcilePendingManifests,
   updateManifestStatus,
+  purgeOrderPollutionFromCatalog,
+  isOrderCatalogRecord,
   ReconciledVideoMatch
 } from '../lib/manifestStorage';
 import { getDirectImageUrl } from '../lib/branding';
@@ -261,7 +263,9 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     loadUsers();
 
     // Initial background real-time sync with Google Sheet
-    syncGtinWithMasterSheet().catch(() => {});
+    syncGtinWithMasterSheet().then(() => {
+      setGtinCatalog(getStoredGtinCatalog());
+    }).catch(() => {});
     syncManifestsWithCloud().catch(() => {});
     syncVerificationLogsWithCloud().catch(() => {});
 
@@ -3229,6 +3233,25 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                     onChange={handleCsvUpload}
                   />
                 </label>
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const count = await purgeOrderPollutionFromCatalog();
+                    setGtinCatalog(getStoredGtinCatalog());
+                    onShowToast(
+                      count > 0
+                        ? `Cleaned catalog! Removed ${count} accidental order log entries.`
+                        : 'Catalog is clean! No order records found.',
+                      count > 0 ? 'success' : 'info'
+                    );
+                  }}
+                  className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold rounded-xl border border-rose-200 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                  title="Remove any accidental order log entries from the product catalog"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                  <span>Clean Order Logs</span>
+                </button>
 
                 <button
                   type="button"
