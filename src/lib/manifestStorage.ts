@@ -524,6 +524,49 @@ export function sanitizeImageUrl(url?: string): string {
   return getDirectImageUrl(trimmed);
 }
 
+export function fixMisalignedProduct(p: GtinCatalogProduct): GtinCatalogProduct {
+  if (!p) return p;
+  let cleanCategory = p.category || 'General';
+  let cleanTag = p.tag || '';
+  let cleanImage = p.imageUrl || '';
+  let cleanQty = Number(p.defaultQuantity) || 1;
+  let cleanNotes = p.notes || '';
+
+  const rawImgStr = String(p.imageUrl || '').trim();
+  const rawQtyStr = String(p.defaultQuantity || '').trim();
+  const rawNotesStr = String(p.notes || '').trim();
+
+  // Repair misaligned columns if imageUrl was populated with tag name 'Active-online'
+  if (!rawImgStr.startsWith('http') && !rawImgStr.startsWith('data:') && !rawImgStr.startsWith('blob:')) {
+    if (rawImgStr && rawImgStr !== 'General' && rawImgStr !== 'Packed') {
+      cleanTag = rawImgStr;
+      cleanCategory = rawImgStr;
+    }
+
+    if (rawQtyStr.startsWith('http')) {
+      cleanImage = rawQtyStr;
+      if (rawNotesStr && !isNaN(Number(rawNotesStr))) {
+        cleanQty = Number(rawNotesStr);
+        cleanNotes = '';
+      }
+    } else if (rawNotesStr.startsWith('http')) {
+      cleanImage = rawNotesStr;
+      cleanNotes = '';
+    } else {
+      cleanImage = '';
+    }
+  }
+
+  return {
+    ...p,
+    category: cleanCategory,
+    tag: cleanTag,
+    imageUrl: sanitizeImageUrl(cleanImage),
+    defaultQuantity: cleanQty,
+    notes: cleanNotes,
+  };
+}
+
 export function getStoredGtinCatalog(): GtinCatalogProduct[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_GTIN_CATALOG);
@@ -542,10 +585,7 @@ export function getStoredGtinCatalog(): GtinCatalogProduct[] {
         const gtin = normalizeBarcode(p.gtin || p.sku);
         return gtin && !SAMPLE_GTIN_SET.has(gtin) && !deletedSet.has(gtin.toLowerCase()) && !isOrderCatalogRecord(p);
       })
-      .map((p) => ({
-        ...p,
-        imageUrl: sanitizeImageUrl(p.imageUrl),
-      }));
+      .map(fixMisalignedProduct);
 
     // Ensure newly added Sandalwood Itra product from user sheet is present
     const sandalwoodItraGtin = '890619169353';
@@ -560,7 +600,8 @@ export function getStoredGtinCatalog(): GtinCatalogProduct[] {
         sku: sandalwoodItraSku,
         productName: 'Sandalwood Itra',
         shortName: 'Sandalwood Itra',
-        category: 'General',
+        category: 'Active-online',
+        tag: 'Active-online',
         imageUrl: 'https://lh3.googleusercontent.com/d/1SWluffxYq67p4UyMqHi6c2fDxdUAmowd',
         defaultQuantity: 1,
         notes: '',
@@ -581,10 +622,7 @@ export function saveStoredGtinCatalog(catalog: GtinCatalogProduct[]): void {
         const gtin = normalizeBarcode(p.gtin || p.sku);
         return gtin && !SAMPLE_GTIN_SET.has(gtin) && !deletedSet.has(gtin.toLowerCase()) && !isOrderCatalogRecord(p);
       })
-      .map((p) => ({
-        ...p,
-        imageUrl: sanitizeImageUrl(p.imageUrl),
-      }));
+      .map(fixMisalignedProduct);
 
     localStorage.setItem(STORAGE_KEY_GTIN_CATALOG, JSON.stringify(cleaned));
     window.dispatchEvent(new CustomEvent('vms_gtin_catalog_updated', { detail: { count: cleaned.length } }));
@@ -884,8 +922,8 @@ export async function syncGtinWithMasterSheet(
       if (res.catalog.length > 0) {
         const deletedSet = getDeletedGtinCodes();
 
-        // Process tag filters if provided
-        let targetList = res.catalog;
+        // Fix misaligned columns from Apps Script before tag filtering
+        let targetList = res.catalog.map(fixMisalignedProduct);
         if (appliedTags.length > 0) {
           targetList = targetList.filter((item) => {
             const itemTag = (item.tag || '').toLowerCase();
@@ -1189,6 +1227,7 @@ export async function syncGtinFromGoogleSheet(
   }
 
   if (items && items.length > 0) {
+    items = items.map(fixMisalignedProduct);
     // Apply tag condition if user configured tags
     if (tagList.length > 0) {
       const tagLower = tagList.map((t) => t.toLowerCase());

@@ -503,9 +503,8 @@ function setupSystem() {
     try {
       sh.showSheet(); // Guarantee tab is unhidden in the sheet tab bar
     } catch(_) {}
-    const existing=sh.getLastColumn()?sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0].map(String):[];
-    headers.forEach(h=>{if(existing.indexOf(h)===-1)sh.getRange(1,sh.getLastColumn()+1).setValue(h)});
-    if(sh.getFrozenRows()===0)sh.setFrozenRows(1);
+    sh.getRange(1, 1, 1, headers.length).setValues([headers]);
+    if (sh.getFrozenRows() === 0) sh.setFrozenRows(1);
     try {
       const headerRange = sh.getRange(1, 1, 1, Math.max(headers.length, sh.getLastColumn()));
       headerRange.setFontWeight('bold');
