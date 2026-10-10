@@ -42,6 +42,7 @@ import { dbGetAllQueue, dbPutQueue, dbDeleteQueueItem, getStoredDriveFolderId, g
 import { canUserDeleteData } from '../lib/permissions';
 import { retryUploadItem, fixAndCleanAllStuckUploads, subscribeWorkerStatus, triggerUploadWorker } from '../lib/uploadWorker';
 import { getStoredManifests, getManifestByOrderId } from '../lib/manifestStorage';
+import { getDirectImageUrl } from '../lib/branding';
 
 interface UploadLogsProps {
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
@@ -2499,7 +2500,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
                           <div className="flex items-center gap-2.5 min-w-0 flex-1">
                             <div className="w-8 h-8 rounded-lg bg-white border border-slate-200 shrink-0 flex items-center justify-center overflow-hidden">
                               {it.imageUrl ? (
-                                <img src={it.imageUrl} alt={it.productName} className="w-full h-full object-cover" />
+                                <img src={getDirectImageUrl(it.imageUrl)} alt={it.productName} className="w-full h-full object-cover" />
                               ) : (
                                 <ShoppingBag className="w-3.5 h-3.5 text-slate-400" />
                               )}

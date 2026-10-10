@@ -69,6 +69,7 @@ import {
   updateManifestStatus,
   ReconciledVideoMatch
 } from '../lib/manifestStorage';
+import { getDirectImageUrl } from '../lib/branding';
 import { requestApi } from '../lib/api';
 import { isAdmin, isMasterAdmin } from '../lib/permissions';
 
@@ -493,7 +494,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
       res = await syncGtinFromGoogleSheet(cleanInput, cleanTab, cleanTags);
     } else {
       // User left sheet link empty -> sync with connected Master Google Sheet
-      res = await syncGtinWithMasterSheet(cleanTags);
+      res = await syncGtinWithMasterSheet(cleanTags, cleanTab);
       const updatedConfig: GtinSheetConfig = {
         sheetIdOrUrl: '',
         tabName: cleanTab,
@@ -533,7 +534,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
       if (cfg.sheetIdOrUrl && cfg.sheetIdOrUrl.trim()) {
         res = await syncGtinFromGoogleSheet(cfg.sheetIdOrUrl.trim(), cfg.tabName?.trim() || 'GTINCatalog', cfg.tagsFilter);
       } else {
-        res = await syncGtinWithMasterSheet(cfg.tagsFilter);
+        res = await syncGtinWithMasterSheet(cfg.tagsFilter, cfg.tabName?.trim() || 'GTINCatalog');
       }
 
       if (res.success) {
@@ -1610,34 +1611,36 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         {/* Quick Top Actions (Admin Only) */}
         {isUserAdmin && (
           <div className="flex flex-wrap items-center gap-2">
-            {/* Sync Google Sheet Button Group with Direct Settings / Tab Configuration */}
-            <div className="inline-flex rounded-xl shadow-xs overflow-hidden border border-emerald-700 bg-emerald-600">
-              <button
-                type="button"
-                disabled={isSyncingMasterSheet || isSyncingSheet}
-                onClick={handleSyncMasterSheet}
-                className="px-3.5 py-2 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                title="Fetch and sync products from Google Sheet into GTIN Catalog"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingMasterSheet || isSyncingSheet ? 'animate-spin' : ''}`} />
-                <span>{isSyncingMasterSheet || isSyncingSheet ? 'Syncing...' : 'Sync GTIN Catalog'}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const cfg = getGtinSheetConfig();
-                  setGtinSheetInput(cfg.sheetIdOrUrl);
-                  setGtinSheetTab(cfg.tabName || 'GTINCatalog');
-                  setGtinSheetTagsInput(cfg.tagsFilter || '');
-                  setIsSyncModalOpen(true);
-                }}
-                className="px-2.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white border-l border-emerald-500 transition cursor-pointer flex items-center gap-1 text-xs font-bold"
-                title="Change Google Sheet Link or Tab Name"
-              >
-                <Sliders className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Sheet &amp; Tab</span>
-              </button>
-            </div>
+            {/* Sync Google Sheet Button Group with Direct Settings / Tab Configuration (Shown on non-GTIN subtabs) */}
+            {activeSubTab !== 'gtin' && (
+              <div className="inline-flex rounded-xl shadow-xs overflow-hidden border border-emerald-700 bg-emerald-600">
+                <button
+                  type="button"
+                  disabled={isSyncingMasterSheet || isSyncingSheet}
+                  onClick={handleSyncMasterSheet}
+                  className="px-3.5 py-2 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  title="Fetch and sync products from Google Sheet into GTIN Catalog"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingMasterSheet || isSyncingSheet ? 'animate-spin' : ''}`} />
+                  <span>{isSyncingMasterSheet || isSyncingSheet ? 'Syncing...' : 'Sync GTIN Catalog'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const cfg = getGtinSheetConfig();
+                    setGtinSheetInput(cfg.sheetIdOrUrl);
+                    setGtinSheetTab(cfg.tabName || 'GTINCatalog');
+                    setGtinSheetTagsInput(cfg.tagsFilter || '');
+                    setIsSyncModalOpen(true);
+                  }}
+                  className="px-2.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white border-l border-emerald-500 transition cursor-pointer flex items-center gap-1 text-xs font-bold"
+                  title="Change Google Sheet Link or Tab Name"
+                >
+                  <Sliders className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Sheet &amp; Tab</span>
+                </button>
+              </div>
+            )}
 
             <button
               type="button"
@@ -2067,7 +2070,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                     <div className="sm:col-span-2 flex flex-col items-center justify-center">
                       {item.imageUrl ? (
                         <img
-                          src={item.imageUrl}
+                          src={getDirectImageUrl(item.imageUrl)}
                           alt="Product"
                           className="w-16 h-16 rounded-xl object-contain bg-white border border-slate-200 p-1 shadow-xs"
                           onError={(e) => {
@@ -2121,7 +2124,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                               className="px-3 py-2 hover:bg-indigo-50/70 flex items-center gap-2.5 transition cursor-pointer"
                             >
                               {catItem.imageUrl ? (
-                                <img src={catItem.imageUrl} alt="" className="w-7 h-7 rounded-lg object-contain bg-slate-50 border border-slate-200 p-0.5 shrink-0" />
+                                <img src={getDirectImageUrl(catItem.imageUrl)} alt="" className="w-7 h-7 rounded-lg object-contain bg-slate-50 border border-slate-200 p-0.5 shrink-0" />
                               ) : (
                                 <div className="w-7 h-7 rounded-lg bg-slate-100 text-slate-400 flex items-center justify-center shrink-0">
                                   <ShoppingBag className="w-3.5 h-3.5" />
@@ -2934,14 +2937,14 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                             {/* Product Header: Thumbnail & Title */}
                             <div className="flex items-start gap-2 min-w-0">
                               <div
-                                onClick={() => it.imageUrl && setSelectedPreviewImage(it.imageUrl)}
+                                onClick={() => it.imageUrl && setSelectedPreviewImage(getDirectImageUrl(it.imageUrl))}
                                 className={`w-9 h-9 rounded-lg bg-slate-50 border border-slate-200 p-0.5 shrink-0 flex items-center justify-center overflow-hidden ${
                                   it.imageUrl ? 'cursor-pointer hover:border-indigo-400 hover:scale-105 transition' : ''
                                 }`}
                                 title={it.imageUrl ? 'Click to view full image' : ''}
                               >
                                 {it.imageUrl ? (
-                                  <img src={it.imageUrl} alt={it.productName} className="w-full h-full object-cover rounded-md" />
+                                  <img src={getDirectImageUrl(it.imageUrl)} alt={it.productName} className="w-full h-full object-cover rounded-md" />
                                 ) : (
                                   <ShoppingBag className="w-4 h-4 text-slate-400" />
                                 )}
@@ -3247,16 +3250,6 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                   <CheckCircle2 className={`w-3.5 h-3.5 text-purple-600 ${isInitializingTabs ? 'animate-spin' : ''}`} />
                   <span>{isInitializingTabs ? 'Verifying...' : 'Verify Tabs'}</span>
                 </button>
-
-                <button
-                  type="button"
-                  onClick={() => setIsSyncModalOpen(true)}
-                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                  title="Connect custom or external Google Sheet"
-                >
-                  <Sliders className="w-3.5 h-3.5 text-slate-500" />
-                  <span>External Sheet</span>
-                </button>
               </div>
             )}
           </div>
@@ -3489,7 +3482,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                       {/* Product Thumbnail */}
                       {prod.imageUrl ? (
                         <img
-                          src={prod.imageUrl}
+                          src={getDirectImageUrl(prod.imageUrl)}
                           alt={prod.shortName}
                           className="w-13 h-13 rounded-xl object-contain bg-white border border-slate-200 p-1 shadow-xs shrink-0"
                           onError={(e) => {
@@ -3609,7 +3602,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                         <td className="p-2 text-center">
                           {prod.imageUrl ? (
                             <img
-                              src={prod.imageUrl}
+                              src={getDirectImageUrl(prod.imageUrl)}
                               alt=""
                               className="w-8 h-8 rounded-lg object-contain bg-white border border-slate-200 p-0.5 mx-auto"
                               onError={(e) => {
@@ -4996,7 +4989,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
             </div>
             <div className="w-full h-80 bg-slate-50 rounded-2xl border border-slate-200 overflow-hidden flex items-center justify-center p-2">
               <img
-                src={selectedPreviewImage}
+                src={getDirectImageUrl(selectedPreviewImage)}
                 alt="Full Preview"
                 className="max-w-full max-h-full object-contain rounded-xl"
               />

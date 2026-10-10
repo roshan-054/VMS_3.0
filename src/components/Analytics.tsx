@@ -31,6 +31,7 @@ import * as XLSX from 'xlsx';
 import { AnalyticsData, DailyMetricItem, VideoRecord } from '../types';
 import { requestApi } from '../lib/api';
 import { getStoredManifests, getStoredGtinCatalog, enrichManifestItems } from '../lib/manifestStorage';
+import { getDirectImageUrl } from '../lib/branding';
 
 interface AnalyticsProps {
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
@@ -1520,7 +1521,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
                             <div className="flex items-center gap-3">
                               <div className="w-10 h-10 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center shrink-0 overflow-hidden">
                                 {item.imageUrl ? (
-                                  <img src={item.imageUrl} alt={item.productName} className="w-full h-full object-cover" />
+                                  <img src={getDirectImageUrl(item.imageUrl)} alt={item.productName} className="w-full h-full object-cover" />
                                 ) : (
                                   <Package className="w-5 h-5 text-slate-400" />
                                 )}

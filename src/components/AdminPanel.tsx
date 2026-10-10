@@ -331,7 +331,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
       if (cleanInput) {
         res = await syncGtinFromGoogleSheet(cleanInput, cleanTab, effectiveTags);
       } else {
-        res = await syncGtinWithMasterSheet(effectiveTags);
+        res = await syncGtinWithMasterSheet(effectiveTags, cleanTab);
         saveGtinSheetConfig({
           sheetIdOrUrl: '',
           tabName: cleanTab,
@@ -349,30 +349,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
       }
     } catch (err: any) {
       onShowToast(err?.message || 'GTIN Catalog sync failed', 'error');
-    } finally {
-      setIsSyncingGtinFromAdmin(false);
-    }
-  };
-
-  const handleSyncGtinOnlyCatalog = async () => {
-    setIsSyncingGtinFromAdmin(true);
-    try {
-      const res = await syncGtinWithMasterSheet();
-      saveGtinSheetConfig({
-        sheetIdOrUrl: '',
-        tabName: 'GTINCatalog',
-        tagsFilter: '',
-        autoSync: true,
-        lastSyncTime: new Date().toISOString(),
-        totalSyncedItems: res.count
-      });
-      if (res.success) {
-        onShowToast(`GTINCatalog tab synced! Total: ${res.count} products.`, 'success');
-      } else {
-        onShowToast(res.message, 'error');
-      }
-    } catch (err: any) {
-      onShowToast(err?.message || 'Sync failed', 'error');
     } finally {
       setIsSyncingGtinFromAdmin(false);
     }
@@ -1096,26 +1072,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                   </div>
 
                   <div className="flex items-center gap-2 flex-wrap">
-                    {/* Dedicated Button: Sync only GTINCatalog tab from Master Sheet */}
-                    <button
-                      type="button"
-                      onClick={handleSyncGtinOnlyCatalog}
-                      disabled={isSyncingGtinFromAdmin}
-                      className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-xs shadow-emerald-700/20"
-                      title="Directly synchronize only the GTINCatalog tab from Master Google Sheet"
-                    >
-                      <RefreshCw className={`w-3.5 h-3.5 ${isSyncingGtinFromAdmin ? 'animate-spin' : ''}`} />
-                      <span>Sync GTINCatalog Tab Only</span>
-                    </button>
-
                     <button
                       type="button"
                       onClick={() => handleSyncGtinCatalogFromAdmin()}
                       disabled={isSyncingGtinFromAdmin}
-                      className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-xs shadow-emerald-600/20"
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-xs shadow-emerald-600/20"
+                      title="Synchronize GTIN product catalog from Google Sheet"
                     >
                       <RefreshCw className={`w-3.5 h-3.5 ${isSyncingGtinFromAdmin ? 'animate-spin' : ''}`} />
-                      <span>{isSyncingGtinFromAdmin ? 'Syncing...' : 'Fetch Catalog'}</span>
+                      <span>{isSyncingGtinFromAdmin ? 'Syncing Catalog...' : 'Sync Catalog'}</span>
                     </button>
                   </div>
                 </div>

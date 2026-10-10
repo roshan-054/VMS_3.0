@@ -38,6 +38,7 @@ import { AiVideoFocusModal } from './AiVideoFocusModal';
 import { requestApi, formatFileSize, deleteLogEntry, fetchDriveFileSize } from '../lib/api';
 import { canUserDeleteData } from '../lib/permissions';
 import { getStoredManifests, getManifestByOrderId } from '../lib/manifestStorage';
+import { getDirectImageUrl } from '../lib/branding';
 
 interface SearchOrdersProps {
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
@@ -963,7 +964,7 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast, current
                           <div className="flex items-center gap-2.5 min-w-0 flex-1">
                             <div className="w-9 h-9 rounded-lg bg-slate-100 border border-slate-200 shrink-0 flex items-center justify-center overflow-hidden">
                               {it.imageUrl ? (
-                                <img src={it.imageUrl} alt={it.productName} className="w-full h-full object-cover" />
+                                <img src={getDirectImageUrl(it.imageUrl)} alt={it.productName} className="w-full h-full object-cover" />
                               ) : (
                                 <ShoppingBag className="w-4 h-4 text-slate-400" />
                               )}

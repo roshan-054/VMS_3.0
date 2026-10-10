@@ -4533,29 +4533,172 @@ function getPackVerificationLogs_(p) {
   return { success: true, logs: logs };
 }
 
+function convertDriveImageUrl_(rawUrl) {
+  if (!rawUrl) return '';
+  var str = String(rawUrl).trim();
+  if (!str) return '';
+  if (str.indexOf('data:') === 0 || str.indexOf('blob:') === 0 || str.indexOf('lh3.googleusercontent.com') !== -1) {
+    return str;
+  }
+  var m = str.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) ||
+          str.match(/(?:googleusercontent\.com|drive\.google\.com)\/d\/([a-zA-Z0-9_-]+)/) ||
+          str.match(/[?&](?:id|docid)=([a-zA-Z0-9_-]+)/) ||
+          str.match(/\/open\?id=([a-zA-Z0-9_-]+)/);
+  if (m && m[1]) {
+    return 'https://lh3.googleusercontent.com/d/' + m[1];
+  }
+  if (/^[a-zA-Z0-9_-]{25,55}$/.test(str)) {
+    return 'https://lh3.googleusercontent.com/d/' + str;
+  }
+  return str;
+}
+
 function getGtinCatalog_(p) {
-  var sh = getGtinCatalogSheet_();
+  p = p || {};
+  var ss = ss_();
+  var targetTabName = String(p.tabName || '').trim();
+  var sh = null;
+
+  if (targetTabName) {
+    sh = ss.getSheetByName(targetTabName);
+    if (!sh) {
+      // Case-insensitive search across sheets
+      var sheets = ss.getSheets();
+      for (var s = 0; s < sheets.length; s++) {
+        if (sheets[s].getName().trim().toLowerCase() === targetTabName.toLowerCase()) {
+          sh = sheets[s];
+          break;
+        }
+      }
+    }
+  }
+
+  if (!sh) {
+    sh = ss.getSheetByName(CONFIG.GTIN_CATALOG_SHEET);
+  }
+
+  // If GTINCatalog has <= 1 row or not found, automatically search for tabs like "UE", "Master UE", "Master", "Products", "Catalog"
+  if (!sh || sh.getLastRow() <= 1) {
+    var allSheets = ss.getSheets();
+    for (var k = 0; k < allSheets.length; k++) {
+      var sName = allSheets[k].getName().trim();
+      var sNameLower = sName.toLowerCase();
+      if (sNameLower === 'ue' || sNameLower.indexOf('master ue') !== -1 || sNameLower.indexOf('master') !== -1 || sNameLower.indexOf('catalog') !== -1 || sNameLower.indexOf('product') !== -1) {
+        if (allSheets[k].getLastRow() > 1) {
+          sh = allSheets[k];
+          break;
+        }
+      }
+    }
+  }
+
+  if (!sh) {
+    sh = getGtinCatalogSheet_();
+  }
+
   var data = sh.getDataRange().getValues();
+  if (data.length <= 1) {
+    return { success: true, catalog: [], count: 0, tabName: sh.getName() };
+  }
+
+  var headers = data[0].map(function(h) { return String(h || '').trim().toLowerCase(); });
+
+  // Intelligent column detection
+  var gtinIdx = -1, skuIdx = -1, nameIdx = -1, shortNameIdx = -1, imgIdx = -1, catIdx = -1, tagIdx = -1, cogsIdx = -1, qtyIdx = -1, notesIdx = -1;
+
+  for (var c = 0; c < headers.length; c++) {
+    var h = headers[c];
+    if (gtinIdx === -1 && (h.indexOf('gtin') !== -1 || h.indexOf('barcode') !== -1 || h.indexOf('ean') !== -1 || h.indexOf('upc') !== -1 || h === 'code')) {
+      gtinIdx = c;
+    } else if (skuIdx === -1 && (h.indexOf('sku') !== -1 || h.indexOf('item code') !== -1 || h.indexOf('product code') !== -1 || h.indexOf('style') !== -1 || h.indexOf('model') !== -1 || h === 'item')) {
+      skuIdx = c;
+    } else if (nameIdx === -1 && (h.indexOf('product name') !== -1 || h.indexOf('product') !== -1 || h.indexOf('title') !== -1 || h.indexOf('item name') !== -1 || h.indexOf('description') !== -1)) {
+      nameIdx = c;
+    } else if (shortNameIdx === -1 && (h.indexOf('short') !== -1 || h.indexOf('display name') !== -1 || h.indexOf('nickname') !== -1)) {
+      shortNameIdx = c;
+    } else if (imgIdx === -1 && (h.indexOf('image') !== -1 || h.indexOf('photo') !== -1 || h.indexOf('picture') !== -1 || h.indexOf('img') !== -1 || h.indexOf('drive') !== -1 || h.indexOf('link') !== -1 || h.indexOf('src') !== -1 || h.indexOf('thumbnail') !== -1)) {
+      imgIdx = c;
+    } else if (tagIdx === -1 && (h.indexOf('tag') !== -1 || h.indexOf('label') !== -1 || h.indexOf('status') !== -1)) {
+      tagIdx = c;
+    } else if (catIdx === -1 && (h.indexOf('category') !== -1 || h.indexOf('department') !== -1 || h.indexOf('type') !== -1)) {
+      catIdx = c;
+    } else if (cogsIdx === -1 && (h.indexOf('cogs') !== -1 || h.indexOf('cost') !== -1 || h.indexOf('price') !== -1 || h.indexOf('rate') !== -1)) {
+      cogsIdx = c;
+    } else if (qtyIdx === -1 && (h.indexOf('quantity') !== -1 || h.indexOf('qty') !== -1 || h.indexOf('pack') !== -1)) {
+      qtyIdx = c;
+    } else if (notesIdx === -1 && (h.indexOf('note') !== -1 || h.indexOf('remark') !== -1)) {
+      notesIdx = c;
+    }
+  }
+
+  // Fallbacks if not explicitly found by keywords
+  if (gtinIdx === -1 && skuIdx === -1) {
+    gtinIdx = 1 < headers.length ? 1 : 0;
+    skuIdx = 2 < headers.length ? 2 : gtinIdx;
+  } else if (gtinIdx === -1) {
+    gtinIdx = skuIdx;
+  } else if (skuIdx === -1) {
+    skuIdx = gtinIdx;
+  }
+  if (nameIdx === -1) nameIdx = 2 < headers.length ? 2 : skuIdx;
+  if (imgIdx === -1 && 6 < headers.length) imgIdx = 6;
+
+  // Multi-tag filter list (if provided e.g. ["Active-online", "offline"])
+  var requestedTags = [];
+  if (p.tags && Array.isArray(p.tags)) {
+    requestedTags = p.tags.map(function(t) { return String(t || '').trim().toLowerCase(); }).filter(Boolean);
+  } else if (p.tag && typeof p.tag === 'string') {
+    requestedTags = String(p.tag).split(',').map(function(t) { return t.trim().toLowerCase(); }).filter(Boolean);
+  }
+
   var catalog = [];
 
   for (var i = 1; i < data.length; i++) {
     var r = data[i];
-    var gtin = String(r[1] || '').trim();
-    if (!gtin) continue;
+    var rawGtin = gtinIdx >= 0 ? String(r[gtinIdx] || '').trim() : '';
+    var rawSku = skuIdx >= 0 ? String(r[skuIdx] || '').trim() : '';
+
+    // If one is missing, fallback to the other (critical for SKUs without dedicated GTIN)
+    if (!rawGtin && !rawSku) continue;
+    if (!rawGtin) rawGtin = rawSku;
+    if (!rawSku) rawSku = rawGtin;
+
+    var rawName = nameIdx >= 0 && r[nameIdx] ? String(r[nameIdx]).trim() : rawSku || rawGtin;
+    var rawShort = shortNameIdx >= 0 && r[shortNameIdx] ? String(r[shortNameIdx]).trim() : rawName;
+    var rawImg = imgIdx >= 0 ? convertDriveImageUrl_(r[imgIdx]) : '';
+    var rawTag = tagIdx >= 0 ? String(r[tagIdx] || '').trim() : '';
+    var rawCat = catIdx >= 0 ? String(r[catIdx] || '').trim() : (rawTag || 'General');
+    var rawCogs = cogsIdx >= 0 ? r[cogsIdx] : '';
+    var rawQty = qtyIdx >= 0 ? (Number(r[qtyIdx]) || 1) : 1;
+    var rawNotes = notesIdx >= 0 ? String(r[notesIdx] || '').trim() : '';
+
+    // Apply tag condition if user specified tags
+    if (requestedTags.length > 0) {
+      var tagLower = (rawTag || '').toLowerCase();
+      var catLower = (rawCat || '').toLowerCase();
+      var matchedTag = requestedTags.some(function(rt) {
+        return tagLower.indexOf(rt) !== -1 || catLower.indexOf(rt) !== -1;
+      });
+      // Allow newly added items that have a SKU and Image if untagged
+      var isNewlyAddedUntagged = !rawTag && (rawSku || rawImg);
+      if (!matchedTag && !isNewlyAddedUntagged) continue;
+    }
 
     catalog.push({
-      gtin: gtin,
-      sku: String(r[2] || '').trim(),
-      productName: String(r[3] || '').trim(),
-      shortName: String(r[4] || '').trim(),
-      category: String(r[5] || '').trim(),
-      imageUrl: String(r[6] || '').trim(),
-      defaultQuantity: Number(r[7] || 1),
-      notes: String(r[8] || '').trim()
+      gtin: rawGtin,
+      sku: rawSku,
+      productName: rawName,
+      shortName: rawShort,
+      category: rawCat,
+      tag: rawTag,
+      imageUrl: rawImg,
+      cogs: rawCogs,
+      defaultQuantity: rawQty,
+      notes: rawNotes
     });
   }
 
-  return { success: true, catalog: catalog };
+  return { success: true, catalog: catalog, count: catalog.length, tabName: sh.getName() };
 }
 
 function saveGtinProduct_(p) {
@@ -4731,13 +4874,13 @@ function syncExternalGtinSheet_(p) {
     var h = headers[c];
     if (gtinIdx === -1 && (h.indexOf('gtin') !== -1 || h.indexOf('barcode') !== -1 || h.indexOf('ean') !== -1 || h.indexOf('upc') !== -1 || h === 'code')) {
       gtinIdx = c;
-    } else if (skuIdx === -1 && (h.indexOf('sku') !== -1 || h.indexOf('item code') !== -1 || h.indexOf('product code') !== -1 || h.indexOf('style') !== -1 || h.indexOf('model') !== -1)) {
+    } else if (skuIdx === -1 && (h.indexOf('sku') !== -1 || h.indexOf('item code') !== -1 || h.indexOf('product code') !== -1 || h.indexOf('style') !== -1 || h.indexOf('model') !== -1 || h === 'item')) {
       skuIdx = c;
     } else if (nameIdx === -1 && (h.indexOf('product name') !== -1 || h.indexOf('product') !== -1 || h.indexOf('title') !== -1 || h.indexOf('item name') !== -1 || h.indexOf('description') !== -1)) {
       nameIdx = c;
     } else if (shortNameIdx === -1 && (h.indexOf('short') !== -1 || h.indexOf('display name') !== -1 || h.indexOf('nickname') !== -1)) {
       shortNameIdx = c;
-    } else if (imgIdx === -1 && (h.indexOf('image') !== -1 || h.indexOf('photo') !== -1 || h.indexOf('picture') !== -1 || h.indexOf('img') !== -1 || h.indexOf('link') !== -1)) {
+    } else if (imgIdx === -1 && (h.indexOf('image') !== -1 || h.indexOf('photo') !== -1 || h.indexOf('picture') !== -1 || h.indexOf('img') !== -1 || h.indexOf('drive') !== -1 || h.indexOf('link') !== -1 || h.indexOf('src') !== -1 || h.indexOf('thumbnail') !== -1)) {
       imgIdx = c;
     } else if (tagIdx === -1 && (h.indexOf('tag') !== -1 || h.indexOf('label') !== -1 || h.indexOf('status') !== -1)) {
       tagIdx = c;
@@ -4751,9 +4894,16 @@ function syncExternalGtinSheet_(p) {
   }
 
   // Fallbacks if not explicitly found by keywords
-  if (gtinIdx === -1) gtinIdx = 1 < headers.length ? 1 : 0;
-  if (skuIdx === -1) skuIdx = 0;
+  if (gtinIdx === -1 && skuIdx === -1) {
+    gtinIdx = 1 < headers.length ? 1 : 0;
+    skuIdx = 2 < headers.length ? 2 : gtinIdx;
+  } else if (gtinIdx === -1) {
+    gtinIdx = skuIdx;
+  } else if (skuIdx === -1) {
+    skuIdx = gtinIdx;
+  }
   if (nameIdx === -1) nameIdx = 2 < headers.length ? 2 : skuIdx;
+  if (imgIdx === -1 && 6 < headers.length) imgIdx = 6;
 
   // Multi-tag filter list (if provided e.g. ["Active-online", "offline"])
   var requestedTags = [];
@@ -4766,13 +4916,17 @@ function syncExternalGtinSheet_(p) {
   var items = [];
   for (var r = 1; r < data.length; r++) {
     var row = data[r];
-    var rawGtin = String(row[gtinIdx] || '').trim();
-    if (!rawGtin) continue;
-
+    var rawGtin = gtinIdx >= 0 ? String(row[gtinIdx] || '').trim() : '';
     var rawSku = skuIdx >= 0 ? String(row[skuIdx] || '').trim() : '';
+
+    // If one is missing, fallback to the other (handles SKUs with blank GTIN or vice versa)
+    if (!rawGtin && !rawSku) continue;
+    if (!rawGtin) rawGtin = rawSku;
+    if (!rawSku) rawSku = rawGtin;
+
     var rawName = nameIdx >= 0 ? String(row[nameIdx] || '').trim() : rawSku || rawGtin;
     var rawShort = shortNameIdx >= 0 && row[shortNameIdx] ? String(row[shortNameIdx]).trim() : rawName;
-    var rawImg = imgIdx >= 0 ? String(row[imgIdx] || '').trim() : '';
+    var rawImg = imgIdx >= 0 ? convertDriveImageUrl_(row[imgIdx]) : '';
     var rawTag = tagIdx >= 0 ? String(row[tagIdx] || '').trim() : '';
     var rawCat = catIdx >= 0 ? String(row[catIdx] || '').trim() : (rawTag || 'General');
     var rawCogs = cogsIdx >= 0 ? row[cogsIdx] : '';
@@ -4785,7 +4939,9 @@ function syncExternalGtinSheet_(p) {
       var matchedTag = requestedTags.some(function(rt) {
         return tagLower.indexOf(rt) !== -1 || catLower.indexOf(rt) !== -1;
       });
-      if (!matchedTag) continue;
+      // Do not reject newly added items with SKU or image if their tag/status column is empty
+      var isNewlyAddedUntagged = !rawTag && (rawSku || rawImg);
+      if (!matchedTag && !isNewlyAddedUntagged) continue;
     }
 
     items.push({

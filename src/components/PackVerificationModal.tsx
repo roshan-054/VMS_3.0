@@ -28,6 +28,7 @@ import {
   findProductInCatalog,
   getStoredGtinCatalog
 } from '../lib/manifestStorage';
+import { getDirectImageUrl } from '../lib/branding';
 import { sharedScannerSync } from '../lib/phoneScannerSync';
 
 interface PackVerificationModalProps {
@@ -593,7 +594,7 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
                 <div className="relative shrink-0">
                   {item.imageUrl ? (
                     <img
-                      src={item.imageUrl}
+                      src={getDirectImageUrl(item.imageUrl)}
                       alt={item.shortName || item.productName}
                       className="w-16 h-16 rounded-xl object-contain bg-slate-900 border border-slate-700 p-1"
                     />
