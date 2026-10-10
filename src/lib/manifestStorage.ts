@@ -608,6 +608,18 @@ export function getStoredGtinCatalog(): GtinCatalogProduct[] {
       });
     }
 
+    // If tag filter is configured (e.g. Active-online), enforce strict filtering on stored catalog
+    const config = getGtinSheetConfig();
+    const tagFilterStr = (config.tagsFilter || '').trim().toLowerCase();
+    if (tagFilterStr) {
+      const activeTags = tagFilterStr.split(',').map((t) => t.trim()).filter(Boolean);
+      return cleaned.filter((item) => {
+        const itemTag = (item.tag || '').toLowerCase().trim();
+        const itemCat = (item.category || '').toLowerCase().trim();
+        return activeTags.some((at) => itemTag.includes(at) || itemCat.includes(at));
+      });
+    }
+
     return cleaned;
   } catch (e) {
     return [];
@@ -926,12 +938,9 @@ export async function syncGtinWithMasterSheet(
         let targetList = res.catalog.map(fixMisalignedProduct);
         if (appliedTags.length > 0) {
           targetList = targetList.filter((item) => {
-            const itemTag = (item.tag || '').toLowerCase();
-            const itemCat = (item.category || '').toLowerCase();
-            const hasMatchedTag = appliedTags.some((at) => itemTag.includes(at) || itemCat.includes(at));
-            // Include newly added items with SKU or Image even if tag is not yet filled
-            const isUntaggedNew = !itemTag && Boolean(item.sku || item.imageUrl);
-            return hasMatchedTag || isUntaggedNew;
+            const itemTag = (item.tag || '').toLowerCase().trim();
+            const itemCat = (item.category || '').toLowerCase().trim();
+            return appliedTags.some((at) => itemTag.includes(at) || itemCat.includes(at));
           });
         }
 
@@ -1230,14 +1239,11 @@ export async function syncGtinFromGoogleSheet(
     items = items.map(fixMisalignedProduct);
     // Apply tag condition if user configured tags
     if (tagList.length > 0) {
-      const tagLower = tagList.map((t) => t.toLowerCase());
+      const tagLower = tagList.map((t) => t.toLowerCase().trim());
       items = items.filter((it) => {
-        const itemTag = (it.tag || '').toLowerCase();
-        const itemCat = (it.category || '').toLowerCase();
-        const matched = tagLower.some((t) => itemTag.includes(t) || itemCat.includes(t));
-        // Allow newly added items that have a SKU or image even if tag is empty
-        const isUntaggedNew = !itemTag && Boolean(it.sku || it.imageUrl);
-        return matched || isUntaggedNew;
+        const itemTag = (it.tag || '').toLowerCase().trim();
+        const itemCat = (it.category || '').toLowerCase().trim();
+        return tagLower.some((t) => itemTag.includes(t) || itemCat.includes(t));
       });
     }
 
