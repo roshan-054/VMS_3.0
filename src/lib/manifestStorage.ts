@@ -517,23 +517,57 @@ export function isOrderCatalogRecord(item: { gtin?: string; sku?: string; produc
   return false;
 }
 
+export function sanitizeImageUrl(url?: string): string {
+  if (!url || typeof url !== 'string') return '';
+  const trimmed = url.trim();
+  if (!trimmed || trimmed.toLowerCase() === 'general' || trimmed.toLowerCase() === 'packed' || trimmed.toLowerCase() === 'active-online') return '';
+  return getDirectImageUrl(trimmed);
+}
+
 export function getStoredGtinCatalog(): GtinCatalogProduct[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_GTIN_CATALOG);
-    if (!raw) {
-      return [];
+    let parsed: GtinCatalogProduct[] = [];
+    if (raw) {
+      try {
+        parsed = JSON.parse(raw);
+      } catch (e) {}
     }
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      const deletedSet = getDeletedGtinCodes();
-      // Filter out any deleted items, legacy dummy sample data, and accidental order log entries
-      const cleaned = parsed.filter((p) => {
+    if (!Array.isArray(parsed)) parsed = [];
+
+    const deletedSet = getDeletedGtinCodes();
+    // Filter out any deleted items, legacy dummy sample data, and accidental order log entries
+    const cleaned = parsed
+      .filter((p) => {
         const gtin = normalizeBarcode(p.gtin || p.sku);
         return gtin && !SAMPLE_GTIN_SET.has(gtin) && !deletedSet.has(gtin.toLowerCase()) && !isOrderCatalogRecord(p);
+      })
+      .map((p) => ({
+        ...p,
+        imageUrl: sanitizeImageUrl(p.imageUrl),
+      }));
+
+    // Ensure newly added Sandalwood Itra product from user sheet is present
+    const sandalwoodItraGtin = '890619169353';
+    const sandalwoodItraSku = 'SA-IT-SA-01';
+    const hasSandalwood = cleaned.some(
+      (p) => p.sku === sandalwoodItraSku || isBarcodeEqual(p.gtin, sandalwoodItraGtin)
+    );
+
+    if (!hasSandalwood && !deletedSet.has(sandalwoodItraGtin)) {
+      cleaned.unshift({
+        gtin: sandalwoodItraGtin,
+        sku: sandalwoodItraSku,
+        productName: 'Sandalwood Itra',
+        shortName: 'Sandalwood Itra',
+        category: 'General',
+        imageUrl: 'https://lh3.googleusercontent.com/d/1SWluffxYq67p4UyMqHi6c2fDxdUAmowd',
+        defaultQuantity: 1,
+        notes: '',
       });
-      return cleaned;
     }
-    return [];
+
+    return cleaned;
   } catch (e) {
     return [];
   }
@@ -542,10 +576,16 @@ export function getStoredGtinCatalog(): GtinCatalogProduct[] {
 export function saveStoredGtinCatalog(catalog: GtinCatalogProduct[]): void {
   try {
     const deletedSet = getDeletedGtinCodes();
-    const cleaned = catalog.filter((p) => {
-      const gtin = normalizeBarcode(p.gtin || p.sku);
-      return gtin && !SAMPLE_GTIN_SET.has(gtin) && !deletedSet.has(gtin.toLowerCase()) && !isOrderCatalogRecord(p);
-    });
+    const cleaned = catalog
+      .filter((p) => {
+        const gtin = normalizeBarcode(p.gtin || p.sku);
+        return gtin && !SAMPLE_GTIN_SET.has(gtin) && !deletedSet.has(gtin.toLowerCase()) && !isOrderCatalogRecord(p);
+      })
+      .map((p) => ({
+        ...p,
+        imageUrl: sanitizeImageUrl(p.imageUrl),
+      }));
+
     localStorage.setItem(STORAGE_KEY_GTIN_CATALOG, JSON.stringify(cleaned));
     window.dispatchEvent(new CustomEvent('vms_gtin_catalog_updated', { detail: { count: cleaned.length } }));
   } catch (e) {

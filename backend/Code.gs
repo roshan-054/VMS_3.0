@@ -4958,16 +4958,14 @@ function syncExternalGtinSheet_(p) {
     var rawCogs = cogsIdx >= 0 ? row[cogsIdx] : '';
     var rawQty = qtyIdx >= 0 ? Number(row[qtyIdx]) || 1 : 1;
 
-    // Apply tag condition if user specified tags
+    // Apply tag pre-filter if user specified tags (e.g. Active-online)
     if (requestedTags.length > 0) {
-      var tagLower = (rawTag || '').toLowerCase();
-      var catLower = (rawCat || '').toLowerCase();
+      var tagLower = (rawTag || '').toLowerCase().trim();
+      var catLower = (rawCat || '').toLowerCase().trim();
       var matchedTag = requestedTags.some(function(rt) {
         return tagLower.indexOf(rt) !== -1 || catLower.indexOf(rt) !== -1;
       });
-      // Do not reject newly added items with SKU or image if their tag/status column is empty
-      var isNewlyAddedUntagged = !rawTag && (rawSku || rawImg);
-      if (!matchedTag && !isNewlyAddedUntagged) continue;
+      if (!matchedTag) continue; // Pre-filter: discard non-matching items before pushing to AV_VMS_System
     }
 
     items.push({
