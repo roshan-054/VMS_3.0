@@ -74,6 +74,7 @@ import {
 import { getDirectImageUrl } from '../lib/branding';
 import { requestApi } from '../lib/api';
 import { isAdmin, isMasterAdmin } from '../lib/permissions';
+import { SmartProductImage } from './SmartProductImage';
 
 interface OrderProcessingProps {
   currentUser: User | null;
@@ -2227,19 +2228,11 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                               onMouseDown={() => handleSelectProductFromCatalog(index, catItem)}
                               className="px-3 py-2 hover:bg-indigo-50/70 flex items-center gap-2.5 transition cursor-pointer"
                             >
-                              {catItem.imageUrl ? (
-                                <img
-                                  src={getDirectImageUrl(catItem.imageUrl)}
-                                  alt=""
-                                  referrerPolicy="no-referrer"
-                                  loading="lazy"
-                                  className="w-7 h-7 rounded-lg object-contain bg-slate-50 border border-slate-200 p-0.5 shrink-0"
-                                />
-                              ) : (
-                                <div className="w-7 h-7 rounded-lg bg-slate-100 text-slate-400 flex items-center justify-center shrink-0">
-                                  <ShoppingBag className="w-3.5 h-3.5" />
-                                </div>
-                              )}
+                              <SmartProductImage
+                                src={catItem.imageUrl}
+                                alt={catItem.shortName || catItem.productName}
+                                className="w-7 h-7 rounded-lg object-contain bg-slate-50 border border-slate-200 p-0.5 shrink-0"
+                              />
                               <div className="flex-1 min-w-0">
                                 <div className="text-xs font-bold text-slate-900 truncate">
                                   {catItem.shortName || catItem.productName}
@@ -3047,23 +3040,17 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                             {/* Product Header: Thumbnail & Title */}
                             <div className="flex items-start gap-2 min-w-0">
                               <div
-                                onClick={() => it.imageUrl && setSelectedPreviewImage(getDirectImageUrl(it.imageUrl))}
+                                onClick={() => it.imageUrl && setSelectedPreviewImage(it.imageUrl)}
                                 className={`w-9 h-9 rounded-lg bg-slate-50 border border-slate-200 p-0.5 shrink-0 flex items-center justify-center overflow-hidden ${
                                   it.imageUrl ? 'cursor-pointer hover:border-indigo-400 hover:scale-105 transition' : ''
                                 }`}
                                 title={it.imageUrl ? 'Click to view full image' : ''}
                               >
-                                {it.imageUrl ? (
-                                  <img
-                                    src={getDirectImageUrl(it.imageUrl)}
-                                    alt={it.productName}
-                                    referrerPolicy="no-referrer"
-                                    loading="lazy"
-                                    className="w-full h-full object-cover rounded-md"
-                                  />
-                                ) : (
-                                  <ShoppingBag className="w-4 h-4 text-slate-400" />
-                                )}
+                                <SmartProductImage
+                                  src={it.imageUrl}
+                                  alt={it.productName}
+                                  className="w-full h-full object-cover rounded-md"
+                                />
                               </div>
 
                               <div className="min-w-0 flex-1">
@@ -3670,22 +3657,13 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                       </button>
 
                       {/* Product Thumbnail */}
-                      {prod.imageUrl ? (
-                        <img
-                          src={getDirectImageUrl(prod.imageUrl)}
-                          alt={prod.shortName}
-                          referrerPolicy="no-referrer"
-                          loading="lazy"
-                          className="w-13 h-13 rounded-xl object-contain bg-white border border-slate-200 p-1 shadow-xs shrink-0"
-                          onError={(e) => {
-                            (e.target as HTMLElement).style.display = 'none';
-                          }}
-                        />
-                      ) : (
-                        <div className="w-13 h-13 rounded-xl bg-slate-200 text-slate-400 flex items-center justify-center shrink-0">
-                          <ShoppingBag className="w-5 h-5" />
-                        </div>
-                      )}
+                      <SmartProductImage
+                        src={prod.imageUrl}
+                        alt={prod.shortName || prod.productName}
+                        className="w-13 h-13 rounded-xl object-contain bg-white border border-slate-200 p-1 shadow-xs shrink-0"
+                        onClick={() => prod.imageUrl && setSelectedPreviewImage(prod.imageUrl)}
+                        title={prod.imageUrl ? 'Click to enlarge' : undefined}
+                      />
 
                       {/* Product Info */}
                       <div className="min-w-0 flex-1">
@@ -3794,22 +3772,13 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                           </button>
                         </td>
                         <td className="p-2 text-center">
-                          {prod.imageUrl ? (
-                            <img
-                              src={getDirectImageUrl(prod.imageUrl)}
-                              alt=""
-                              referrerPolicy="no-referrer"
-                              loading="lazy"
-                              className="w-8 h-8 rounded-lg object-contain bg-white border border-slate-200 p-0.5 mx-auto"
-                              onError={(e) => {
-                                (e.target as HTMLElement).style.display = 'none';
-                              }}
-                            />
-                          ) : (
-                            <div className="w-8 h-8 rounded-lg bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
-                              <ShoppingBag className="w-4 h-4" />
-                            </div>
-                          )}
+                          <SmartProductImage
+                            src={prod.imageUrl}
+                            alt={prod.shortName || prod.productName}
+                            className="w-8 h-8 rounded-lg object-contain bg-white border border-slate-200 p-0.5 mx-auto"
+                            onClick={() => prod.imageUrl && setSelectedPreviewImage(prod.imageUrl)}
+                            title={prod.imageUrl ? 'Click to enlarge' : undefined}
+                          />
                         </td>
                         <td className="p-3 font-mono font-bold text-slate-900 whitespace-nowrap">
                           {prod.gtin}
@@ -5218,10 +5187,9 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
               </button>
             </div>
             <div className="w-full h-80 bg-slate-50 rounded-2xl border border-slate-200 overflow-hidden flex items-center justify-center p-2">
-              <img
-                src={getDirectImageUrl(selectedPreviewImage)}
+              <SmartProductImage
+                src={selectedPreviewImage}
                 alt="Full Preview"
-                referrerPolicy="no-referrer"
                 className="max-w-full max-h-full object-contain rounded-xl"
               />
             </div>

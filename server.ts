@@ -564,6 +564,45 @@ async function startServer() {
     }
   });
 
+  // Google Sheet direct CSV fetch proxy (bypasses browser CORS & provides clear error messaging)
+  app.get('/api/proxy/sheet-csv', async (req, res) => {
+    try {
+      const sheetId = String(req.query.sheetId || '').trim();
+      const tabName = String(req.query.tabName || 'GTINCatalog').trim();
+      if (!sheetId) {
+        return res.status(400).json({ error: 'Missing sheetId query parameter' });
+      }
+
+      const encTab = encodeURIComponent(tabName);
+      const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encTab}`;
+
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        },
+      });
+
+      const text = await response.text();
+      if (
+        text.startsWith('<!DOCTYPE') ||
+        text.startsWith('<html') ||
+        text.includes('accounts.google.com') ||
+        text.includes('login') ||
+        text.includes('找不到網頁')
+      ) {
+        return res.status(403).json({
+          error:
+            'Google Sheet is not shared publicly. In Google Sheets, click "Share" -> change General Access to "Anyone with the link can view".',
+        });
+      }
+
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      return res.send(text);
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Failed to fetch Google Sheet CSV' });
+    }
+  });
+
   // AI Packing Video Focus & Area Identification Endpoint
   app.post('/api/ai/analyze-packing-video', async (req, res) => {
     try {

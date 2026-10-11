@@ -587,17 +587,11 @@ export function getStoredGtinCatalog(): GtinCatalogProduct[] {
       })
       .map(fixMisalignedProduct);
 
-    // Ensure newly added Sandalwood Itra product from user sheet is present
-    const sandalwoodItraGtin = '890619169353';
-    const sandalwoodItraSku = 'SA-IT-SA-01';
-    const hasSandalwood = cleaned.some(
-      (p) => p.sku === sandalwoodItraSku || isBarcodeEqual(p.gtin, sandalwoodItraGtin)
-    );
-
-    if (!hasSandalwood && !deletedSet.has(sandalwoodItraGtin)) {
-      cleaned.unshift({
-        gtin: sandalwoodItraGtin,
-        sku: sandalwoodItraSku,
+    // Ensure initial core products from user sheet are present
+    const seedCatalog: GtinCatalogProduct[] = [
+      {
+        gtin: '890619169353',
+        sku: 'SA-IT-SA-01',
         productName: 'Sandalwood Itra',
         shortName: 'Sandalwood Itra',
         category: 'Active-online',
@@ -606,8 +600,26 @@ export function getStoredGtinCatalog(): GtinCatalogProduct[] {
           'https://lh3.googleusercontent.com/rd-d/ALs6j_FAhm5CdpUxFt7_rcUVFvGzlZPPhen1tZrfd5zBBQbFbmvJwLlD7lQv0YFuN864QhK2FkX_5k79xLlb2xGgQiOwg-59YjTwrEnDlNx9FFNtdOg4i-jRBhvoTF7tNpccqu7d5i2SxaEaCQ3AHORNS3D7XAS8rl954YFz3Tq0oQJmhwNYHEujW2ZypXyaUJlC_WZ27l1Vk_k22-prW8UsJTPCzOSHnPKlTW6XcPEz6N9Rhc_JqmHPQhM30a4OEK7tMDr_Ut5-6Cv_Tzm2uPNiCJw4SkfzuU_SmEwIwykfTxaxOYCWtuu2O1FMlBBFGFhKocldzCuPd7QzvxpAtKdT0ZrwSHWgFD9TIR2EtQNzxCR-pW0EaAGKQx3sUvOB9ZcoIDmYwUQClTn7hcF38JRrQtSrOx-iTrkZLYZT_-3Y7TWtfrnqbOUzqMTZL22bEDEBtb1kZTJtxRBqaym9sEObSttiWmXJWvcrEhnQMoIyAcBX8mesWdPo7KGtgeJSjTopDW4DFlOKJRDgDhgbV29NKm7G49HN6aUAMqZP5x3QIWLhD6bZQgdfwaikxPdkH_Y_-PKTemHtVTr2Ovf1kxH7j3DfK8vQA4wD8Bj1zCuLPdJGpHESCE1fDV4lrI9SKZg5feLFj50KaDrv_I_DOtnSEdVh2r0l6qqbN3oHDXQ5ijMAVFZ9OxMUFjCEZkHx4ETbpL0vfEBYsid6CxyrMxlzU4oBhpW05w0KNRMaUr41yQZCDpVZFK03TNYNjEW5OPb-qdy13PU4BkVfyR4DBSQ6XTjTKgO6yoxJm2bV6yEade-mZ9zIAnIa8jYb7kaBJUBa9cj6W7GBYfJEcUxr2heDJXt1NRkDYao1U-uBAvdsbItvEESiFqmrGJkH4xBOjr1Z1UyJHsihwR5Jc-Ae9z19IAeO8Z3ASotiGSQE79arQ_rTqoN_nCMX4A42iY7l9HuoL91f_hTDytcMpO0AAeb1qOuEvqLUj5ncyjUU_hz3xKsEo-xULwpWS_rJHYD9v0h2XDndAPBxwU2YRXRGEbHIHI2p0xuoq8QuiJvlbpABUbAIrUQUpaley0yqCkN04MFn36J5kh5Oj4uuQfL6wh87wKWNfTIOfahtprvd5SRFlpAVU9dj8YMzbNYN-c_o8b0wBNnqCtXtKbAnWzGXgxEdCfes5AscyKnORrKeWGo=s1600',
         defaultQuantity: 1,
         notes: '',
-      });
-    }
+      },
+      {
+        gtin: '8906191690025',
+        sku: 'UP-KUM-01',
+        productName: 'Kumkumadi Tailam (Oil)',
+        shortName: 'Kumkumadi Oil',
+        category: 'Active-online',
+        tag: 'Active-online',
+        imageUrl: '',
+        defaultQuantity: 1,
+        notes: '',
+      }
+    ];
+
+    seedCatalog.forEach((seed) => {
+      const g = normalizeBarcode(seed.gtin);
+      if (!cleaned.some((p) => p.sku === seed.sku || isBarcodeEqual(p.gtin, seed.gtin)) && !deletedSet.has(g.toLowerCase())) {
+        cleaned.push(seed);
+      }
+    });
 
     // Return the full clean catalog. Tag and search filtering is done interactively in the UI,
     // preserving all catalog products in local storage without destructive overwrites.
@@ -1040,13 +1052,40 @@ export function extractSpreadsheetId(input: string): string {
  */
 async function fetchAndParseDirectGoogleSheetCsv(sheetId: string, tabName: string): Promise<GtinCatalogProduct[]> {
   const encTab = encodeURIComponent(tabName || 'GTINCatalog');
-  const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encTab}`;
-  const resp = await fetch(url);
-  if (!resp.ok) {
-    throw new Error(`Direct CSV request returned HTTP ${resp.status}`);
+  let text = '';
+
+  // 1. Try local server-side proxy route first (bypasses browser CORS & iframe sandbox restrictions)
+  try {
+    const proxyResp = await fetch(`/api/proxy/sheet-csv?sheetId=${sheetId}&tabName=${encTab}`);
+    if (proxyResp.ok) {
+      text = await proxyResp.text();
+    }
+  } catch (_) {}
+
+  // 2. Direct browser fetch fallback (for static deployment)
+  if (!text) {
+    const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encTab}`;
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      throw new Error(`Direct CSV request returned HTTP ${resp.status}`);
+    }
+    text = await resp.text();
   }
-  const text = await resp.text();
+
   if (!text || text.trim().length === 0) return [];
+
+  // Detect Google login HTML redirection indicating private/restricted sheet
+  if (
+    text.startsWith('<!DOCTYPE') ||
+    text.startsWith('<html') ||
+    text.includes('accounts.google.com') ||
+    text.includes('login') ||
+    text.includes('找不到網頁')
+  ) {
+    throw new Error(
+      'Google Sheet is restricted or private. Please open the Google Sheet, click "Share" (top-right), and set General access to "Anyone with the link can view".'
+    );
+  }
 
   // Parse CSV rows handling quoted values
   const lines: string[][] = [];

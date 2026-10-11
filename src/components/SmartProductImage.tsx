@@ -7,19 +7,31 @@ interface SmartProductImageProps {
   alt?: string;
   className?: string;
   fallbackClassName?: string;
+  onClick?: () => void;
+  title?: string;
 }
 
 export const SmartProductImage: React.FC<SmartProductImageProps> = ({
   src,
   alt = 'Product',
   className = 'w-12 h-12 rounded-xl object-contain bg-white border border-slate-200 p-1',
-  fallbackClassName
+  fallbackClassName,
+  onClick,
+  title
 }) => {
   const [errorStage, setErrorStage] = useState<number>(0);
 
   if (!src || !src.trim()) {
     return (
-      <div className={fallbackClassName || className.replace('object-contain', '').replace('bg-white', 'bg-slate-100') + ' flex items-center justify-center'}>
+      <div
+        onClick={onClick}
+        title={title}
+        className={
+          (fallbackClassName || className.replace('object-contain', '').replace('bg-white', 'bg-slate-100')) +
+          ' flex items-center justify-center' +
+          (onClick ? ' cursor-pointer' : '')
+        }
+      >
         <ShoppingBag className="w-1/2 h-1/2 text-slate-400" />
       </div>
     );
@@ -38,7 +50,13 @@ export const SmartProductImage: React.FC<SmartProductImageProps> = ({
 
   if (errorStage >= 3) {
     return (
-      <div className={fallbackClassName || className + ' overflow-hidden flex items-center justify-center p-0.5'} title="Private or expired Drive link. Click to open in Drive.">
+      <div
+        className={
+          (fallbackClassName || className) +
+          ' overflow-hidden flex items-center justify-center p-0.5'
+        }
+        title="Private or restricted Drive link. Click to open in Drive."
+      >
         <a
           href={raw}
           target="_blank"
@@ -56,9 +74,11 @@ export const SmartProductImage: React.FC<SmartProductImageProps> = ({
     <img
       src={currentSrc}
       alt={alt}
-      className={className}
+      title={title}
+      className={className + (onClick ? ' cursor-pointer' : '')}
       referrerPolicy="no-referrer"
       loading="lazy"
+      onClick={onClick}
       onError={() => {
         setErrorStage((prev) => prev + 1);
       }}

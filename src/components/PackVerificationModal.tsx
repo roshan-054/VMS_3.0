@@ -30,6 +30,7 @@ import {
 } from '../lib/manifestStorage';
 import { getDirectImageUrl } from '../lib/branding';
 import { sharedScannerSync } from '../lib/phoneScannerSync';
+import { SmartProductImage } from './SmartProductImage';
 
 interface PackVerificationModalProps {
   manifest: OrderManifest;
@@ -592,17 +593,12 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
               >
                 {/* Product Thumbnail */}
                 <div className="relative shrink-0">
-                  {item.imageUrl ? (
-                    <img
-                      src={getDirectImageUrl(item.imageUrl)}
-                      alt={item.shortName || item.productName}
-                      className="w-16 h-16 rounded-xl object-contain bg-slate-900 border border-slate-700 p-1"
-                    />
-                  ) : (
-                    <div className="w-16 h-16 rounded-xl bg-slate-800 text-slate-400 flex items-center justify-center">
-                      <ShoppingBag className="w-6 h-6" />
-                    </div>
-                  )}
+                  <SmartProductImage
+                    src={item.imageUrl}
+                    alt={item.shortName || item.productName}
+                    className="w-16 h-16 rounded-xl object-contain bg-slate-900 border border-slate-700 p-1"
+                    fallbackClassName="w-16 h-16 rounded-xl bg-slate-800 text-slate-400"
+                  />
 
                   {isItemDone && (
                     <div className="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center shadow-md animate-bounce">

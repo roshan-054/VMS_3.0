@@ -39,6 +39,7 @@ import { requestApi, formatFileSize, deleteLogEntry, fetchDriveFileSize } from '
 import { canUserDeleteData } from '../lib/permissions';
 import { getStoredManifests, getManifestByOrderId } from '../lib/manifestStorage';
 import { getDirectImageUrl } from '../lib/branding';
+import { SmartProductImage } from './SmartProductImage';
 
 interface SearchOrdersProps {
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
@@ -963,11 +964,11 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast, current
                         >
                           <div className="flex items-center gap-2.5 min-w-0 flex-1">
                             <div className="w-9 h-9 rounded-lg bg-slate-100 border border-slate-200 shrink-0 flex items-center justify-center overflow-hidden">
-                              {it.imageUrl ? (
-                                <img src={getDirectImageUrl(it.imageUrl)} alt={it.productName} className="w-full h-full object-cover" />
-                              ) : (
-                                <ShoppingBag className="w-4 h-4 text-slate-400" />
-                              )}
+                              <SmartProductImage
+                                src={it.imageUrl}
+                                alt={it.productName || it.shortName}
+                                className="w-full h-full object-cover"
+                              />
                             </div>
                             <div className="min-w-0 flex-1">
                               <div className="text-xs font-bold text-slate-900 truncate" title={it.productName || it.shortName}>
