@@ -136,7 +136,34 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     field: 'gtin' | 'sku' | 'productName';
   } | null>(null);
 
-  // --- External GTIN Google Sheet Sync Modal / Settings State ---
+  // --- Refresh / Sync Loading State ---
+  const [isRefreshingData, setIsRefreshingData] = useState<boolean>(false);
+
+  // Function to perform a complete live refresh of all manifest orders, GTIN catalog, and verification logs from Google Sheets
+  const handleRefreshAllLiveData = async () => {
+    setIsRefreshingData(true);
+    try {
+      await Promise.allSettled([
+        syncManifestsWithCloud().then((res) => {
+          if (res && res.manifests) setManifests(res.manifests);
+        }),
+        syncGtinWithMasterSheet().then(() => {
+          setGtinCatalog(getStoredGtinCatalog());
+        }),
+        syncVerificationLogsWithCloud().then((res) => {
+          if (res && res.logs) setVerificationLogs(res.logs);
+        })
+      ]);
+      const currentManifests = getStoredManifests();
+      const currentCatalog = getStoredGtinCatalog();
+      setManifests(currentManifests);
+      setGtinCatalog(currentCatalog);
+    } catch (e) {
+      console.warn('Refresh notice:', e);
+    } finally {
+      setIsRefreshingData(false);
+    }
+  };
   const [isSyncModalOpen, setIsSyncModalOpen] = useState<boolean>(false);
   const [gtinSheetInput, setGtinSheetInput] = useState<string>(() => getGtinSheetConfig().sheetIdOrUrl);
   const [gtinSheetTab, setGtinSheetTab] = useState<string>(() => getGtinSheetConfig().tabName || 'GTINCatalog');
@@ -262,12 +289,8 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     };
     loadUsers();
 
-    // Initial background real-time sync with Google Sheet
-    syncGtinWithMasterSheet().then(() => {
-      setGtinCatalog(getStoredGtinCatalog());
-    }).catch(() => {});
-    syncManifestsWithCloud().catch(() => {});
-    syncVerificationLogsWithCloud().catch(() => {});
+    // Initial real-time cloud data refresh from Google Sheet
+    handleRefreshAllLiveData();
 
     // Periodic Real-Time Polling for live manifest creation and completion
     const syncInterval = setInterval(() => {
@@ -1615,6 +1638,22 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         {/* Quick Top Actions (Admin Only) */}
         {isUserAdmin && (
           <div className="flex flex-wrap items-center gap-2">
+            {/* Primary Refresh Live Cloud Data Button */}
+            <button
+              type="button"
+              disabled={isRefreshingData}
+              onClick={handleRefreshAllLiveData}
+              className={`px-3.5 py-2 text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-2xs ${
+                isRefreshingData
+                  ? 'bg-indigo-600 text-white shadow-md'
+                  : 'bg-white hover:bg-slate-50 text-slate-800 border border-slate-300'
+              }`}
+              title="Refresh and fetch all live manifest orders, GTIN catalog, and logs directly from Google Sheets"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingData ? 'animate-spin text-white' : 'text-indigo-600'}`} />
+              <span>{isRefreshingData ? 'Refreshing Data...' : 'Refresh Live Data'}</span>
+            </button>
+
             {/* Sync Google Sheet Button Group with Direct Settings / Tab Configuration (Shown on non-GTIN subtabs) */}
             {activeSubTab !== 'gtin' && (
               <div className="inline-flex rounded-xl shadow-xs overflow-hidden border border-emerald-700 bg-emerald-600">
@@ -1758,6 +1797,21 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         </div>
       </div>
 
+      {/* Live Refresh Banner Indicator */}
+      {isRefreshingData && (
+        <div className="bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 text-white rounded-2xl p-3 px-4 flex items-center justify-between gap-3 shadow-md animate-pulse">
+          <div className="flex items-center gap-2.5">
+            <RefreshCw className="w-4 h-4 animate-spin text-white shrink-0" />
+            <span className="text-xs font-bold">
+              Fetching live manifest orders &amp; GTIN catalog directly from Google Sheets...
+            </span>
+          </div>
+          <span className="text-[10px] font-mono bg-white/20 px-2 py-0.5 rounded-md font-bold uppercase tracking-wider">
+            Refreshing Live Data
+          </span>
+        </div>
+      )}
+
       {/* Stats Summary Cards (Interactive Filters) */}
       <div className={`grid grid-cols-2 sm:grid-cols-${isUserAdmin ? '4' : '3'} gap-3 sm:gap-4`}>
         <div
@@ -1773,7 +1827,10 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
             <span>Total Manifest Orders</span>
             <Boxes className="w-3.5 h-3.5 text-slate-400" />
           </div>
-          <div className="text-2xl font-black text-slate-900">{stats.total}</div>
+          <div className="text-2xl font-black text-slate-900 flex items-center gap-2">
+            <span>{stats.total}</span>
+            {isRefreshingData && <RefreshCw className="w-4 h-4 text-indigo-600 animate-spin" />}
+          </div>
           <span className="text-[10px] text-indigo-600 font-semibold">Click to view all →</span>
         </div>
 
@@ -1790,7 +1847,10 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
             <span>Pending Packing</span>
             <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
           </div>
-          <div className="text-2xl font-black text-amber-600">{stats.pending}</div>
+          <div className="text-2xl font-black text-amber-600 flex items-center gap-2">
+            <span>{stats.pending}</span>
+            {isRefreshingData && <RefreshCw className="w-4 h-4 text-amber-600 animate-spin" />}
+          </div>
           <span className="text-[10px] text-amber-700 font-semibold">Click to filter pending →</span>
         </div>
 
@@ -1807,7 +1867,10 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
             <span>Packed &amp; Verified</span>
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
           </div>
-          <div className="text-2xl font-black text-emerald-600">{stats.packed}</div>
+          <div className="text-2xl font-black text-emerald-600 flex items-center gap-2">
+            <span>{stats.packed}</span>
+            {isRefreshingData && <RefreshCw className="w-4 h-4 text-emerald-600 animate-spin" />}
+          </div>
           <span className="text-[10px] text-emerald-700 font-semibold">Click to filter packed →</span>
         </div>
 
@@ -1824,7 +1887,10 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
               <span>GTIN Catalog Size</span>
               <Barcode className="w-3.5 h-3.5 text-indigo-500" />
             </div>
-            <div className="text-2xl font-black text-indigo-600">{gtinCatalog.length} Items</div>
+            <div className="text-2xl font-black text-indigo-600 flex items-center gap-2">
+              <span>{gtinCatalog.length} Items</span>
+              {isRefreshingData && <RefreshCw className="w-4 h-4 text-indigo-600 animate-spin" />}
+            </div>
             <span className="text-[10px] text-indigo-600 font-semibold">Click to open catalog →</span>
           </div>
         )}
