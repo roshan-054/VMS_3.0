@@ -138,15 +138,25 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
   // --- Refresh / Sync Loading State ---
   const [isRefreshingData, setIsRefreshingData] = useState<boolean>(false);
+  const [refreshStatusMessage, setRefreshStatusMessage] = useState<string>('Refreshing live data from Google Sheets...');
+
+  const handleCancelRefresh = () => {
+    setIsRefreshingData(false);
+    onShowToast('Refresh stopped. Showing current local catalog.', 'info');
+  };
 
   // Function to perform a complete live refresh of all manifest orders, GTIN catalog, and verification logs from Google Sheets
   const handleRefreshAllLiveData = async () => {
+    if (isRefreshingData) return;
     setIsRefreshingData(true);
+    setRefreshStatusMessage('Connecting to Google Sheets...');
+
     const safetyTimer = setTimeout(() => {
       setIsRefreshingData(false);
-    }, 12000);
+    }, 8000);
 
     try {
+      setRefreshStatusMessage('Fetching live orders, GTIN catalog & logs...');
       await Promise.allSettled([
         syncManifestsWithCloud().then((res) => {
           if (res && res.manifests && res.manifests.length > 0) setManifests(res.manifests);
@@ -297,15 +307,32 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     // Initial real-time cloud data refresh from Google Sheet
     handleRefreshAllLiveData();
 
-    // Periodic Real-Time Polling for live manifest creation and completion
-    const syncInterval = setInterval(() => {
-      syncManifestsWithCloud().catch(() => {});
-      syncVerificationLogsWithCloud().catch(() => {});
-    }, 10000);
+    // Periodic Real-Time Polling for live manifest creation (60s interval with in-flight guard to avoid looping)
+    let isPolling = false;
+    const syncInterval = setInterval(async () => {
+      if (isPolling) return;
+      isPolling = true;
+      try {
+        await Promise.allSettled([
+          syncManifestsWithCloud(),
+          syncVerificationLogsWithCloud(),
+        ]);
+      } catch (_) {
+      } finally {
+        isPolling = false;
+      }
+    }, 60000);
 
     const handleWindowFocus = () => {
-      syncManifestsWithCloud().catch(() => {});
-      syncVerificationLogsWithCloud().catch(() => {});
+      if (!isPolling) {
+        isPolling = true;
+        Promise.allSettled([
+          syncManifestsWithCloud(),
+          syncVerificationLogsWithCloud(),
+        ]).finally(() => {
+          isPolling = false;
+        });
+      }
     };
     window.addEventListener('focus', handleWindowFocus);
 
@@ -2147,6 +2174,8 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                         <img
                           src={getDirectImageUrl(item.imageUrl)}
                           alt="Product"
+                          referrerPolicy="no-referrer"
+                          loading="lazy"
                           className="w-16 h-16 rounded-xl object-contain bg-white border border-slate-200 p-1 shadow-xs"
                           onError={(e) => {
                             (e.target as HTMLElement).style.display = 'none';
@@ -2199,7 +2228,13 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                               className="px-3 py-2 hover:bg-indigo-50/70 flex items-center gap-2.5 transition cursor-pointer"
                             >
                               {catItem.imageUrl ? (
-                                <img src={getDirectImageUrl(catItem.imageUrl)} alt="" className="w-7 h-7 rounded-lg object-contain bg-slate-50 border border-slate-200 p-0.5 shrink-0" />
+                                <img
+                                  src={getDirectImageUrl(catItem.imageUrl)}
+                                  alt=""
+                                  referrerPolicy="no-referrer"
+                                  loading="lazy"
+                                  className="w-7 h-7 rounded-lg object-contain bg-slate-50 border border-slate-200 p-0.5 shrink-0"
+                                />
                               ) : (
                                 <div className="w-7 h-7 rounded-lg bg-slate-100 text-slate-400 flex items-center justify-center shrink-0">
                                   <ShoppingBag className="w-3.5 h-3.5" />
@@ -3019,7 +3054,13 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                                 title={it.imageUrl ? 'Click to view full image' : ''}
                               >
                                 {it.imageUrl ? (
-                                  <img src={getDirectImageUrl(it.imageUrl)} alt={it.productName} className="w-full h-full object-cover rounded-md" />
+                                  <img
+                                    src={getDirectImageUrl(it.imageUrl)}
+                                    alt={it.productName}
+                                    referrerPolicy="no-referrer"
+                                    loading="lazy"
+                                    className="w-full h-full object-cover rounded-md"
+                                  />
                                 ) : (
                                   <ShoppingBag className="w-4 h-4 text-slate-400" />
                                 )}
@@ -3201,6 +3242,38 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
       {/* SUB-TAB 3: GTIN BARCODE CATALOG */}
       {activeSubTab === 'gtin' && (
         <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs space-y-4">
+          {/* Real-time Refresh / Sync Progress Indicator */}
+          {(isSyncingMasterSheet || isSyncingSheet || isRefreshingData) && (
+            <div className="bg-gradient-to-r from-indigo-600 via-indigo-700 to-blue-700 text-white rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg animate-fade-in border border-indigo-400/30">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-xs flex items-center justify-center shrink-0">
+                  <RefreshCw className="w-5 h-5 text-white animate-spin" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold flex items-center gap-2">
+                    <span>Synchronizing GTIN Catalog with Google Sheets</span>
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  </h4>
+                  <p className="text-[11px] text-indigo-100 mt-0.5">
+                    Fetching products, barcodes &amp; images from tab <code className="bg-black/20 px-1.5 py-0.2 rounded font-mono text-white">{getGtinSheetConfig().tabName || 'GTINCatalog'}</code>
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSyncingMasterSheet(false);
+                  setIsSyncingSheet(false);
+                  setIsRefreshingData(false);
+                  onShowToast('Refresh stopped. Displaying current local catalog.', 'info');
+                }}
+                className="px-3.5 py-1.5 bg-white/20 hover:bg-white/30 text-white text-xs font-bold rounded-xl transition cursor-pointer self-start sm:self-auto border border-white/20"
+              >
+                Stop / Cancel
+              </button>
+            </div>
+          )}
+
           {/* Active Google Sheet Sync Status Bar (Admin Only) */}
           {isUserAdmin && (
             <div className="bg-gradient-to-r from-emerald-50 via-slate-50 to-indigo-50/40 border border-emerald-200/80 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-2xs">
@@ -3523,9 +3596,32 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
               <p className="text-xs text-slate-400 max-w-sm mx-auto">
                 {gtinSearchQuery
                   ? 'Try searching with a different product name, SKU, or GTIN barcode.'
-                  : 'Add your products or paste from Excel to enable instantaneous auto-fetch during order entry.'}
+                  : 'Add your products, paste from Excel, or sync directly from your master Google Sheet (tab UE / GTINCatalog).'}
               </p>
-              <div className="flex items-center justify-center gap-2 pt-2">
+              <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+                <button
+                  type="button"
+                  disabled={isSyncingMasterSheet || isSyncingSheet}
+                  onClick={handleSyncMasterSheet}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-emerald-600/20"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingMasterSheet || isSyncingSheet ? 'animate-spin' : ''}`} />
+                  <span>Sync from Google Sheet</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const cfg = getGtinSheetConfig();
+                    setGtinSheetInput(cfg.sheetIdOrUrl);
+                    setGtinSheetTab(cfg.tabName || 'GTINCatalog');
+                    setGtinSheetTagsInput(cfg.tagsFilter || '');
+                    setIsSyncModalOpen(true);
+                  }}
+                  className="px-3.5 py-2 bg-white text-slate-700 font-bold text-xs rounded-xl border border-slate-300 hover:bg-slate-50 cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                >
+                  <Sliders className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Configure Sheet &amp; Tab</span>
+                </button>
                 <button
                   type="button"
                   onClick={handleOpenBulkManualModal}
@@ -3578,6 +3674,8 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                         <img
                           src={getDirectImageUrl(prod.imageUrl)}
                           alt={prod.shortName}
+                          referrerPolicy="no-referrer"
+                          loading="lazy"
                           className="w-13 h-13 rounded-xl object-contain bg-white border border-slate-200 p-1 shadow-xs shrink-0"
                           onError={(e) => {
                             (e.target as HTMLElement).style.display = 'none';
@@ -3591,9 +3689,11 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
                       {/* Product Info */}
                       <div className="min-w-0 flex-1">
-                        <span className="text-[10px] font-mono text-indigo-600 uppercase font-bold truncate block">
-                          {prod.category || 'General'}
-                        </span>
+                        {Boolean(prod.category || prod.tag) && (
+                          <span className="text-[10px] font-mono text-indigo-600 uppercase font-bold truncate block">
+                            {prod.category || prod.tag}
+                          </span>
+                        )}
                         <h3 className="text-xs font-bold text-slate-900 truncate" title={prod.productName}>
                           {prod.shortName || prod.productName}
                         </h3>
@@ -3698,6 +3798,8 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                             <img
                               src={getDirectImageUrl(prod.imageUrl)}
                               alt=""
+                              referrerPolicy="no-referrer"
+                              loading="lazy"
                               className="w-8 h-8 rounded-lg object-contain bg-white border border-slate-200 p-0.5 mx-auto"
                               onError={(e) => {
                                 (e.target as HTMLElement).style.display = 'none';
@@ -3722,9 +3824,11 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                           {prod.shortName || '-'}
                         </td>
                         <td className="p-3 whitespace-nowrap">
-                          <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-full font-mono text-[10px] font-bold">
-                            {prod.category || 'General'}
-                          </span>
+                          {Boolean(prod.category || prod.tag) && (
+                            <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-full font-mono text-[10px] font-bold">
+                              {prod.category || prod.tag}
+                            </span>
+                          )}
                         </td>
                         <td className="p-3 text-right whitespace-nowrap">
                           <div className="flex items-center justify-end gap-1.5">
@@ -3920,6 +4024,38 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                 />
                 <span className="text-[10px] text-slate-400 mt-1 block">
                   {gtinSheetInput.trim() ? 'Using Custom Google Sheet' : 'Using connected Master Google Sheet'}
+                </span>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
+                  <span>Sheet Tab Name</span>
+                  <div className="flex items-center gap-1.5">
+                    {['UE', 'Master UE', 'GTINCatalog', 'Products'].map((tab) => (
+                      <button
+                        key={tab}
+                        type="button"
+                        onClick={() => setGtinSheetTab(tab)}
+                        className={`text-[10px] px-2 py-0.5 rounded-md font-mono font-bold transition cursor-pointer border ${
+                          gtinSheetTab === tab
+                            ? 'bg-indigo-600 text-white border-indigo-600'
+                            : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200'
+                        }`}
+                      >
+                        {tab}
+                      </button>
+                    ))}
+                  </div>
+                </label>
+                <input
+                  type="text"
+                  value={gtinSheetTab}
+                  onChange={(e) => setGtinSheetTab(e.target.value)}
+                  placeholder="e.g. UE, Master UE, GTINCatalog, Products"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500 shadow-inner"
+                />
+                <span className="text-[10px] text-slate-400 mt-1 block">
+                  The exact sheet tab to fetch products and barcodes from (e.g. <strong>UE</strong> or <strong>GTINCatalog</strong>).
                 </span>
               </div>
 
@@ -5085,6 +5221,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
               <img
                 src={getDirectImageUrl(selectedPreviewImage)}
                 alt="Full Preview"
+                referrerPolicy="no-referrer"
                 className="max-w-full max-h-full object-contain rounded-xl"
               />
             </div>

@@ -57,6 +57,8 @@ export const SmartProductImage: React.FC<SmartProductImageProps> = ({
       src={currentSrc}
       alt={alt}
       className={className}
+      referrerPolicy="no-referrer"
+      loading="lazy"
       onError={() => {
         setErrorStage((prev) => prev + 1);
       }}

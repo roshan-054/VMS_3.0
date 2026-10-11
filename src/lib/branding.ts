@@ -64,7 +64,7 @@ export function getDirectImageUrl(rawUrl: string): string {
   if (!trimmed) return '';
 
   // Direct data URIs and blob URIs are already directly displayable
-  if (trimmed.startsWith('data:') || trimmed.startsWith('blob:')) {
+  if (trimmed.startsWith('data:') || trimmed.startsWith('blob:') || trimmed.includes('googleusercontent.com/rd-d/')) {
     return trimmed;
   }
 

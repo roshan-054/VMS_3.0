@@ -46,40 +46,50 @@ export async function requestApi<T = any>(
     let response: Response | null = null;
     let lastFetchErr: any = null;
 
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 12000);
-        response = await fetch(url, {
-          method: 'POST',
-          mode: 'cors',
-          redirect: 'follow',
-          credentials: 'omit',
-          signal: controller.signal,
-          headers: {
-            'Content-Type': 'text/plain;charset=utf-8',
-          },
-          body,
-        });
-        clearTimeout(timeoutId);
-        if (response && response.ok) break;
-      } catch (fetchErr: any) {
-        lastFetchErr = fetchErr;
-        if (attempt < 2) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
-        }
-      }
+    // Single attempt for fast responsiveness, with 8s abort limit
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      response = await fetch(url, {
+        method: 'POST',
+        mode: 'cors',
+        redirect: 'follow',
+        credentials: 'omit',
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'text/plain;charset=utf-8',
+        },
+        body,
+      });
+      clearTimeout(timeoutId);
+    } catch (fetchErr: any) {
+      lastFetchErr = fetchErr;
     }
 
     if (!response) {
+      if (lastFetchErr && lastFetchErr.name === 'AbortError') {
+        throw new Error('Request timed out (8s limit). Google Apps Script may be waking up or slow.');
+      }
       throw lastFetchErr || new Error('Network request failed. Please check your connection.');
     }
 
     const text = await response.text();
+
+    if (response.status === 404 || text.includes('找不到網頁') || text.includes('無法開啟這個檔案')) {
+      throw new Error(
+        'Apps Script deployment not found (HTTP 404). Please ensure the Web App URL in Settings is active and deployed with "Anyone" access.'
+      );
+    }
+
     let data: ApiResponse<T>;
     try {
       data = JSON.parse(text);
     } catch (err) {
+      if (text.startsWith('<!DOCTYPE') || text.startsWith('<html')) {
+        throw new Error(
+          'Google Apps Script returned an HTML page instead of JSON. Ensure the Web App is deployed as "Execute as: Me" and "Who has access: Anyone".'
+        );
+      }
       if (
         text.toLowerCase().includes('version') ||
         text.toLowerCase().includes('less than the existing version')

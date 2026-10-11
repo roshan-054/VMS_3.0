@@ -4682,7 +4682,7 @@ function getGtinCatalog_(p) {
     var rawShort = shortNameIdx >= 0 && r[shortNameIdx] ? String(r[shortNameIdx]).trim() : rawName;
     var rawImg = imgIdx >= 0 ? convertDriveImageUrl_(r[imgIdx]) : '';
     var rawTag = tagIdx >= 0 ? String(r[tagIdx] || '').trim() : '';
-    var rawCat = catIdx >= 0 ? String(r[catIdx] || '').trim() : (rawTag || 'General');
+    var rawCat = catIdx >= 0 ? String(r[catIdx] || '').trim() : (rawTag || '');
     var rawCogs = cogsIdx >= 0 ? r[cogsIdx] : '';
     var rawQty = qtyIdx >= 0 ? (Number(r[qtyIdx]) || 1) : 1;
     var rawNotes = notesIdx >= 0 ? String(r[notesIdx] || '').trim() : '';
@@ -4968,7 +4968,7 @@ function syncExternalGtinSheet_(p) {
     var rawShort = shortNameIdx >= 0 && row[shortNameIdx] ? String(row[shortNameIdx]).trim() : rawName;
     var rawImg = imgIdx >= 0 ? convertDriveImageUrl_(row[imgIdx]) : '';
     var rawTag = tagIdx >= 0 ? String(row[tagIdx] || '').trim() : '';
-    var rawCat = catIdx >= 0 ? String(row[catIdx] || '').trim() : (rawTag || 'General');
+    var rawCat = catIdx >= 0 ? String(row[catIdx] || '').trim() : (rawTag || '');
     var rawCogs = cogsIdx >= 0 ? row[cogsIdx] : '';
     var rawQty = qtyIdx >= 0 ? Number(row[qtyIdx]) || 1 : 1;
 

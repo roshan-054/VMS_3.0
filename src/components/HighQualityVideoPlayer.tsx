@@ -57,9 +57,8 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
   const [duration, setDuration] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [isCapturing, setIsCapturing] = useState(false);
-  const [snapshotSuccess, setSnapshotSuccess] = useState(false);
-  const [snapshotMessage, setSnapshotMessage] = useState<string>('Snapshot Saved as PNG!');
+  const [toastMessage, setToastMessage] = useState<string>('');
+  const [showToast, setShowToast] = useState(false);
   const [isAiFocusModalOpen, setIsAiFocusModalOpen] = useState(false);
 
   // High-Precision Inspection Zoom & Pan State
@@ -248,108 +247,6 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
     }
   };
 
-  // Robust High-Resolution Snapshot Capture
-  const handleCaptureSnapshot = async () => {
-    setIsCapturing(true);
-
-    // Case 1: Native Local Master Video Element Available
-    if (videoRef.current && playerMode === 'local_master') {
-      try {
-        const video = videoRef.current;
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth || 1920;
-        canvas.height = video.videoHeight || 1080;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          
-          // Evidence footer stamp
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
-          ctx.fillRect(20, canvas.height - 50, 520, 36);
-          ctx.fillStyle = '#ffffff';
-          ctx.font = 'bold 15px monospace';
-          ctx.fillText(`ORDER: ${orderId} | TIME: ${formatTime(video.currentTime, true)}`, 32, canvas.height - 27);
-
-          const dataUrl = canvas.toDataURL('image/png', 1.0);
-          const link = document.createElement('a');
-          link.href = dataUrl;
-          link.download = `${orderId}_Snapshot_${Math.floor(video.currentTime)}s.png`;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-
-          setSnapshotMessage('Lossless 1080p Snapshot Saved as PNG!');
-          setSnapshotSuccess(true);
-          setTimeout(() => setSnapshotSuccess(false), 3000);
-        }
-      } catch (err) {
-        console.warn('Canvas snapshot error:', err);
-      } finally {
-        setIsCapturing(false);
-      }
-      return;
-    }
-
-    // Case 2: Google Drive Embedded Stream / Cloud Stream Frame Capture
-    try {
-      if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
-        const stream = await navigator.mediaDevices.getDisplayMedia({
-          video: {
-            displaySurface: 'browser',
-          },
-          audio: false,
-        });
-
-        const track = stream.getVideoTracks()[0];
-        const tempVideo = document.createElement('video');
-        tempVideo.srcObject = stream;
-        tempVideo.muted = true;
-        await tempVideo.play();
-
-        await new Promise((resolve) => setTimeout(resolve, 150));
-
-        const canvas = document.createElement('canvas');
-        canvas.width = tempVideo.videoWidth || 1920;
-        canvas.height = tempVideo.videoHeight || 1080;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(tempVideo, 0, 0, canvas.width, canvas.height);
-          
-          // Evidence stamp
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
-          ctx.fillRect(20, canvas.height - 50, 480, 36);
-          ctx.fillStyle = '#ffffff';
-          ctx.font = 'bold 15px monospace';
-          ctx.fillText(`ORDER: ${orderId} | SNAPSHOT PROOF`, 32, canvas.height - 27);
-
-          const dataUrl = canvas.toDataURL('image/png', 1.0);
-          const link = document.createElement('a');
-          link.href = dataUrl;
-          link.download = `${orderId}_Evidence_Snapshot.png`;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-
-          setSnapshotMessage('High-Resolution Frame Snapshot Saved as PNG!');
-          setSnapshotSuccess(true);
-          setTimeout(() => setSnapshotSuccess(false), 3500);
-        }
-
-        track.stop();
-        stream.getTracks().forEach((t) => t.stop());
-        tempVideo.remove();
-      } else {
-        alert(`Tip: You can use Windows Snipping Tool (Win + Shift + S) or Mac (Cmd + Shift + 4) to capture this frame.`);
-      }
-    } catch (err: any) {
-      if (err?.name !== 'NotAllowedError') {
-        console.warn('Screen snapshot note:', err);
-      }
-    } finally {
-      setIsCapturing(false);
-    }
-  };
-
   // Direct download link
   const directDriveDownloadUrl = fileId
     ? `https://drive.google.com/uc?export=download&id=${fileId}`
@@ -499,11 +396,11 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
           )}
         </div>
 
-        {/* Snapshot Toast Feedback */}
-        {snapshotSuccess && (
+        {/* Action Toast Feedback */}
+        {showToast && (
           <div className="absolute top-3 right-3 bg-emerald-600 text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 shadow-2xl animate-fade-in z-30">
             <Check className="w-4 h-4" />
-            {snapshotMessage}
+            {toastMessage}
           </div>
         )}
       </div>
@@ -700,10 +597,10 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
         orderId={orderId}
         fileId={fileId}
         driveLink={driveLink}
-        onShowToast={(msg, type) => {
-          setSnapshotMessage(msg);
-          setSnapshotSuccess(true);
-          setTimeout(() => setSnapshotSuccess(false), 3000);
+        onShowToast={(msg) => {
+          setToastMessage(msg);
+          setShowToast(true);
+          setTimeout(() => setShowToast(false), 3000);
         }}
       />
     </div>

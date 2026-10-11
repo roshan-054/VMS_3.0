@@ -526,7 +526,7 @@ export function sanitizeImageUrl(url?: string): string {
 
 export function fixMisalignedProduct(p: GtinCatalogProduct): GtinCatalogProduct {
   if (!p) return p;
-  let cleanCategory = p.category || 'General';
+  let cleanCategory = p.category ? p.category.trim() : '';
   let cleanTag = p.tag || '';
   let cleanImage = p.imageUrl || '';
   let cleanQty = Number(p.defaultQuantity) || 1;
@@ -602,24 +602,15 @@ export function getStoredGtinCatalog(): GtinCatalogProduct[] {
         shortName: 'Sandalwood Itra',
         category: 'Active-online',
         tag: 'Active-online',
-        imageUrl: 'https://lh3.googleusercontent.com/d/1SWluffxYq67p4UyMqHi6c2fDxdUAmowd',
+        imageUrl:
+          'https://lh3.googleusercontent.com/rd-d/ALs6j_FAhm5CdpUxFt7_rcUVFvGzlZPPhen1tZrfd5zBBQbFbmvJwLlD7lQv0YFuN864QhK2FkX_5k79xLlb2xGgQiOwg-59YjTwrEnDlNx9FFNtdOg4i-jRBhvoTF7tNpccqu7d5i2SxaEaCQ3AHORNS3D7XAS8rl954YFz3Tq0oQJmhwNYHEujW2ZypXyaUJlC_WZ27l1Vk_k22-prW8UsJTPCzOSHnPKlTW6XcPEz6N9Rhc_JqmHPQhM30a4OEK7tMDr_Ut5-6Cv_Tzm2uPNiCJw4SkfzuU_SmEwIwykfTxaxOYCWtuu2O1FMlBBFGFhKocldzCuPd7QzvxpAtKdT0ZrwSHWgFD9TIR2EtQNzxCR-pW0EaAGKQx3sUvOB9ZcoIDmYwUQClTn7hcF38JRrQtSrOx-iTrkZLYZT_-3Y7TWtfrnqbOUzqMTZL22bEDEBtb1kZTJtxRBqaym9sEObSttiWmXJWvcrEhnQMoIyAcBX8mesWdPo7KGtgeJSjTopDW4DFlOKJRDgDhgbV29NKm7G49HN6aUAMqZP5x3QIWLhD6bZQgdfwaikxPdkH_Y_-PKTemHtVTr2Ovf1kxH7j3DfK8vQA4wD8Bj1zCuLPdJGpHESCE1fDV4lrI9SKZg5feLFj50KaDrv_I_DOtnSEdVh2r0l6qqbN3oHDXQ5ijMAVFZ9OxMUFjCEZkHx4ETbpL0vfEBYsid6CxyrMxlzU4oBhpW05w0KNRMaUr41yQZCDpVZFK03TNYNjEW5OPb-qdy13PU4BkVfyR4DBSQ6XTjTKgO6yoxJm2bV6yEade-mZ9zIAnIa8jYb7kaBJUBa9cj6W7GBYfJEcUxr2heDJXt1NRkDYao1U-uBAvdsbItvEESiFqmrGJkH4xBOjr1Z1UyJHsihwR5Jc-Ae9z19IAeO8Z3ASotiGSQE79arQ_rTqoN_nCMX4A42iY7l9HuoL91f_hTDytcMpO0AAeb1qOuEvqLUj5ncyjUU_hz3xKsEo-xULwpWS_rJHYD9v0h2XDndAPBxwU2YRXRGEbHIHI2p0xuoq8QuiJvlbpABUbAIrUQUpaley0yqCkN04MFn36J5kh5Oj4uuQfL6wh87wKWNfTIOfahtprvd5SRFlpAVU9dj8YMzbNYN-c_o8b0wBNnqCtXtKbAnWzGXgxEdCfes5AscyKnORrKeWGo=s1600',
         defaultQuantity: 1,
         notes: '',
       });
     }
 
-    // If tag filter is configured (e.g. Active-online), enforce strict filtering on stored catalog
-    const config = getGtinSheetConfig();
-    const tagFilterStr = (config.tagsFilter || '').trim().toLowerCase();
-    if (tagFilterStr) {
-      const activeTags = tagFilterStr.split(',').map((t) => t.trim()).filter(Boolean);
-      return cleaned.filter((item) => {
-        const itemTag = (item.tag || '').toLowerCase().trim();
-        const itemCat = (item.category || '').toLowerCase().trim();
-        return activeTags.some((at) => itemTag.includes(at) || itemCat.includes(at));
-      });
-    }
-
+    // Return the full clean catalog. Tag and search filtering is done interactively in the UI,
+    // preserving all catalog products in local storage without destructive overwrites.
     return cleaned;
   } catch (e) {
     return [];
@@ -777,7 +768,7 @@ export async function addOrUpdateGtinProduct(product: GtinCatalogProduct): Promi
     sku: product.sku ? product.sku.trim() : cleanGtin,
     productName: product.productName ? product.productName.trim() : `Product ${cleanGtin}`,
     shortName: product.shortName ? product.shortName.trim() : product.productName || cleanGtin,
-    category: product.category ? product.category.trim() : 'General',
+    category: product.category ? product.category.trim() : '',
     tag: product.tag ? product.tag.trim() : '',
     cogs: product.cogs,
     defaultQuantity: product.defaultQuantity || 1,
@@ -859,7 +850,7 @@ export async function importGtinCatalog(products: GtinCatalogProduct[]): Promise
       sku: item.sku ? item.sku.trim() : cleanGtin,
       productName: item.productName ? item.productName.trim() : `Product ${cleanGtin}`,
       shortName: item.shortName ? item.shortName.trim() : item.productName || cleanGtin,
-      category: item.category ? item.category.trim() : (item.tag || 'General'),
+      category: item.category ? item.category.trim() : (item.tag ? item.tag.trim() : ''),
       tag: item.tag ? item.tag.trim() : '',
       imageUrl: cleanImg,
       cogs: item.cogs,
@@ -1145,7 +1136,7 @@ async function fetchAndParseDirectGoogleSheetCsv(sheetId: string, tabName: strin
     const rawShort = shortNameIdx >= 0 && row[shortNameIdx] ? row[shortNameIdx].trim() : rawName;
     const rawImg = imgIdx >= 0 && row[imgIdx] ? getDirectImageUrl(row[imgIdx].trim()) : '';
     const rawTag = tagIdx >= 0 && row[tagIdx] ? row[tagIdx].trim() : '';
-    const rawCat = catIdx >= 0 && row[catIdx] ? row[catIdx].trim() : (rawTag || 'General');
+    const rawCat = catIdx >= 0 && row[catIdx] ? row[catIdx].trim() : (rawTag || '');
 
     items.push({
       gtin: finalGtin,
