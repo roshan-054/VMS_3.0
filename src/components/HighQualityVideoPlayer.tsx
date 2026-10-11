@@ -681,21 +681,6 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
               <span>AI Focus Analysis</span>
             </button>
 
-            {/* Snapshot Button */}
-            <button
-              onClick={handleCaptureSnapshot}
-              disabled={isCapturing}
-              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 hover:text-white font-semibold rounded-xl border border-slate-700 transition flex items-center gap-2 disabled:opacity-50 cursor-pointer"
-              title="Capture high-resolution PNG proof screenshot of the current frame"
-            >
-              {isCapturing ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Camera className="w-4 h-4" />
-              )}
-              <span>{isCapturing ? 'Capturing...' : 'Capture Snapshot'}</span>
-            </button>
-
             {/* Fullscreen Button */}
             <button
               onClick={handleToggleFullscreen}
