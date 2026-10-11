@@ -1860,9 +1860,8 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
             <span>Total Manifest Orders</span>
             <Boxes className="w-3.5 h-3.5 text-slate-400" />
           </div>
-          <div className="text-2xl font-black text-slate-900 flex items-center gap-2">
-            <span>{stats.total}</span>
-            {isRefreshingData && <RefreshCw className="w-4 h-4 text-indigo-600 animate-spin" />}
+          <div className="text-2xl font-black text-slate-900">
+            {stats.total}
           </div>
           <span className="text-[10px] text-indigo-600 font-semibold">Click to view all →</span>
         </div>
@@ -1880,9 +1879,8 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
             <span>Pending Packing</span>
             <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
           </div>
-          <div className="text-2xl font-black text-amber-600 flex items-center gap-2">
-            <span>{stats.pending}</span>
-            {isRefreshingData && <RefreshCw className="w-4 h-4 text-amber-600 animate-spin" />}
+          <div className="text-2xl font-black text-amber-600">
+            {stats.pending}
           </div>
           <span className="text-[10px] text-amber-700 font-semibold">Click to filter pending →</span>
         </div>
@@ -1900,9 +1898,8 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
             <span>Packed &amp; Verified</span>
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
           </div>
-          <div className="text-2xl font-black text-emerald-600 flex items-center gap-2">
-            <span>{stats.packed}</span>
-            {isRefreshingData && <RefreshCw className="w-4 h-4 text-emerald-600 animate-spin" />}
+          <div className="text-2xl font-black text-emerald-600">
+            {stats.packed}
           </div>
           <span className="text-[10px] text-emerald-700 font-semibold">Click to filter packed →</span>
         </div>
@@ -1920,9 +1917,8 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
               <span>GTIN Catalog Size</span>
               <Barcode className="w-3.5 h-3.5 text-indigo-500" />
             </div>
-            <div className="text-2xl font-black text-indigo-600 flex items-center gap-2">
-              <span>{gtinCatalog.length} Items</span>
-              {isRefreshingData && <RefreshCw className="w-4 h-4 text-indigo-600 animate-spin" />}
+            <div className="text-2xl font-black text-indigo-600">
+              {gtinCatalog.length} Items
             </div>
             <span className="text-[10px] text-indigo-600 font-semibold">Click to open catalog →</span>
           </div>
