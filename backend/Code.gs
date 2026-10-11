@@ -4393,37 +4393,52 @@ function parseItemsList_(text) {
   return items;
 }
 
-function getOrderManifests_(p) {
-  var sh = getManifestSheet_();
-  var data = sh.getDataRange().getValues();
-  var manifests = [];
-
-  for (var i = 1; i < data.length; i++) {
-    var r = data[i];
-    var orderId = String(r[1] || '').trim();
-    if (!orderId) continue;
-
-    var items = parseItemsList_(r[8]);
-
-    manifests.push({
-      id: 'm-' + i,
-      orderId: orderId,
-      platform: r[2] || 'Amazon',
-      assignedPackerName: r[3] || '',
-      assignedPackerEmail: r[4] || '',
-      processedByName: r[5] || '',
-      processedByEmail: r[6] || '',
-      processedAt: r[0] ? new Date(r[0]).toISOString() : '',
-      items: items,
-      status: r[9] || 'Pending',
-      notes: r[10] || '',
-      packedAt: r[11] || '',
-      packedByName: r[12] || '',
-      videoDriveUrl: r[13] || ''
-    });
+function safeIsoDate_(val) {
+  if (!val) return '';
+  try {
+    var d = new Date(val);
+    if (isNaN(d.getTime())) return String(val);
+    return d.toISOString();
+  } catch (e) {
+    return String(val);
   }
+}
 
-  return { success: true, manifests: manifests };
+function getOrderManifests_(p) {
+  try {
+    var sh = getManifestSheet_();
+    var data = sh.getDataRange().getValues();
+    var manifests = [];
+
+    for (var i = 1; i < data.length; i++) {
+      var r = data[i];
+      var orderId = String(r[1] || '').trim();
+      if (!orderId) continue;
+
+      var items = parseItemsList_(r[8]);
+
+      manifests.push({
+        id: 'm-' + i,
+        orderId: orderId,
+        platform: r[2] || 'Amazon',
+        assignedPackerName: r[3] || '',
+        assignedPackerEmail: r[4] || '',
+        processedByName: r[5] || '',
+        processedByEmail: r[6] || '',
+        processedAt: safeIsoDate_(r[0]),
+        items: items,
+        status: r[9] || 'Pending',
+        notes: r[10] || '',
+        packedAt: safeIsoDate_(r[11]),
+        packedByName: r[12] || '',
+        videoDriveUrl: r[13] || ''
+      });
+    }
+
+    return { success: true, manifests: manifests };
+  } catch (err) {
+    return { success: false, error: 'Could not parse manifests: ' + err.message, manifests: [] };
+  }
 }
 
 function updateManifestStatus_(p) {

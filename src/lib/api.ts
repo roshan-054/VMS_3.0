@@ -46,23 +46,27 @@ export async function requestApi<T = any>(
     let response: Response | null = null;
     let lastFetchErr: any = null;
 
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
       try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 12000);
         response = await fetch(url, {
           method: 'POST',
           mode: 'cors',
           redirect: 'follow',
           credentials: 'omit',
+          signal: controller.signal,
           headers: {
             'Content-Type': 'text/plain;charset=utf-8',
           },
           body,
         });
+        clearTimeout(timeoutId);
         if (response && response.ok) break;
       } catch (fetchErr: any) {
         lastFetchErr = fetchErr;
-        if (attempt < 3) {
-          await new Promise((resolve) => setTimeout(resolve, 600 * attempt));
+        if (attempt < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
         }
       }
     }

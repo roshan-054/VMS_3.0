@@ -142,16 +142,20 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   // Function to perform a complete live refresh of all manifest orders, GTIN catalog, and verification logs from Google Sheets
   const handleRefreshAllLiveData = async () => {
     setIsRefreshingData(true);
+    const safetyTimer = setTimeout(() => {
+      setIsRefreshingData(false);
+    }, 12000);
+
     try {
       await Promise.allSettled([
         syncManifestsWithCloud().then((res) => {
-          if (res && res.manifests) setManifests(res.manifests);
+          if (res && res.manifests && res.manifests.length > 0) setManifests(res.manifests);
         }),
         syncGtinWithMasterSheet().then(() => {
           setGtinCatalog(getStoredGtinCatalog());
         }),
         syncVerificationLogsWithCloud().then((res) => {
-          if (res && res.logs) setVerificationLogs(res.logs);
+          if (res && res.logs && res.logs.length > 0) setVerificationLogs(res.logs);
         })
       ]);
       const currentManifests = getStoredManifests();
@@ -161,6 +165,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     } catch (e) {
       console.warn('Refresh notice:', e);
     } finally {
+      clearTimeout(safetyTimer);
       setIsRefreshingData(false);
     }
   };
