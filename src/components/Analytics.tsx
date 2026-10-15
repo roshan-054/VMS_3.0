@@ -30,6 +30,7 @@ import {
 import * as XLSX from 'xlsx';
 import { AnalyticsData, DailyMetricItem, VideoRecord } from '../types';
 import { requestApi } from '../lib/api';
+import { computeLocalAnalyticsData } from '../lib/localAnalytics';
 import { getStoredManifests, getStoredGtinCatalog, enrichManifestItems } from '../lib/manifestStorage';
 import { getDirectImageUrl } from '../lib/branding';
 
@@ -670,13 +671,25 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
 
     setLoading(true);
     try {
-      let res: AnalyticsData = (await requestApi<AnalyticsData>('getAnalyticsData', {
-        fromDate,
-        toDate,
-        platform: platformFilter === 'all' ? '' : platformFilter,
-        recordingType: typeFilter === 'all' ? '' : typeFilter,
-        packer: packerFilter.trim(),
-      })) as unknown as AnalyticsData;
+      let res: AnalyticsData;
+      try {
+        res = (await requestApi<AnalyticsData>('getAnalyticsData', {
+          fromDate,
+          toDate,
+          platform: platformFilter === 'all' ? '' : platformFilter,
+          recordingType: typeFilter === 'all' ? '' : typeFilter,
+          packer: packerFilter.trim(),
+        })) as unknown as AnalyticsData;
+      } catch (reqErr) {
+        console.warn('Remote analytics fetch note, computing local workstation metrics:', reqErr);
+        res = await computeLocalAnalyticsData(
+          fromDate,
+          toDate,
+          platformFilter,
+          typeFilter,
+          packerFilter.trim()
+        );
+      }
 
       // Seamless fallback for environments where the active Apps Script deployment
       // only indexed OrderLog or where ReturnLog data needs to be merged
@@ -738,8 +751,17 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
 
       setData(res);
     } catch (err: any) {
-      console.warn('Analytics fetch error:', err);
-      onShowToast(err.message || 'Failed to fetch analytics', 'error');
+      console.warn('Analytics fetch error, applying local metrics:', err);
+      try {
+        const fallback = await computeLocalAnalyticsData(
+          fromDate,
+          toDate,
+          platformFilter,
+          typeFilter,
+          packerFilter.trim()
+        );
+        setData(fallback);
+      } catch (_) {}
     } finally {
       setLoading(false);
     }

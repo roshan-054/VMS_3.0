@@ -1,5 +1,6 @@
 import { getStoredApiUrl, getStoredToken, dbGetAllQueue } from './storage';
 import { User, VideoRecord, AnalyticsData } from '../types';
+import { computeLocalAnalyticsData, getLocalWorkstationLogs } from './localAnalytics';
 import {
   localLogin,
   localSignup,
@@ -46,10 +47,10 @@ export async function requestApi<T = any>(
     let response: Response | null = null;
     let lastFetchErr: any = null;
 
-    // Single attempt for fast responsiveness, with 8s abort limit
+    // Single attempt for fast responsiveness, with 12s abort limit
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
       response = await fetch(url, {
         method: 'POST',
         mode: 'cors',
@@ -68,7 +69,7 @@ export async function requestApi<T = any>(
 
     if (!response) {
       if (lastFetchErr && lastFetchErr.name === 'AbortError') {
-        throw new Error('Request timed out (8s limit). Google Apps Script may be waking up or slow.');
+        throw new Error('Request timed out (12s limit). Google Apps Script may be waking up or slow.');
       }
       throw lastFetchErr || new Error('Network request failed. Please check your connection.');
     }
@@ -201,6 +202,39 @@ export async function requestApi<T = any>(
         saveLocalUsers(users);
         return { success: true } as any;
       }
+    }
+
+    // Analytics data local workstation fallback
+    if (action === 'getAnalyticsData') {
+      const fromDate = payload.fromDate || new Date().toISOString().slice(0, 10);
+      const toDate = payload.toDate || fromDate;
+      const localData = await computeLocalAnalyticsData(
+        fromDate,
+        toDate,
+        payload.platform,
+        payload.recordingType,
+        payload.packer
+      );
+      return { success: true, ...localData } as any;
+    }
+
+    // Upload logs local workstation fallback
+    if (action === 'getUploadLogs') {
+      const logs = await getLocalWorkstationLogs(payload);
+      return { success: true, logs } as any;
+    }
+
+    // Advanced search local workstation fallback
+    if (action === 'advancedSearch') {
+      const logs = await getLocalWorkstationLogs({
+        searchQuery: payload.query || payload.orderId,
+        platform: payload.platform,
+        recordingType: payload.recordingType,
+        fromDate: payload.fromDate,
+        toDate: payload.toDate,
+        limit: payload.limit || 500,
+      });
+      return { success: true, results: logs, rows: logs, total: logs.length } as any;
     }
 
     throw remoteError;
@@ -360,22 +394,47 @@ export async function fetchUploadLogs(params: {
     failed: number;
   };
   error?: string;
+  isLocalFallback?: boolean;
 }> {
   try {
     const res = await requestApi<{ logs: import('../types').UploadLogItem[]; stats?: any }>('getUploadLogs', params);
-    return {
-      success: true,
-      logs: res.logs || [],
-      stats: res.stats,
-    };
+    if (res && res.success && Array.isArray(res.logs) && res.logs.length > 0) {
+      try {
+        localStorage.setItem('vms_cached_cloud_logs', JSON.stringify(res.logs.slice(0, 500)));
+      } catch (_) {}
+      return {
+        success: true,
+        logs: res.logs,
+        stats: res.stats,
+      };
+    }
   } catch (err: any) {
-    console.warn('fetchUploadLogs remote request failed:', err?.message || err);
-    return {
-      success: false,
-      logs: [],
-      error: err?.message || 'Failed to fetch logs from Google Sheets',
-    };
+    console.warn('fetchUploadLogs remote request note, using local workstation store:', err?.message || err);
   }
+
+  // Graceful local workstation fallback: Always return available logs without throwing errors
+  const localLogs = await getLocalWorkstationLogs(params);
+  let completed = 0, inProgress = 0, pending = 0, failed = 0;
+  localLogs.forEach((l) => {
+    const st = (l.status || '').toLowerCase();
+    if (st === 'completed') completed++;
+    else if (st === 'in progress' || st === 'uploading') inProgress++;
+    else if (st === 'failed') failed++;
+    else pending++;
+  });
+
+  return {
+    success: true,
+    logs: localLogs,
+    stats: {
+      total: localLogs.length,
+      completed,
+      inProgress,
+      pending,
+      failed,
+    },
+    isLocalFallback: true,
+  };
 }
 
 export async function deleteLogEntry(params: {

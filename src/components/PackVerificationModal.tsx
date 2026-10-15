@@ -38,6 +38,8 @@ interface PackVerificationModalProps {
   onVerifiedAndProceed: (verifiedItems: ManifestItem[]) => void;
   onCancel: () => void;
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
+  recordingType?: 'Forward' | 'Return';
+  onSwitchToReturn?: () => void;
 }
 
 // Web Audio API Synth for instant Zero-Latency Chime & Error Buzzer
@@ -100,6 +102,8 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
   onVerifiedAndProceed,
   onCancel,
   onShowToast,
+  recordingType = 'Forward',
+  onSwitchToReturn,
 }) => {
   // Verification progress tracking per item
   const [items, setItems] = useState<Array<ManifestItem & { scannedCount: number }>>(() =>
@@ -124,8 +128,8 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const startTimeRef = useRef<number>(Date.now());
 
-  // Check if order is already packed
-  const isOrderPacked = manifest.status === 'Packed' || (manifest as any).status === 'Completed';
+  // Check if order is already packed (only relevant when packing outbound Forward orders)
+  const isOrderPacked = (manifest.status === 'Packed' || (manifest as any).status === 'Completed') && recordingType !== 'Return' && !adminOverride;
 
   // Check if current user is directly assigned for this order
   const isDirectlyAssigned =
@@ -368,11 +372,39 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
             )}
           </div>
 
-          <div className="pt-2">
+          <div className="pt-2 space-y-2.5">
+            {/* Primary Action: Record Customer Return Video */}
+            <button
+              type="button"
+              onClick={() => {
+                if (onSwitchToReturn) {
+                  onSwitchToReturn();
+                } else {
+                  onCancel();
+                }
+              }}
+              className="w-full py-3.5 bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-sm rounded-xl transition cursor-pointer flex items-center justify-center gap-2 shadow-lg shadow-blue-600/30 border border-blue-400/30"
+            >
+              <RotateCcw className="w-4 h-4" />
+              <span>Record Customer Return Video Instead</span>
+            </button>
+
+            {/* Admin Override to re-pack / re-verify */}
+            {(currentUser?.role === 'Admin' || currentUser?.role === 'Master Admin') && (
+              <button
+                type="button"
+                onClick={() => setAdminOverride(true)}
+                className="w-full py-2.5 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 font-bold text-xs rounded-xl transition cursor-pointer border border-amber-500/30 flex items-center justify-center gap-1.5"
+              >
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                <span>Re-Pack &amp; Re-Verify Order (Admin Override)</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={onCancel}
-              className="w-full py-3.5 bg-slate-800 hover:bg-slate-700 text-white font-bold text-sm rounded-xl transition cursor-pointer border border-slate-700"
+              className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition cursor-pointer border border-slate-700"
             >
               Close &amp; Return to Workstation
             </button>

@@ -139,25 +139,17 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
   // --- Refresh / Sync Loading State ---
   const [isRefreshingData, setIsRefreshingData] = useState<boolean>(false);
-  const [refreshStatusMessage, setRefreshStatusMessage] = useState<string>('Refreshing live data from Google Sheets...');
-
-  const handleCancelRefresh = () => {
-    setIsRefreshingData(false);
-    onShowToast('Refresh stopped. Showing current local catalog.', 'info');
-  };
 
   // Function to perform a complete live refresh of all manifest orders, GTIN catalog, and verification logs from Google Sheets
   const handleRefreshAllLiveData = async () => {
     if (isRefreshingData) return;
     setIsRefreshingData(true);
-    setRefreshStatusMessage('Connecting to Google Sheets...');
 
     const safetyTimer = setTimeout(() => {
       setIsRefreshingData(false);
     }, 8000);
 
     try {
-      setRefreshStatusMessage('Fetching live orders, GTIN catalog & logs...');
       await Promise.allSettled([
         syncManifestsWithCloud().then((res) => {
           if (res && res.manifests && res.manifests.length > 0) setManifests(res.manifests);
@@ -1830,21 +1822,6 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         </div>
       </div>
 
-      {/* Live Refresh Banner Indicator */}
-      {isRefreshingData && (
-        <div className="bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 text-white rounded-2xl p-3 px-4 flex items-center justify-between gap-3 shadow-md animate-pulse">
-          <div className="flex items-center gap-2.5">
-            <RefreshCw className="w-4 h-4 animate-spin text-white shrink-0" />
-            <span className="text-xs font-bold">
-              Fetching live manifest orders &amp; GTIN catalog directly from Google Sheets...
-            </span>
-          </div>
-          <span className="text-[10px] font-mono bg-white/20 px-2 py-0.5 rounded-md font-bold uppercase tracking-wider">
-            Refreshing Live Data
-          </span>
-        </div>
-      )}
-
       {/* Stats Summary Cards (Interactive Filters) */}
       <div className={`grid grid-cols-2 sm:grid-cols-${isUserAdmin ? '4' : '3'} gap-3 sm:gap-4`}>
         <div
@@ -1877,7 +1854,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         >
           <div className="text-[11px] font-mono uppercase tracking-wider text-amber-600 font-bold mb-1 flex items-center justify-between">
             <span>Pending Packing</span>
-            <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+            <span className="w-2 h-2 rounded-full bg-amber-500" />
           </div>
           <div className="text-2xl font-black text-amber-600">
             {stats.pending}
@@ -3225,38 +3202,6 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
       {/* SUB-TAB 3: GTIN BARCODE CATALOG */}
       {activeSubTab === 'gtin' && (
         <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs space-y-4">
-          {/* Real-time Refresh / Sync Progress Indicator */}
-          {(isSyncingMasterSheet || isSyncingSheet || isRefreshingData) && (
-            <div className="bg-gradient-to-r from-indigo-600 via-indigo-700 to-blue-700 text-white rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg animate-fade-in border border-indigo-400/30">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-xs flex items-center justify-center shrink-0">
-                  <RefreshCw className="w-5 h-5 text-white animate-spin" />
-                </div>
-                <div>
-                  <h4 className="text-xs font-bold flex items-center gap-2">
-                    <span>Synchronizing GTIN Catalog with Google Sheets</span>
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                  </h4>
-                  <p className="text-[11px] text-indigo-100 mt-0.5">
-                    Fetching products, barcodes &amp; images from tab <code className="bg-black/20 px-1.5 py-0.2 rounded font-mono text-white">{getGtinSheetConfig().tabName || 'GTINCatalog'}</code>
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setIsSyncingMasterSheet(false);
-                  setIsSyncingSheet(false);
-                  setIsRefreshingData(false);
-                  onShowToast('Refresh stopped. Displaying current local catalog.', 'info');
-                }}
-                className="px-3.5 py-1.5 bg-white/20 hover:bg-white/30 text-white text-xs font-bold rounded-xl transition cursor-pointer self-start sm:self-auto border border-white/20"
-              >
-                Stop / Cancel
-              </button>
-            </div>
-          )}
-
           {/* Active Google Sheet Sync Status Bar (Admin Only) */}
           {isUserAdmin && (
             <div className="bg-gradient-to-r from-emerald-50 via-slate-50 to-indigo-50/40 border border-emerald-200/80 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-2xs">

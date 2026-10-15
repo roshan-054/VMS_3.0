@@ -148,6 +148,16 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
         detectPlatformAndType(clean);
         const manifest = getManifestByOrderId(clean);
         if (manifest) {
+          // If in Return mode, an already-packed outbound order is completely normal!
+          if (recordingType === 'Return') {
+            if (manifest.platform && manifest.platform !== 'Custom') {
+              setPlatform(manifest.platform);
+            }
+            onShowToast(`Loaded Order ${clean} for Return recording`, 'info');
+            onClearInitialOrderId?.();
+            return;
+          }
+
           if (manifest.status === 'Packed' || (manifest as any).status === 'Completed') {
             const packerInfo = manifest.packedByName || manifest.assignedPackerName || 'Packer';
             const packedTime = manifest.packedAt ? ` on ${new Date(manifest.packedAt).toLocaleString()}` : '';
@@ -197,7 +207,19 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     // 1. Direct match: Check if scanned string is an Order ID in the pre-pack manifest
     const manifest = getManifestByOrderId(clean);
     if (manifest) {
-      // Guard 1: Already packed orders
+      // If operator is in Return recording mode, allow return recording smoothly without pre-pack blocking
+      if (recordingType === 'Return') {
+        if (manifest.platform && manifest.platform !== 'Custom') {
+          setPlatform(manifest.platform);
+        }
+        setStatusMessage({
+          text: `Order ${clean} (${manifest.platform}) loaded for customer return recording.`,
+          type: 'info'
+        });
+        return true;
+      }
+
+      // Guard 1: Already packed orders (Only for Forward packing)
       if (manifest.status === 'Packed' || (manifest as any).status === 'Completed') {
         const packerName = manifest.packedByName || manifest.assignedPackerName || 'Packer';
         const packedDate = manifest.packedAt ? ` on ${new Date(manifest.packedAt).toLocaleString()}` : '';
@@ -1024,12 +1046,15 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     }
 
     // PRE-PACK MANIFEST VERIFICATION GUARD: Ensure physical product GTINs are verified before recording starts
-    const targetManifest = activeManifest || getManifestByOrderId(orderId.trim());
-    if (targetManifest && !verifiedOrderItems) {
-      setActiveManifest(targetManifest);
-      setIsPackVerificationOpen(true);
-      onShowToast(`Please scan and verify product GTINs for Order ${targetManifest.orderId} first`, 'info');
-      return;
+    // Strictly for outbound 'Forward' packing! Inbound customer 'Return' verification recordings inspect returned packages and do not require pre-pack manifest blocking.
+    if (recordingType === 'Forward') {
+      const targetManifest = activeManifest || getManifestByOrderId(orderId.trim());
+      if (targetManifest && !verifiedOrderItems) {
+        setActiveManifest(targetManifest);
+        setIsPackVerificationOpen(true);
+        onShowToast(`Please scan and verify product GTINs for Order ${targetManifest.orderId} first`, 'info');
+        return;
+      }
     }
 
     // STRICT DUPLICATE GUARD: Block recording if duplicate detected and bypass not checked
@@ -1225,8 +1250,8 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
         type: 'success',
       });
 
-      // Update manifest status to 'Packed' if this order was in the manifest
-      if (orderId.trim()) {
+      // Update manifest status to 'Packed' if this order was in the manifest for Forward packing
+      if (orderId.trim() && recordingType === 'Forward') {
         updateManifestStatus(
           orderId.trim(),
           'Packed',
@@ -2031,7 +2056,13 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                   <button
                     key={type}
                     type="button"
-                    onClick={() => setRecordingType(type)}
+                    onClick={() => {
+                      setRecordingType(type);
+                      if (type === 'Return') {
+                        setIsPackVerificationOpen(false);
+                        setActiveManifest(null);
+                      }
+                    }}
                     className={`px-3 py-2.5 rounded-lg text-xs font-semibold border text-center transition cursor-pointer ${
                       recordingType === type
                         ? 'bg-blue-50 border-blue-600 text-blue-700 shadow-xs ring-1 ring-blue-500'
@@ -2196,6 +2227,13 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
         <PackVerificationModal
           manifest={activeManifest}
           currentUser={currentUser}
+          recordingType={recordingType}
+          onSwitchToReturn={() => {
+            setRecordingType('Return');
+            setIsPackVerificationOpen(false);
+            setActiveManifest(null);
+            onShowToast(`Switched to Return recording mode for Order ${activeManifest.orderId}`, 'info');
+          }}
           onVerifiedAndProceed={(verified) => {
             setVerifiedOrderItems(verified);
             setIsPackVerificationOpen(false);
@@ -2208,7 +2246,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
           onCancel={() => {
             setIsPackVerificationOpen(false);
             setActiveManifest(null);
-            setOrderId('');
           }}
           onShowToast={onShowToast}
         />
