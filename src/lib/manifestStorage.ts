@@ -109,14 +109,95 @@ export function enrichManifestItems(items: ManifestItem[]): ManifestItem[] {
   });
 }
 
+export const SEED_SAMPLE_MANIFESTS: OrderManifest[] = [
+  {
+    id: 'manifest-seed-101',
+    orderId: 'OD-5035',
+    platform: 'Amazon',
+    assignedPackerName: 'Roshan K',
+    assignedPackerEmail: 'askroshan.2002@gmail.com',
+    processedByName: 'Operations Admin',
+    processedByEmail: 'admin@vms.local',
+    processedAt: new Date(Date.now() - 3600000 * 2).toISOString(),
+    status: 'Pending',
+    items: [
+      {
+        id: 'seed-item-1',
+        sku: 'SA-IT-SA-01',
+        productName: 'Sandalwood Itra',
+        shortName: 'Sandalwood Itra',
+        gtin: '890619169353',
+        quantity: 1,
+        scannedCount: 0,
+        imageUrl: ''
+      }
+    ],
+    notes: 'Fragile glass bottle • Double bubble wrap'
+  },
+  {
+    id: 'manifest-seed-102',
+    orderId: 'OD-6194',
+    platform: 'D2C',
+    assignedPackerName: 'Roshan K',
+    assignedPackerEmail: 'askroshan.2002@gmail.com',
+    processedByName: 'Operations Admin',
+    processedByEmail: 'admin@vms.local',
+    processedAt: new Date(Date.now() - 3600000 * 5).toISOString(),
+    status: 'Pending',
+    items: [
+      {
+        id: 'seed-item-2',
+        sku: 'RO-IT-RA-02',
+        productName: 'Rose Attar Premium',
+        shortName: 'Rose Attar Premium',
+        gtin: '8906191690025',
+        quantity: 2,
+        scannedCount: 0,
+        imageUrl: ''
+      }
+    ],
+    notes: 'Include thank you invoice leaflet'
+  },
+  {
+    id: 'manifest-seed-103',
+    orderId: 'OD-7102',
+    platform: 'JioMart',
+    assignedPackerName: 'Packer Workstation 1',
+    assignedPackerEmail: 'packer@vms.local',
+    processedByName: 'Operations Admin',
+    processedByEmail: 'admin@vms.local',
+    processedAt: new Date(Date.now() - 3600000 * 18).toISOString(),
+    status: 'Pending',
+    items: [
+      {
+        id: 'seed-item-3',
+        sku: 'SA-IT-SA-01',
+        productName: 'Sandalwood Itra',
+        shortName: 'Sandalwood Itra',
+        gtin: '890619169353',
+        quantity: 1,
+        scannedCount: 0,
+        imageUrl: ''
+      }
+    ],
+    notes: 'JioMart express shipper box'
+  }
+];
+
 export function getStoredManifests(): OrderManifest[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_MANIFESTS);
-    if (!raw) return [];
+    if (!raw) {
+      localStorage.setItem(STORAGE_KEY_MANIFESTS, JSON.stringify(SEED_SAMPLE_MANIFESTS));
+      return SEED_SAMPLE_MANIFESTS;
+    }
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      localStorage.setItem(STORAGE_KEY_MANIFESTS, JSON.stringify(SEED_SAMPLE_MANIFESTS));
+      return SEED_SAMPLE_MANIFESTS;
+    }
     const deletedSet = getDeletedManifestIds();
-    return parsed
+    const result = parsed
       .filter((m) => {
         const id = String(m.orderId || '').toLowerCase().trim();
         return id && !deletedSet.has(id);
@@ -125,8 +206,13 @@ export function getStoredManifests(): OrderManifest[] {
         ...m,
         items: enrichManifestItems(m.items || [])
       }));
+
+    if (result.length === 0 && deletedSet.size === 0) {
+      return SEED_SAMPLE_MANIFESTS;
+    }
+    return result;
   } catch (e) {
-    return [];
+    return SEED_SAMPLE_MANIFESTS;
   }
 }
 

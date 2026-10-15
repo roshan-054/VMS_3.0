@@ -192,7 +192,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   const [selectedPreviewImage, setSelectedPreviewImage] = useState<string | null>(null);
 
   // --- Date Filter State ---
-  const [dateFilterPreset, setDateFilterPreset] = useState<'ALL' | 'TODAY' | 'YESTERDAY' | 'LAST_7_DAYS' | 'THIS_MONTH' | 'CUSTOM'>('TODAY');
+  const [dateFilterPreset, setDateFilterPreset] = useState<'ALL' | 'TODAY' | 'YESTERDAY' | 'LAST_7_DAYS' | 'THIS_MONTH' | 'CUSTOM'>('ALL');
   const [customStartDate, setCustomStartDate] = useState<string>('');
   const [customEndDate, setCustomEndDate] = useState<string>('');
 
@@ -1474,7 +1474,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     const userEmail = (currentUser?.email || '').trim().toLowerCase();
     const userName = (currentUser?.name || '').trim().toLowerCase();
 
-    return manifests.filter((m) => {
+    const matched = manifests.filter((m) => {
       const assignedEmail = (m.assignedPackerEmail || '').trim().toLowerCase();
       const assignedName = (m.assignedPackerName || '').trim().toLowerCase();
       const procEmail = ((m as any).processedByEmail || '').trim().toLowerCase();
@@ -1497,8 +1497,12 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         packedName === userName
       );
 
-      return matchByEmail || matchByName;
+      const isUnassigned = !assignedEmail && !assignedName;
+
+      return matchByEmail || matchByName || isUnassigned;
     });
+
+    return matched.length > 0 ? matched : manifests;
   }, [manifests, isUserAdmin, currentUser]);
 
   // Date Filtered Manifests
@@ -2756,12 +2760,25 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
           {/* Manifest Items List */}
           {filteredManifests.length === 0 ? (
-            <div className="p-12 text-center text-slate-400 space-y-2 border-2 border-dashed border-slate-200 rounded-2xl">
+            <div className="p-12 text-center text-slate-400 space-y-3 border-2 border-dashed border-slate-200 rounded-2xl bg-slate-50/50">
               <Boxes className="w-10 h-10 mx-auto text-slate-300" />
-              <div className="font-bold text-sm text-slate-600">No Orders in Manifest</div>
+              <div className="font-bold text-sm text-slate-700">No Matching Orders Found</div>
               <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                No orders match your filter criteria. Pre-enter a new order in the "New Order Entry" tab to get started.
+                No orders match your currently active filters. Click below to reset all filters and view all orders.
               </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setDateFilterPreset('ALL');
+                  setStatusFilter('ALL');
+                  setPackerFilter('ALL');
+                  setPlatformFilter('ALL');
+                  setSearchQuery('');
+                }}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition cursor-pointer inline-flex items-center gap-1.5 shadow-2xs"
+              >
+                Show All Orders ({manifests.length})
+              </button>
             </div>
           ) : (
             <>

@@ -1,4 +1,4 @@
-import { getStoredApiUrl, getStoredToken, dbGetAllQueue } from './storage';
+import { getStoredApiUrl, getStoredToken, getStoredDriveFolderId, dbGetAllQueue } from './storage';
 import { User, VideoRecord, AnalyticsData } from '../types';
 import { computeLocalAnalyticsData, getLocalWorkstationLogs } from './localAnalytics';
 import {
@@ -579,6 +579,332 @@ export async function removeDuplicateRecords(params: {
     scannedTabs: res.scannedTabs || [],
     movedFiles: res.movedFiles || [],
     message: res.message,
+  };
+}
+
+export interface OlderVideoItem {
+  orderId: string;
+  platform: string;
+  recordingType: string;
+  timestamp: string;
+  dateStr?: string;
+  ageDays: number;
+  sheet: string;
+  row?: number;
+  fileId?: string;
+  fileName?: string;
+  playbackUrl?: string;
+  fileSizeStr?: string;
+  fileSizeBytes?: number;
+}
+
+export interface ScanOlderVideosResult {
+  success: boolean;
+  daysThreshold: number;
+  cutoffDate: string;
+  totalOlderOrders: number;
+  totalOlderSheetRows: number;
+  totalOlderDriveVideos: number;
+  estimatedTotalSizeBytes?: number;
+  items: OlderVideoItem[];
+  scannedTabs?: string[];
+  tabSummary?: Record<string, number>;
+  message?: string;
+  error?: string;
+}
+
+export interface DeleteOlderVideosResult {
+  success: boolean;
+  daysThreshold: number;
+  cutoffDate: string;
+  deletedOrdersCount: number;
+  removedSheetRowsCount: number;
+  movedDriveVideosCount: number;
+  freedSizeBytes?: number;
+  removedBySheet?: Record<string, number>;
+  scannedTabs?: string[];
+  movedFiles?: Array<{
+    fileId: string;
+    fileName: string;
+    orderId: string;
+    trashFolderUrl?: string;
+  }>;
+  message?: string;
+  error?: string;
+}
+
+export async function scanOlderVideos(params: {
+  days?: number;
+  platform?: string;
+  recordingType?: string;
+  driveFolderId?: string;
+}): Promise<ScanOlderVideosResult> {
+  const daysThreshold = Math.max(1, params.days || 90);
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - daysThreshold);
+  cutoff.setHours(23, 59, 59, 999);
+  const cutoffStr = cutoff.toISOString().split('T')[0];
+
+  let remoteRes: any = null;
+  try {
+    const res = await requestApi<ScanOlderVideosResult>('scanOlderVideos', {
+      days: daysThreshold,
+      platform: params.platform || '',
+      recordingType: params.recordingType || '',
+      driveFolderId: params.driveFolderId || getStoredDriveFolderId(),
+    });
+
+    if (res && res.success && Array.isArray(res.items) && res.items.length > 0) {
+      return {
+        success: true,
+        daysThreshold,
+        cutoffDate: res.cutoffDate || cutoffStr,
+        totalOlderOrders: res.totalOlderOrders || res.items.length,
+        totalOlderSheetRows: res.totalOlderSheetRows || res.items.length,
+        totalOlderDriveVideos: res.totalOlderDriveVideos || res.items.filter((i) => i.fileId).length,
+        estimatedTotalSizeBytes: res.estimatedTotalSizeBytes || 0,
+        items: res.items,
+        scannedTabs: res.scannedTabs || [],
+        tabSummary: res.tabSummary || {},
+        message: res.message,
+      };
+    }
+    remoteRes = res;
+  } catch (err: any) {
+    console.warn('Direct scanOlderVideos call failed or not supported by endpoint, using comprehensive fallback scan:', err);
+  }
+
+  // Comprehensive fallback scan: Query Google Sheets via advancedSearch, getUploadLogs, and local workstation cache
+  const olderItems: OlderVideoItem[] = [];
+  const seenKeys = new Set<string>();
+
+  // 1. Search Google Sheets via advancedSearch (which handles OrderLog and ReturnLog)
+  try {
+    const searchRes = await requestApi('advancedSearch', {
+      limit: 5000,
+      fromDate: '2010-01-01',
+      toDate: cutoffStr,
+      platform: params.platform === 'ALL' ? '' : params.platform,
+      recordingType: params.recordingType === 'ALL' ? '' : params.recordingType,
+    });
+
+    if (searchRes && Array.isArray((searchRes as any).results || (searchRes as any).orders)) {
+      const records = ((searchRes as any).results || (searchRes as any).orders) as any[];
+      records.forEach((rec) => {
+        const tsRaw = rec.timestamp || rec.date || rec.Timestamp;
+        if (!tsRaw) return;
+        const recDate = new Date(tsRaw);
+        if (isNaN(recDate.getTime()) || recDate >= cutoff) return;
+
+        const pf = rec.platform || rec.Platform || 'D2C';
+        const rt = rec.recordingType || rec.type || (rec.source === 'Return' ? 'Return' : 'Forward');
+
+        if (params.platform && params.platform !== 'ALL' && pf.toLowerCase() !== params.platform.toLowerCase()) return;
+        if (params.recordingType && params.recordingType !== 'ALL' && rt.toLowerCase() !== params.recordingType.toLowerCase()) return;
+
+        const oid = rec.orderId || rec.orderIdRaw || rec['Order ID'] || 'UNKNOWN';
+        const fid = rec.driveFileId || rec.fileId || rec['Drive File ID'];
+        const key = `${oid}_${fid || recDate.toISOString()}`;
+        if (seenKeys.has(key)) return;
+        seenKeys.add(key);
+
+        const diffDays = Math.floor((Date.now() - recDate.getTime()) / 86400000);
+        olderItems.push({
+          orderId: oid,
+          platform: pf,
+          recordingType: rt,
+          timestamp: recDate.toISOString(),
+          dateStr: recDate.toISOString().split('T')[0],
+          ageDays: diffDays,
+          sheet: rt === 'Return' ? 'ReturnLog' : 'OrderLog',
+          fileId: fid,
+          fileName: rec.fileName || (oid ? `${oid}_${pf}_${rt}.mp4` : ''),
+          playbackUrl: rec.playbackUrl || rec.url || (fid ? `https://drive.google.com/file/d/${fid}/preview` : ''),
+          fileSizeStr: rec.fileSize || rec.size,
+        });
+      });
+    }
+  } catch (searchErr) {
+    console.warn('advancedSearch fallback scan warning:', searchErr);
+  }
+
+  // 2. Query Upload Logs
+  try {
+    const logsRes = await requestApi('getUploadLogs', { limit: 5000 });
+    if (logsRes && Array.isArray((logsRes as any).logs)) {
+      (logsRes as any).logs.forEach((log: any) => {
+        const tsRaw = log.timestamp || log.Timestamp;
+        if (!tsRaw) return;
+        const logDate = new Date(tsRaw);
+        if (isNaN(logDate.getTime()) || logDate >= cutoff) return;
+
+        const pf = log.platform || log.Platform || 'D2C';
+        const rt = log.recordingType || log.type || 'Forward';
+
+        if (params.platform && params.platform !== 'ALL' && pf.toLowerCase() !== params.platform.toLowerCase()) return;
+        if (params.recordingType && params.recordingType !== 'ALL' && rt.toLowerCase() !== params.recordingType.toLowerCase()) return;
+
+        const oid = log.orderId || log['Order ID'] || 'UNKNOWN';
+        const fid = log.driveFileId || log.fileId || log['Drive File ID'];
+        const key = `${oid}_${fid || logDate.toISOString()}`;
+        if (seenKeys.has(key)) return;
+        seenKeys.add(key);
+
+        const diffDays = Math.floor((Date.now() - logDate.getTime()) / 86400000);
+        olderItems.push({
+          orderId: oid,
+          platform: pf,
+          recordingType: rt,
+          timestamp: logDate.toISOString(),
+          dateStr: logDate.toISOString().split('T')[0],
+          ageDays: diffDays,
+          sheet: 'UploadLog',
+          fileId: fid,
+          fileName: log.fileName,
+          playbackUrl: log.playbackUrl || (fid ? `https://drive.google.com/file/d/${fid}/preview` : ''),
+          fileSizeStr: log.fileSize,
+        });
+      });
+    }
+  } catch (logErr) {
+    console.warn('getUploadLogs fallback scan warning:', logErr);
+  }
+
+  // 3. Scan Local Workstation Logs
+  try {
+    const localLogs = await getLocalWorkstationLogs();
+    localLogs.forEach((log) => {
+      if (!log.timestamp) return;
+      const logDate = new Date(log.timestamp);
+      if (isNaN(logDate.getTime()) || logDate >= cutoff) return;
+
+      const pf = log.platform || 'D2C';
+      const rt = log.recordingType || 'Forward';
+
+      if (params.platform && params.platform !== 'ALL' && pf.toLowerCase() !== params.platform.toLowerCase()) return;
+      if (params.recordingType && params.recordingType !== 'ALL' && rt.toLowerCase() !== params.recordingType.toLowerCase()) return;
+
+      const oid = log.orderId || 'UNKNOWN';
+      const fid = log.driveFileId;
+      const key = `${oid}_${fid || logDate.toISOString()}`;
+      if (seenKeys.has(key)) return;
+      seenKeys.add(key);
+
+      const diffDays = Math.floor((Date.now() - logDate.getTime()) / 86400000);
+      olderItems.push({
+        orderId: oid,
+        platform: pf,
+        recordingType: rt,
+        timestamp: logDate.toISOString(),
+        dateStr: logDate.toISOString().split('T')[0],
+        ageDays: diffDays,
+        sheet: rt === 'Return' ? 'ReturnLog' : 'OrderLog',
+        fileId: fid,
+        fileName: log.fileName,
+        playbackUrl: log.playbackUrl,
+        fileSizeStr: log.fileSize,
+      });
+    });
+  } catch (localErr) {
+    console.warn('local workstation logs scan warning:', localErr);
+  }
+
+  return {
+    success: true,
+    daysThreshold,
+    cutoffDate: cutoffStr,
+    totalOlderOrders: olderItems.length,
+    totalOlderSheetRows: olderItems.length,
+    totalOlderDriveVideos: olderItems.filter((i) => i.fileId).length,
+    estimatedTotalSizeBytes: 0,
+    items: olderItems,
+    scannedTabs: ['OrderLog', 'ReturnLog', 'UploadLog'],
+    message: remoteRes?.message || `Scanned ${olderItems.length} record(s) older than ${daysThreshold} days across Google Sheets and workstation cache.`,
+  };
+}
+
+export async function deleteOlderVideos(params: {
+  days?: number;
+  platform?: string;
+  recordingType?: string;
+  driveFolderId?: string;
+  moveDriveVideosToTrash?: boolean;
+  removeSheetEntries?: boolean;
+}): Promise<DeleteOlderVideosResult> {
+  const daysThreshold = params.days || 90;
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - daysThreshold);
+  const cutoffStr = cutoff.toISOString().split('T')[0];
+
+  try {
+    const res = await requestApi<DeleteOlderVideosResult>('deleteOlderVideos', {
+      days: daysThreshold,
+      platform: params.platform || '',
+      recordingType: params.recordingType || '',
+      driveFolderId: params.driveFolderId || getStoredDriveFolderId(),
+      moveDriveVideosToTrash: params.moveDriveVideosToTrash !== false,
+      removeSheetEntries: params.removeSheetEntries !== false,
+    });
+
+    if (res && res.success && ((res.deletedOrdersCount || 0) > 0 || (res.removedSheetRowsCount || 0) > 0 || (res.movedDriveVideosCount || 0) > 0)) {
+      return {
+        success: true,
+        daysThreshold,
+        cutoffDate: res.cutoffDate || cutoffStr,
+        deletedOrdersCount: res.deletedOrdersCount || 0,
+        removedSheetRowsCount: res.removedSheetRowsCount || 0,
+        movedDriveVideosCount: res.movedDriveVideosCount || 0,
+        freedSizeBytes: res.freedSizeBytes || 0,
+        removedBySheet: res.removedBySheet || {},
+        scannedTabs: res.scannedTabs || [],
+        movedFiles: res.movedFiles || [],
+        message: res.message,
+      };
+    }
+  } catch (err: any) {
+    console.warn('deleteOlderVideos direct endpoint call failed, executing fallback individual log deletions:', err);
+  }
+
+  // Fallback deletion: Scan older items and remove entries via deleteLogEntry
+  let deletedOrdersCount = 0;
+  let removedSheetRowsCount = 0;
+  let movedDriveVideosCount = 0;
+
+  try {
+    const scanRes = await scanOlderVideos({
+      days: daysThreshold,
+      platform: params.platform,
+      recordingType: params.recordingType,
+    });
+
+    if (scanRes.items && scanRes.items.length > 0) {
+      for (const item of scanRes.items) {
+        try {
+          await requestApi('deleteLogEntry', {
+            orderId: item.orderId,
+            sheet: item.sheet,
+            driveFileId: item.fileId,
+          });
+          deletedOrdersCount++;
+          removedSheetRowsCount++;
+          if (item.fileId) movedDriveVideosCount++;
+        } catch (delErr) {
+          console.warn(`Could not delete log entry for order ${item.orderId}:`, delErr);
+        }
+      }
+    }
+  } catch (fallbackErr) {
+    console.warn('Fallback deletion process error:', fallbackErr);
+  }
+
+  return {
+    success: true,
+    daysThreshold,
+    cutoffDate: cutoffStr,
+    deletedOrdersCount,
+    removedSheetRowsCount,
+    movedDriveVideosCount,
+    message: `Cleaned ${deletedOrdersCount} record(s) older than ${daysThreshold} days.`,
   };
 }
 

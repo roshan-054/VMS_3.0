@@ -39,6 +39,7 @@ import {
 } from 'lucide-react';
 import { User, UserRole, UserStatus, AdminPermissions } from '../types';
 import { CleanDuplicatesModal } from './CleanDuplicatesModal';
+import { DeleteOlderVideosModal } from './DeleteOlderVideosModal';
 import { requestApi, checkBackendHealth, uploadBrandingImage, repairSheetPlaybackUrls, runSystemSetup, migrateDriveMonthlyFolders, applySheetConditionalFormatting } from '../lib/api';
 import { getLocalUsers, deleteLocalUserByEmail, getDeletedUserEmails } from '../lib/localAuth';
 import {
@@ -173,6 +174,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
   const [repairingUrls, setRepairingUrls] = useState(false);
   const [refiningFormatting, setRefiningFormatting] = useState(false);
   const [showCleanDuplicatesModal, setShowCleanDuplicatesModal] = useState(false);
+  const [showDeleteOlderVideosModal, setShowDeleteOlderVideosModal] = useState(false);
+  const [initialDeleteDays, setInitialDeleteDays] = useState(90);
   const [runningSetup, setRunningSetup] = useState(false);
   const [migratingFolders, setMigratingFolders] = useState(false);
   const [showCodeModal, setShowCodeModal] = useState(false);
@@ -1648,7 +1651,64 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                 </div>
               </div>
 
-              {/* 8. Cache & Storage Management */}
+              {/* 8. Storage Retention Policy: Delete 90 Days Older Videos & Logs */}
+              <div className="bg-gradient-to-r from-red-50/80 via-rose-50/50 to-white rounded-2xl border border-red-200 p-5 shadow-xs space-y-4">
+                <div className="flex items-center justify-between border-b border-red-100 pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-red-600 text-white flex items-center justify-center font-bold text-xs shadow-xs">
+                      <Trash2 className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-xs font-bold text-slate-900">Delete Videos & Logs Older Than 90 Days</h4>
+                        <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
+                          Automated Storage Retention Purge
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        Scan and delete video recordings and sheet log entries older than 90 days from Google Drive & Sheets
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-3 bg-white rounded-xl border border-red-100">
+                  <div className="space-y-1">
+                    <span className="text-xs font-semibold text-slate-800 block">
+                      Cloud Storage Retention & Retention Policy Purge Manager
+                    </span>
+                    <span className="text-[11px] text-slate-500 block leading-relaxed">
+                      Scans OrderLog, ReturnLog, UploadLog, and Google Drive for files and logs created prior to 90 days ago. Moves video files to Drive Trash and purges corresponding sheet rows to reclaim storage space and preserve Google Sheet responsiveness.
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInitialDeleteDays(90);
+                        setShowDeleteOlderVideosModal(true);
+                      }}
+                      className="px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-sm"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Delete 90 Days Older Videos
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInitialDeleteDays(60);
+                        setShowDeleteOlderVideosModal(true);
+                      }}
+                      className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      Custom Days…
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* 9. Cache & Storage Management */}
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
                 <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
                   <div className="w-7 h-7 rounded-lg bg-red-50 text-red-600 flex items-center justify-center font-bold text-xs">
@@ -2891,6 +2951,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
         isOpen={showCleanDuplicatesModal}
         onClose={() => setShowCleanDuplicatesModal(false)}
         onShowToast={onShowToast}
+      />
+
+      {/* Delete 90 Days Older Videos Modal */}
+      <DeleteOlderVideosModal
+        isOpen={showDeleteOlderVideosModal}
+        onClose={() => setShowDeleteOlderVideosModal(false)}
+        onShowToast={onShowToast}
+        initialDays={initialDeleteDays}
       />
     </div>
   );

@@ -107,6 +107,10 @@ function doPost(e) {
       case 'cleanDuplicates':
       case 'removeDuplicates':
       case 'removeDuplicateRecords': return output_(removeDuplicateRecords_(p));
+      case 'scanOlder':
+      case 'scanOlderVideos': return output_(scanOlderVideos_(p));
+      case 'deleteOlder':
+      case 'deleteOlderVideos': return output_(deleteOlderVideos_(p));
       case 'applyConditionalFormatting': return output_(applyFormattingEndpoint_());
       case 'getBranding': return output_(getBrandingConfig_());
       case 'saveBranding': return output_(saveBrandingConfig_(p));
@@ -3518,7 +3522,7 @@ function getReportData_(p){
   if(isNaN(from)||isNaN(to))throw new Error('Invalid report dates.');
   if(from>to)throw new Error('From Date cannot be after To Date.');
   const span=Math.floor((to-from)/86400000)+1;
-  if(span>90)throw new Error('Report range cannot exceed 90 days.');
+  if(span>3650)throw new Error('Report range cannot exceed 10 years.');
   if(String(p.toDate||'')>today)throw new Error('Future dates are not allowed.');
   const platform=normalize_(p.platform), type=normalize_(p.recordingType), packer=normalize_(p.packer), status=normalize_(p.status);
   const video=String(p.video||'');
@@ -3588,7 +3592,7 @@ function getAnalyticsData_(p){
   if(isNaN(from)||isNaN(to))throw new Error('Invalid analytics dates.');
   if(from>to)throw new Error('From Date cannot be after To Date.');
   const span=Math.floor((to-from)/86400000)+1;
-  if(span>90)throw new Error('Analytics range cannot exceed 90 days.');
+  if(span>3650)throw new Error('Analytics range cannot exceed 10 years.');
   if(String(p.toDate||'')>today)throw new Error('Future dates are not allowed.');
 
   const platform=normalize_(p.platform), type=normalize_(p.recordingType), packer=normalize_(p.packer), status=normalize_(p.status);
@@ -5009,6 +5013,197 @@ function syncExternalGtinSheet_(p) {
     sheetTitle: extSpreadsheet.getName(),
     tabName: extSheet.getName(),
     appliedTags: requestedTags
+  };
+}
+
+/* ---------- Storage Retention & Older Video Purge ---------- */
+function scanOlderVideos_(p) {
+  const user = session_(p.token);
+  const daysThreshold = Math.max(1, Number(p.days || 90));
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - daysThreshold);
+  cutoff.setHours(23, 59, 59, 999);
+  const cutoffStr = cutoff.toISOString().split('T')[0];
+
+  const platformFilter = normalize_(p.platform);
+  const typeFilter = normalize_(p.recordingType);
+
+  const items = [];
+  const scannedTabs = [];
+  const tabSummary = {};
+  let totalOlderOrders = 0;
+  let totalOlderSheetRows = 0;
+  let totalOlderDriveVideos = 0;
+  let estimatedTotalSizeBytes = 0;
+
+  const ss = ss_();
+  const sheetsToScan = [
+    { name: CONFIG.ORDER_LOG_SHEET, defaultType: 'Forward' },
+    { name: CONFIG.RETURN_LOG_SHEET, defaultType: 'Return' },
+    { name: CONFIG.UPLOAD_LOG_SHEET, defaultType: 'Forward' }
+  ];
+
+  sheetsToScan.forEach(function(target) {
+    try {
+      const sh = ss.getSheetByName(target.name);
+      if (!sh) return;
+      scannedTabs.push(target.name);
+      tabSummary[target.name] = 0;
+
+      const v = sh.getDataRange().getValues();
+      if (!v || v.length <= 1) return;
+
+      for (let i = 1; i < v.length; i++) {
+        const rawTs = v[i][0];
+        if (!rawTs) continue;
+        const ts = rawTs instanceof Date ? rawTs : new Date(rawTs);
+        if (isNaN(ts) || ts >= cutoff) continue;
+
+        const oid = String(v[i][1] || '').trim();
+        const pf = String(v[i][2] || '').trim();
+        const pe = String(v[i][3] || '').trim();
+        const fid = String(v[i][4] || '').trim();
+        const pUrl = String(v[i][5] || '').trim();
+        const fileSize = String(v[i][6] || '').trim();
+        const st = String(v[i][7] || 'Completed').trim();
+        const rawRt = String(v[i][8] || target.defaultType).trim();
+        const rtNorm = normalize_(rawRt);
+        const rt = (rtNorm === 'return' || rtNorm === 'inbound') ? 'Return' : 'Forward';
+
+        if (platformFilter && normalize_(pf) !== platformFilter) continue;
+        if (typeFilter && normalize_(rt) !== typeFilter) continue;
+
+        const diffDays = Math.floor((Date.now() - ts.getTime()) / (86400000));
+
+        totalOlderSheetRows++;
+        tabSummary[target.name] = (tabSummary[target.name] || 0) + 1;
+        if (fid && fid.length > 5 && fid !== 'undefined' && fid !== 'null') {
+          totalOlderDriveVideos++;
+        }
+
+        items.push({
+          orderId: oid || 'UNNAMED',
+          platform: pf || 'D2C',
+          recordingType: rt,
+          timestamp: ts.toISOString(),
+          dateStr: ts.toISOString().split('T')[0],
+          ageDays: diffDays,
+          sheet: target.name,
+          row: i + 1,
+          fileId: fid,
+          fileName: oid ? (oid + '_' + pf + '_' + rt + '.mp4') : '',
+          playbackUrl: pUrl || (fid ? ('https://drive.google.com/file/d/' + fid + '/preview') : ''),
+          fileSizeStr: fileSize
+        });
+      }
+    } catch(err) {
+      console.warn('Scan error in ' + target.name + ':', err);
+    }
+  });
+
+  totalOlderOrders = items.length;
+
+  return {
+    success: true,
+    daysThreshold: daysThreshold,
+    cutoffDate: cutoffStr,
+    totalOlderOrders: totalOlderOrders,
+    totalOlderSheetRows: totalOlderSheetRows,
+    totalOlderDriveVideos: totalOlderDriveVideos,
+    estimatedTotalSizeBytes: estimatedTotalSizeBytes,
+    items: items,
+    scannedTabs: scannedTabs,
+    tabSummary: tabSummary,
+    message: 'Scanned ' + items.length + ' older record(s) older than ' + daysThreshold + ' days.'
+  };
+}
+
+function deleteOlderVideos_(p) {
+  const user = session_(p.token);
+  if (normalize_(user.role) !== 'admin') {
+    throw new Error('Unauthorized: Admin rights required to delete older videos and logs.');
+  }
+
+  const daysThreshold = Math.max(1, Number(p.days || 90));
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - daysThreshold);
+  cutoff.setHours(23, 59, 59, 999);
+  const cutoffStr = cutoff.toISOString().split('T')[0];
+
+  const platformFilter = normalize_(p.platform);
+  const typeFilter = normalize_(p.recordingType);
+
+  const moveDrive = p.moveDriveVideosToTrash !== false;
+  const removeSheet = p.removeSheetEntries !== false;
+
+  let deletedOrdersCount = 0;
+  let removedSheetRowsCount = 0;
+  let movedDriveVideosCount = 0;
+
+  const ss = ss_();
+  const sheetsToScan = [
+    CONFIG.ORDER_LOG_SHEET,
+    CONFIG.RETURN_LOG_SHEET,
+    CONFIG.UPLOAD_LOG_SHEET
+  ];
+
+  sheetsToScan.forEach(function(sheetName) {
+    try {
+      const sh = ss.getSheetByName(sheetName);
+      if (!sh) return;
+      const v = sh.getDataRange().getValues();
+      if (!v || v.length <= 1) return;
+
+      // Scan bottom to top to safely delete rows without index shifting
+      for (let i = v.length - 1; i >= 1; i--) {
+        const rawTs = v[i][0];
+        if (!rawTs) continue;
+        const ts = rawTs instanceof Date ? rawTs : new Date(rawTs);
+        if (isNaN(ts) || ts >= cutoff) continue;
+
+        const pf = String(v[i][2] || '').trim();
+        const fid = String(v[i][4] || '').trim();
+        const rawRt = String(v[i][8] || (sheetName === CONFIG.RETURN_LOG_SHEET ? 'Return' : 'Forward')).trim();
+        const rtNorm = normalize_(rawRt);
+        const rt = (rtNorm === 'return' || rtNorm === 'inbound') ? 'Return' : 'Forward';
+
+        if (platformFilter && normalize_(pf) !== platformFilter) continue;
+        if (typeFilter && normalize_(rt) !== typeFilter) continue;
+
+        // Move drive video to trash if present and requested
+        if (moveDrive && fid && fid.length > 5 && fid !== 'undefined' && fid !== 'null') {
+          try {
+            const f = DriveApp.getFileById(fid);
+            if (f) {
+              f.setTrashed(true);
+              movedDriveVideosCount++;
+            }
+          } catch(e) {
+            console.warn('Could not trash file ' + fid + ':', e);
+          }
+        }
+
+        // Delete row if requested
+        if (removeSheet) {
+          sh.deleteRow(i + 1);
+          removedSheetRowsCount++;
+        }
+
+        deletedOrdersCount++;
+      }
+    } catch(err) {
+      console.warn('Delete older error in ' + sheetName + ':', err);
+    }
+  });
+
+  return {
+    success: true,
+    daysThreshold: daysThreshold,
+    cutoffDate: cutoffStr,
+    deletedOrdersCount: deletedOrdersCount,
+    removedSheetRowsCount: removedSheetRowsCount,
+    movedDriveVideosCount: movedDriveVideosCount,
+    message: 'Deleted ' + deletedOrdersCount + ' record(s) older than ' + daysThreshold + ' days.'
   };
 }
 
