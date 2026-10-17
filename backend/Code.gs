@@ -4462,9 +4462,25 @@ function updateManifestStatus_(p) {
 
   if (targetRow > 0) {
     if (p.status) sh.getRange(targetRow, 10).setValue(p.status);
-    if (p.items) sh.getRange(targetRow, 9).setValue(formatItemsList_(p.items));
+    if (p.items) {
+      sh.getRange(targetRow, 9).setValue(formatItemsList_(p.items));
+      var totalItems = 0;
+      if (Array.isArray(p.items)) {
+        for (var k = 0; k < p.items.length; k++) {
+          totalItems += Number(p.items[k].quantity || 1);
+        }
+      }
+      sh.getRange(targetRow, 8).setValue(totalItems);
+    }
+    if (p.assignedPackerName !== undefined) sh.getRange(targetRow, 4).setValue(p.assignedPackerName);
+    if (p.assignedPackerEmail !== undefined) sh.getRange(targetRow, 5).setValue(p.assignedPackerEmail);
+    if (p.processedByName !== undefined) sh.getRange(targetRow, 6).setValue(p.processedByName);
+    if (p.processedByEmail !== undefined) sh.getRange(targetRow, 7).setValue(p.processedByEmail);
+    if (p.platform !== undefined) sh.getRange(targetRow, 3).setValue(p.platform);
+    if (p.notes !== undefined) sh.getRange(targetRow, 11).setValue(p.notes);
     if (p.packerDetails) {
       if (p.packerDetails.name) sh.getRange(targetRow, 13).setValue(p.packerDetails.name);
+      if (p.packerDetails.email) sh.getRange(targetRow, 5).setValue(p.packerDetails.email);
       if (p.packerDetails.videoDriveUrl) sh.getRange(targetRow, 14).setValue(p.packerDetails.videoDriveUrl);
       if (p.status === 'Packed') sh.getRange(targetRow, 12).setValue(formatDateDDMMMYYYY_(new Date()));
     }

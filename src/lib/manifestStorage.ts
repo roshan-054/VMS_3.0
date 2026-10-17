@@ -216,6 +216,16 @@ export function getStoredManifests(): OrderManifest[] {
   }
 }
 
+const manifestBroadcastChannel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('vms_manifest_sync_channel') : null;
+
+if (manifestBroadcastChannel) {
+  manifestBroadcastChannel.onmessage = (event) => {
+    if (event.data && (event.data.type === 'manifests_updated' || event.data.type === 'manifest_sync_trigger')) {
+      window.dispatchEvent(new CustomEvent('vms_manifests_updated', { detail: event.data }));
+    }
+  };
+}
+
 export function saveStoredManifests(manifests: OrderManifest[]): void {
   try {
     const deletedSet = getDeletedManifestIds();
@@ -225,6 +235,11 @@ export function saveStoredManifests(manifests: OrderManifest[]): void {
     });
     localStorage.setItem(STORAGE_KEY_MANIFESTS, JSON.stringify(cleaned));
     window.dispatchEvent(new CustomEvent('vms_manifests_updated', { detail: { count: cleaned.length } }));
+    if (manifestBroadcastChannel) {
+      try {
+        manifestBroadcastChannel.postMessage({ type: 'manifests_updated', count: cleaned.length, timestamp: Date.now() });
+      } catch (_) {}
+    }
   } catch (e) {
     console.warn('Could not save manifests to localStorage:', e);
   }
@@ -263,9 +278,12 @@ export async function saveOrderManifest(manifest: OrderManifest): Promise<void> 
 
   saveStoredManifests(list);
 
-  // Sync to remote Apps Script backend if available
+  // Sync to remote Apps Script backend
   try {
-    requestApi('saveOrderManifest', { manifest: { ...manifest, orderId: cleanId } }).catch((err) => {
+    requestApi('saveOrderManifest', { manifest: { ...manifest, orderId: cleanId } }).then(() => {
+      // Trigger background sync to propagate to all workstations
+      syncManifestsWithCloud().catch(() => {});
+    }).catch((err) => {
       console.warn('Remote manifest sync warning:', err);
     });
   } catch (_) {}
@@ -297,7 +315,9 @@ export async function saveMultipleManifests(manifests: OrderManifest[]): Promise
 
   // Sync batch
   try {
-    requestApi('saveOrderManifestsBatch', { manifests }).catch(() => {});
+    requestApi('saveOrderManifestsBatch', { manifests }).then(() => {
+      syncManifestsWithCloud().catch(() => {});
+    }).catch(() => {});
   } catch (_) {}
 
   return addedCount;
@@ -347,7 +367,12 @@ export async function updateManifestStatus(
         orderId: cleanId,
         status,
         items,
+        assignedPackerName: target.assignedPackerName,
+        assignedPackerEmail: target.assignedPackerEmail,
+        notes: target.notes,
         packerDetails,
+      }).then(() => {
+        syncManifestsWithCloud().catch(() => {});
       }).catch(() => {});
     } catch (_) {}
   }
@@ -1428,29 +1453,63 @@ export async function logPackVerification(log: PackVerificationLog): Promise<voi
  * Real-Time Cloud Sync: Fetch live manifest orders from Google Sheet ("Manifest_Orders" tab)
  * Allows Admin and Packers to see real-time order creation, status changes, and completion.
  */
+let globalSyncTimer: any = null;
+let isGlobalSyncing = false;
+
+/**
+ * Real-Time Cloud Sync: Fetch live manifest orders from Google Sheet ("Manifest_Orders" tab)
+ * Allows Admin and Packers to see real-time order creation, status changes, and completion.
+ */
 export async function syncManifestsWithCloud(): Promise<{ success: boolean; manifests?: OrderManifest[]; error?: string }> {
   try {
     const res = await requestApi<{ success: boolean; manifests?: OrderManifest[]; error?: string }>('getOrderManifests', {});
     if (res && res.success && Array.isArray(res.manifests)) {
       const deletedSet = getDeletedManifestIds();
       
-      // The Google Sheet "Manifest_Orders" tab is the single source of truth for active orders
       const cloudManifests = res.manifests.filter((m) => m.orderId && !deletedSet.has(m.orderId.toLowerCase().trim()));
       
+      const local = getStoredManifests();
+      const localMap = new Map<string, OrderManifest>();
+      local.forEach((m) => localMap.set(m.orderId.toLowerCase().trim(), m));
+
       const map = new Map<string, OrderManifest>();
-      // Add all active cloud manifests from Google Sheet
-      cloudManifests.forEach((m) => {
-        map.set(m.orderId.toLowerCase().trim(), m);
+
+      // Merge Cloud manifests with Local overrides if local has unsynced updates (e.g. status Packed or assigned packer)
+      cloudManifests.forEach((cloudItem) => {
+        const id = cloudItem.orderId.toLowerCase().trim();
+        const localItem = localMap.get(id);
+
+        if (localItem) {
+          const isLocalPacked = localItem.status === 'Packed';
+          const isCloudPacked = cloudItem.status === 'Packed';
+
+          const mergedItem: OrderManifest = {
+            ...cloudItem,
+            // Preserve Packed status & video url if local is already packed but cloud hasn't updated yet
+            status: isLocalPacked && !isCloudPacked ? 'Packed' : cloudItem.status,
+            packedAt: localItem.packedAt || cloudItem.packedAt,
+            packedByName: localItem.packedByName || cloudItem.packedByName,
+            packedByEmail: localItem.packedByEmail || cloudItem.packedByEmail,
+            videoDriveUrl: localItem.videoDriveUrl || cloudItem.videoDriveUrl,
+            // Preserve local assignment if cloud is missing it
+            assignedPackerName: cloudItem.assignedPackerName || localItem.assignedPackerName,
+            assignedPackerEmail: cloudItem.assignedPackerEmail || localItem.assignedPackerEmail,
+            notes: cloudItem.notes || localItem.notes,
+            items: (cloudItem.items && cloudItem.items.length > 0) ? cloudItem.items : localItem.items,
+          };
+          map.set(id, mergedItem);
+        } else {
+          map.set(id, cloudItem);
+        }
       });
 
-      // Keep only brand-new local entries added in the last 2 minutes that haven't landed in cloud yet
-      const local = getStoredManifests();
-      const twoMinsAgo = Date.now() - 2 * 60 * 1000;
+      // Keep brand-new local entries added in the last 5 minutes that haven't landed in cloud yet
+      const fiveMinsAgo = Date.now() - 5 * 60 * 1000;
       local.forEach((m) => {
         const id = m.orderId.toLowerCase().trim();
         if (!map.has(id) && !deletedSet.has(id)) {
           const createdAt = m.processedAt ? new Date(m.processedAt).getTime() : 0;
-          if (createdAt > twoMinsAgo) {
+          if (createdAt > fiveMinsAgo) {
             map.set(id, m);
           }
         }
@@ -1464,6 +1523,49 @@ export async function syncManifestsWithCloud(): Promise<{ success: boolean; mani
   } catch (err: any) {
     return { success: false, error: err?.message || 'Manifest cloud sync error' };
   }
+}
+
+/**
+ * Global Real-Time Background Manifest Sync Loop:
+ * Polls Google Sheets every 5 seconds across all tabs & screens.
+ */
+export function startGlobalManifestSyncLoop(intervalMs = 5000): () => void {
+  if (globalSyncTimer) return () => {};
+
+  const doSync = async () => {
+    if (isGlobalSyncing) return;
+    isGlobalSyncing = true;
+    try {
+      await syncManifestsWithCloud();
+    } catch (_) {
+    } finally {
+      isGlobalSyncing = false;
+    }
+  };
+
+  // Immediate sync on load
+  doSync();
+
+  // Fast periodic polling (5 seconds)
+  globalSyncTimer = setInterval(doSync, intervalMs);
+
+  const handleFocus = () => {
+    if (document.visibilityState === 'visible') {
+      doSync();
+    }
+  };
+
+  window.addEventListener('visibilitychange', handleFocus);
+  window.addEventListener('focus', handleFocus);
+  window.addEventListener('online', doSync);
+
+  return () => {
+    if (globalSyncTimer) clearInterval(globalSyncTimer);
+    globalSyncTimer = null;
+    window.removeEventListener('visibilitychange', handleFocus);
+    window.removeEventListener('focus', handleFocus);
+    window.removeEventListener('online', doSync);
+  };
 }
 
 /**

@@ -314,7 +314,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
       } finally {
         isPolling = false;
       }
-    }, 60000);
+    }, 5000);
 
     const handleWindowFocus = () => {
       if (!isPolling) {

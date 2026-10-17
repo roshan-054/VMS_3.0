@@ -38,7 +38,7 @@ import {
   applyFavicon,
   BrandingConfig
 } from './lib/branding';
-import { getStoredManifests } from './lib/manifestStorage';
+import { getStoredManifests, startGlobalManifestSyncLoop } from './lib/manifestStorage';
 import { initUploadWorker } from './lib/uploadWorker';
 import { ScanRecord } from './components/ScanRecord';
 import { OrderProcessing } from './components/OrderProcessing';
@@ -211,11 +211,14 @@ export function App() {
     } catch (e) {}
   };
 
-  // Initialize global background upload worker and queue sync
+  // Initialize global background upload worker, queue sync, and real-time manifest sync loop
   useEffect(() => {
     const cleanupWorker = initUploadWorker((msg, type) => {
       showToast(msg, type);
     });
+
+    // Start 5-second real-time manifest sync loop across all workstations & tabs
+    const cleanupManifestSync = startGlobalManifestSyncLoop(5000);
 
     const handleQueueChange = () => {
       refreshQueueBadge();
@@ -235,6 +238,7 @@ export function App() {
 
     return () => {
       cleanupWorker();
+      cleanupManifestSync();
       window.removeEventListener('ops_queue_updated', handleQueueChange);
       window.removeEventListener('vms_manifests_updated', handleManifestChange);
       clearInterval(timer);

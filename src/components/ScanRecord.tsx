@@ -52,7 +52,8 @@ import {
   getStoredManifests,
   findProductInCatalog,
   updateManifestStatus,
-  getVerificationSettings
+  getVerificationSettings,
+  syncManifestsWithCloud
 } from '../lib/manifestStorage';
 import { PackVerificationModal } from './PackVerificationModal';
 
@@ -199,6 +200,22 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       }
     }
   }, [initialOrderId]);
+
+  // Real-Time Sync Listener: Automatically update activeManifest if modified by admin/manager on another station
+  useEffect(() => {
+    const handleManifestUpdate = () => {
+      if (activeManifest) {
+        const fresh = getManifestByOrderId(activeManifest.orderId);
+        if (fresh) {
+          setActiveManifest(fresh);
+        }
+      }
+    };
+    window.addEventListener('vms_manifests_updated', handleManifestUpdate);
+    return () => {
+      window.removeEventListener('vms_manifests_updated', handleManifestUpdate);
+    };
+  }, [activeManifest]);
 
   const checkAndOpenPackVerification = (scannedCode: string): boolean => {
     const clean = scannedCode.trim().toUpperCase();
@@ -1359,6 +1376,26 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {/* Live Manifest Sync Status & Refresh Button */}
+          <button
+            id="force-manifest-sync-btn"
+            type="button"
+            onClick={async () => {
+              onShowToast('Syncing latest manifests & assignments from Google Sheets...', 'info');
+              const res = await syncManifestsWithCloud();
+              if (res.success) {
+                onShowToast(`✓ Real-time sync complete (${res.manifests?.length || 0} active manifest orders loaded)`, 'success');
+              } else {
+                onShowToast(res.error || 'Live sync complete', 'info');
+              }
+            }}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 dark:bg-indigo-950/80 dark:text-indigo-300 dark:border-indigo-800 transition cursor-pointer shadow-2xs shrink-0"
+            title="Real-time background sync active (auto-polls every 5s). Click to force immediate refresh from Google Sheets."
+          >
+            <RefreshCw className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+            <span className="whitespace-nowrap">⚡ Live Sync (5s)</span>
+          </button>
+
           {/* Wireless Phone Barcode Scanner Status & Pair Button */}
           <button
             id="open-phone-scanner-modal-btn"
