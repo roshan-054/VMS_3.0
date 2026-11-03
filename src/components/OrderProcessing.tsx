@@ -300,37 +300,10 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     // Initial real-time cloud data refresh from Google Sheet
     handleRefreshAllLiveData();
 
-    // Periodic Real-Time Polling for live manifest creation (60s interval with in-flight guard to avoid looping)
-    let isPolling = false;
-    const syncInterval = setInterval(async () => {
-      if (isPolling) return;
-      isPolling = true;
-      try {
-        await Promise.allSettled([
-          syncManifestsWithCloud(),
-          syncVerificationLogsWithCloud(),
-        ]);
-      } catch (_) {
-      } finally {
-        isPolling = false;
-      }
-    }, 5000);
-
-    const handleWindowFocus = () => {
-      if (!isPolling) {
-        isPolling = true;
-        Promise.allSettled([
-          syncManifestsWithCloud(),
-          syncVerificationLogsWithCloud(),
-        ]).finally(() => {
-          isPolling = false;
-        });
-      }
+    // Listen to updates from other tabs / local actions / global sync loop
+    const handleManifestUpdate = () => {
+      setManifests(getStoredManifests());
     };
-    window.addEventListener('focus', handleWindowFocus);
-
-    // Listen to updates from other tabs / local actions
-    const handleManifestUpdate = () => setManifests(getStoredManifests());
     const handleGtinUpdate = () => setGtinCatalog(getStoredGtinCatalog());
     const handleLogsUpdate = () => setVerificationLogs(getStoredVerificationLogs());
 
@@ -340,8 +313,6 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
     return () => {
       isMounted = false;
-      clearInterval(syncInterval);
-      window.removeEventListener('focus', handleWindowFocus);
       window.removeEventListener('vms_manifests_updated', handleManifestUpdate);
       window.removeEventListener('vms_gtin_catalog_updated', handleGtinUpdate);
       window.removeEventListener('vms_verification_logs_updated', handleLogsUpdate);
@@ -372,33 +343,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   const handleItemFieldChange = (index: number, field: string, value: any) => {
     setOrderItems((prev) => {
       const updated = [...prev];
-      const target = { ...updated[index], [field]: value };
-
-      // Multi-directional Auto-Fill:
-      // If user types or changes Product Name, SKU, or GTIN, look up match in GTIN catalog!
-      if (field === 'gtin' || field === 'sku' || field === 'productName' || field === 'shortName') {
-        const found = findProductInCatalog(value);
-        if (found) {
-          // If match found, auto-fill all other fields and image!
-          if (found.gtin && (field === 'productName' || field === 'sku' || !target.gtin)) {
-            target.gtin = found.gtin;
-          }
-          if (found.sku && (field === 'productName' || field === 'gtin' || !target.sku)) {
-            target.sku = found.sku;
-          }
-          if (found.productName && field !== 'productName') {
-            target.productName = found.productName;
-          }
-          if (found.shortName && field !== 'shortName') {
-            target.shortName = found.shortName;
-          }
-          if (found.imageUrl) {
-            target.imageUrl = found.imageUrl;
-          }
-        }
-      }
-
-      updated[index] = target;
+      updated[index] = { ...updated[index], [field]: value };
       return updated;
     });
   };
@@ -423,18 +368,6 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     setTimeout(() => {
       setActiveSuggestion((curr) => (curr?.rowIndex === index && curr?.field === field ? null : curr));
     }, 220);
-
-    // Auto-fill on blur if a matching catalog product is detected
-    const currentItem = orderItems[index];
-    if (currentItem) {
-      const val = field === 'productName' ? currentItem.productName : field === 'sku' ? currentItem.sku : currentItem.gtin;
-      if (val && val.trim()) {
-        const found = findProductInCatalog(val.trim());
-        if (found) {
-          handleSelectProductFromCatalog(index, found);
-        }
-      }
-    }
   };
 
   // Submit Order Manifest Pre-Entry
@@ -983,21 +916,6 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
       ...updatedItems[itemIdx],
       [field]: value
     };
-
-    // Smart auto-fill if user types or selects from catalog
-    if (field === 'gtin' || field === 'sku' || field === 'productName') {
-      const found = findProductInCatalog(String(value).trim());
-      if (found) {
-        updatedItems[itemIdx] = {
-          ...updatedItems[itemIdx],
-          gtin: found.gtin || updatedItems[itemIdx].gtin,
-          sku: found.sku || updatedItems[itemIdx].sku,
-          productName: found.productName || updatedItems[itemIdx].productName,
-          shortName: found.shortName || found.productName || updatedItems[itemIdx].shortName,
-          imageUrl: found.imageUrl || updatedItems[itemIdx].imageUrl
-        };
-      }
-    }
 
     setEditingManifest({
       ...editingManifest,

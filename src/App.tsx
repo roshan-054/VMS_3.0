@@ -217,8 +217,8 @@ export function App() {
       showToast(msg, type);
     });
 
-    // Start 5-second real-time manifest sync loop across all workstations & tabs
-    const cleanupManifestSync = startGlobalManifestSyncLoop(5000);
+    // Start 15-second real-time manifest sync loop across all workstations & tabs
+    const cleanupManifestSync = startGlobalManifestSyncLoop(15000);
 
     const handleQueueChange = () => {
       refreshQueueBadge();

@@ -644,37 +644,35 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     return cleaned;
   };
 
-  // Auto-detect platform and recording type based on barcode pattern
+  // Auto-detect platform and recording type based on clear barcode patterns (never on arbitrary substrings)
   const detectPlatformAndType = (barcode: string) => {
     if (!barcode) return;
-    const lower = barcode.toLowerCase().trim();
-    
-    // Detect Return keywords
-    if (/^ret[-_]/i.test(lower) || /[-_]ret$/i.test(lower) || lower.includes('return') || lower.includes('-r-') || lower.includes('_ret')) {
+    const clean = barcode.trim();
+    const lower = clean.toLowerCase();
+
+    // Detect Return keywords strictly (only clear prefixes/suffixes, never '-r-')
+    if (/^ret[-_]/i.test(lower) || /[-_]ret$/i.test(lower) || /^rvp[-_]/i.test(lower) || lower.startsWith('return-')) {
       setRecordingType('Return');
     }
-    
-    // Detect Platform
+
+    // Detect Platform based on standard e-commerce barcode standards
     if (
-      lower.startsWith('amz') || 
-      lower.startsWith('40') || 
-      lower.startsWith('17') ||
-      /^\d{3}-\d{7}-\d{7}$/.test(barcode.trim()) ||
-      lower.includes('amazon')
+      lower.startsWith('amz-') ||
+      /^\d{3}-\d{7}-\d{7}$/.test(clean) ||
+      /^40\d{8,12}$/.test(clean) ||
+      /^17\d{8,12}$/.test(clean) ||
+      lower.startsWith('amazon-')
     ) {
       setPlatform('Amazon');
-    } else if (lower.startsWith('jio') || lower.startsWith('jm-') || lower.startsWith('r-') || lower.includes('jiomart')) {
+    } else if (lower.startsWith('jio-') || lower.startsWith('jm-') || lower.startsWith('jiomart-')) {
       setPlatform('JioMart');
     } else if (
-      lower.startsWith('#od') ||
-      lower.startsWith('od') || 
-      lower.startsWith('d2c') || 
-      lower.startsWith('w-') || 
-      lower.startsWith('sh-') || 
+      lower.startsWith('#od-') ||
+      lower.startsWith('od-') ||
+      lower.startsWith('d2c-') ||
+      lower.startsWith('w-') ||
       lower.startsWith('fk-') ||
-      /^\d{12,16}$/.test(barcode.trim()) || // 12-16 digit Delhivery/Shiprocket AWB e.g. 33737210019224
-      lower.includes('delhivery') ||
-      lower.includes('d2c')
+      /^\d{12,16}$/.test(clean) // 12-16 digit Delhivery/Shiprocket tracking AWB
     ) {
       setPlatform('D2C');
     }
@@ -1390,10 +1388,10 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
               }
             }}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 dark:bg-indigo-950/80 dark:text-indigo-300 dark:border-indigo-800 transition cursor-pointer shadow-2xs shrink-0"
-            title="Real-time background sync active (auto-polls every 5s). Click to force immediate refresh from Google Sheets."
+            title="Real-time background sync active. Click to force immediate refresh from Google Sheets."
           >
             <RefreshCw className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-            <span className="whitespace-nowrap">⚡ Live Sync (5s)</span>
+            <span className="whitespace-nowrap">⚡ Live Sync</span>
           </button>
 
           {/* Wireless Phone Barcode Scanner Status & Pair Button */}
@@ -1967,9 +1965,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                   placeholder="Scan barcode (e.g. #OD-5035) or type Order ID"
                   value={orderId}
                   onChange={(e) => {
-                    const val = e.target.value;
-                    setOrderId(val);
-                    detectPlatformAndType(val);
+                    setOrderId(e.target.value);
                   }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {

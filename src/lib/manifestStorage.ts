@@ -94,15 +94,21 @@ export function recordDeletedGtinCode(gtin: string): void {
 export function enrichManifestItems(items: ManifestItem[]): ManifestItem[] {
   if (!Array.isArray(items)) return [];
   return items.map((it) => {
-    const found = findProductInCatalog(it.sku || it.productName || it.gtin);
+    // Look up strictly by exact GTIN or exact SKU - NEVER by vague product name
+    const cleanGtin = it.gtin ? String(it.gtin).trim() : '';
+    const cleanSku = it.sku ? String(it.sku).trim() : '';
+    if (!cleanGtin && !cleanSku) return it;
+
+    const found = (cleanGtin ? findProductInCatalog(cleanGtin) : null) || (cleanSku ? findProductInCatalog(cleanSku) : null);
     if (found) {
       return {
         ...it,
-        gtin: it.gtin || found.gtin || '',
-        sku: it.sku || found.sku || '',
-        productName: it.productName || found.productName || '',
-        shortName: it.shortName || found.shortName || found.productName || '',
-        imageUrl: it.imageUrl || found.imageUrl || ''
+        // Preserve user's original values; never mutate user-entered GTIN, SKU or Product Name!
+        gtin: cleanGtin || found.gtin || '',
+        sku: cleanSku || found.sku || '',
+        productName: it.productName?.trim() || found.productName || '',
+        shortName: it.shortName?.trim() || found.shortName || it.productName || found.productName || '',
+        imageUrl: it.imageUrl?.trim() || found.imageUrl || ''
       };
     }
     return it;
@@ -807,24 +813,7 @@ export function findProductInCatalog(query: string): GtinCatalogProduct | null {
     if (altMatch) return altMatch;
   }
 
-  // 6. Substring / Prefix match on Product Name or Short Name if query length >= 3
-  if (clean.length >= 3) {
-    const prefixMatch = catalog.find((p) => {
-      const name = (p.productName || '').toUpperCase();
-      const short = (p.shortName || '').toUpperCase();
-      const sku = (p.sku || '').toUpperCase();
-      return name.startsWith(clean) || short.startsWith(clean) || sku.startsWith(clean);
-    });
-    if (prefixMatch) return prefixMatch;
-
-    const containsMatch = catalog.find((p) => {
-      const name = (p.productName || '').toUpperCase();
-      const short = (p.shortName || '').toUpperCase();
-      return name.includes(clean) || short.includes(clean);
-    });
-    if (containsMatch) return containsMatch;
-  }
-
+  // Exact matching only. For prefix/partial searching in autocomplete dropdowns, use searchCatalog()
   return null;
 }
 
@@ -1529,7 +1518,7 @@ export async function syncManifestsWithCloud(): Promise<{ success: boolean; mani
  * Global Real-Time Background Manifest Sync Loop:
  * Polls Google Sheets every 5 seconds across all tabs & screens.
  */
-export function startGlobalManifestSyncLoop(intervalMs = 5000): () => void {
+export function startGlobalManifestSyncLoop(intervalMs = 15000): () => void {
   if (globalSyncTimer) return () => {};
 
   const doSync = async () => {
