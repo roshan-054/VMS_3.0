@@ -1,6 +1,7 @@
 import { QueueItem } from '../types';
 import {
   dbGetAllQueue,
+  dbGetQueueItem,
   dbPutQueue,
   dbDeleteQueueItem,
   getStoredDriveFolderId,
@@ -24,10 +25,43 @@ interface WorkerState {
 }
 
 let isWorkerBusy = false;
+let isRecordingInProgress = false;
+const recordingResumeResolvers: Array<() => void> = [];
 let autoSyncTimer: any = null;
 let toastHandler: WorkerToastHandler | null = null;
 const stateListeners = new Set<(state: WorkerState) => void>();
 const deletedItemIds = new Set<string>();
+
+/**
+ * Coordinates background uploads with live video recording so heavy chunk
+ * reads/base64 encoding never contend with MediaRecorder frames on the main thread.
+ */
+export function setRecordingInProgress(active: boolean): void {
+  isRecordingInProgress = active;
+  if (!active) {
+    while (recordingResumeResolvers.length > 0) {
+      const resolve = recordingResumeResolvers.shift();
+      try {
+        resolve?.();
+      } catch (_) {}
+    }
+    // Kick off any queued uploads once recording finishes
+    setTimeout(() => {
+      triggerUploadWorker().catch(() => {});
+    }, 300);
+  }
+}
+
+export function getRecordingInProgress(): boolean {
+  return isRecordingInProgress;
+}
+
+async function waitWhileRecording(): Promise<void> {
+  if (!isRecordingInProgress) return;
+  await new Promise<void>((resolve) => {
+    recordingResumeResolvers.push(resolve);
+  });
+}
 
 let currentState: WorkerState = {
   isProcessing: false,
@@ -40,14 +74,15 @@ let currentState: WorkerState = {
 
 /**
  * Safely saves an item to IndexedDB ONLY if it has not been deleted by the user.
- * This prevents background worker tasks from resurrecting deleted items.
+ * Uses single-key lookup (dbGetQueueItem) instead of dbGetAllQueue to avoid
+ * deserializing every multi-MB video blob on each chunk update.
  */
 async function safePutQueue(item: QueueItem): Promise<boolean> {
   if (!item || !item.id || deletedItemIds.has(item.id)) {
     return false;
   }
-  const all = await dbGetAllQueue();
-  if (!all.some((i) => i.id === item.id)) {
+  const existing = await dbGetQueueItem(item.id);
+  if (!existing) {
     return false;
   }
   await dbPutQueue(item);
@@ -156,7 +191,7 @@ function blobToBase64(blob: Blob): Promise<string> {
  * Background Upload Worker - Processes items sequentially
  */
 export async function triggerUploadWorker(): Promise<void> {
-  if (isWorkerBusy) {
+  if (isWorkerBusy || isRecordingInProgress) {
     return;
   }
 
@@ -558,15 +593,26 @@ export async function triggerUploadWorker(): Promise<void> {
     let directUploadDisabled = false;
 
     for (let c = 0; c < totalChunks; c++) {
+      // Yield cleanly between chunks if the operator starts recording a new video so the
+      // main thread, disk I/O, and memory stay 100% dedicated to continuous frame capture.
+      if (isRecordingInProgress) {
+        updateState({
+          isProcessing: true,
+          activeItemId: currentItem.id,
+          activeProgress: currentItem.progress || 0,
+          activeStage: 'Paused briefly while recording live video...',
+        });
+        await waitWhileRecording();
+      }
+
       if (deletedItemIds.has(currentItem.id)) {
         isWorkerBusy = false;
         updateState({ isProcessing: false, activeItemId: null, activeProgress: 0, activeStage: '' });
         return;
       }
 
-      // Re-check if item was deleted or paused by user mid-stream
-      const freshQueue = await dbGetAllQueue();
-      const freshItem = freshQueue.find((i) => i.id === currentItem.id);
+      // Single-item IndexedDB lookup instead of loading every stored video blob in the queue
+      const freshItem = await dbGetQueueItem(currentItem.id);
       if (!freshItem || deletedItemIds.has(currentItem.id)) {
         isWorkerBusy = false;
         updateState({ isProcessing: false, activeItemId: null, activeProgress: 0, activeStage: '' });

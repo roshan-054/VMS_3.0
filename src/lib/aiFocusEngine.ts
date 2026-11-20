@@ -12,7 +12,6 @@
  *   to physically focus the lens onto the detected item without any artificial cropping.
  */
 
-import { BrowserMultiFormatReader } from '@zxing/library';
 
 export type FocusMode = 'AUTO' | 'LABEL' | 'INVOICE' | 'PRODUCT' | 'OVERVIEW';
 
@@ -77,7 +76,7 @@ export function saveStoredAiFocusCalibration(config: Partial<AiFocusCalibration>
 export class AiFocusEngine {
   private calibration: AiFocusCalibration;
   private mode: FocusMode = 'AUTO';
-  private zxingReader: BrowserMultiFormatReader;
+  private nativeBarcodeDetector: any = null;
   private offscreenCanvas: HTMLCanvasElement;
   private offscreenCtx: CanvasRenderingContext2D | null;
 
@@ -98,10 +97,17 @@ export class AiFocusEngine {
 
   constructor() {
     this.calibration = getStoredAiFocusCalibration();
-    this.zxingReader = new BrowserMultiFormatReader();
+    try {
+      const BD = (window as any).BarcodeDetector;
+      if (typeof BD === 'function') {
+        this.nativeBarcodeDetector = new BD();
+      }
+    } catch (_) {
+      this.nativeBarcodeDetector = null;
+    }
     this.offscreenCanvas = document.createElement('canvas');
-    this.offscreenCanvas.width = 320;
-    this.offscreenCanvas.height = 180;
+    this.offscreenCanvas.width = 160;
+    this.offscreenCanvas.height = 90;
     this.offscreenCtx = this.offscreenCanvas.getContext('2d', { willReadFrequently: true });
   }
 
@@ -124,12 +130,12 @@ export class AiFocusEngine {
   }
 
   /**
-   * Run computer vision detection on the video element.
-   * Call every ~100-200ms for lightweight CPU footprint.
+   * Run lightweight computer vision detection on the video element (preview only).
+   * Never uses synchronous ZXing decoding on the main thread so video recording stays 100% glitch-free.
    */
   public async analyzeFrame(video: HTMLVideoElement): Promise<void> {
     const now = Date.now();
-    if (this.isDetecting || now - this.lastAnalyzeTime < 110) return;
+    if (this.isDetecting || now - this.lastAnalyzeTime < 350) return;
     if (!video || video.readyState < 2 || video.videoWidth === 0) return;
 
     this.isDetecting = true;
@@ -138,8 +144,8 @@ export class AiFocusEngine {
     try {
       const vWidth = video.videoWidth;
       const vHeight = video.videoHeight;
-      const sWidth = 320;
-      const sHeight = Math.round((vHeight / vWidth) * sWidth) || 180;
+      const sWidth = 160;
+      const sHeight = Math.round((vHeight / vWidth) * sWidth) || 90;
 
       if (this.offscreenCanvas.width !== sWidth || this.offscreenCanvas.height !== sHeight) {
         this.offscreenCanvas.width = sWidth;
@@ -149,41 +155,41 @@ export class AiFocusEngine {
       const ctx = this.offscreenCtx;
       if (!ctx) return;
 
-      // Draw downscaled frame for rapid vision analysis
+      // Draw tiny downscaled frame (<0.5ms) for lightweight vision analysis
       ctx.drawImage(video, 0, 0, sWidth, sHeight);
 
-      // 1. Check for real barcode/QR code via ZXing
-      let barcodeResult: any = null;
-      try {
-        barcodeResult = this.zxingReader.decode(this.offscreenCanvas as any);
-      } catch (zxErr) {
-        // Normal when no barcode in current frame
-      }
-
-      if (barcodeResult && barcodeResult.getText()) {
-        const text = barcodeResult.getText();
-        this.lastBarcodeText = text;
-        const pts = barcodeResult.getResultPoints ? barcodeResult.getResultPoints() : [];
-        let box: BoundingBox = { x: 0.2, y: 0.2, width: 0.6, height: 0.6 };
-        if (pts && pts.length >= 2) {
-          const xs = pts.map((p: any) => p.x / sWidth);
-          const ys = pts.map((p: any) => p.y / sHeight);
-          const minX = Math.max(0, Math.min(...xs) - 0.12);
-          const maxX = Math.min(1, Math.max(...xs) + 0.12);
-          const minY = Math.max(0, Math.min(...ys) - 0.12);
-          const maxY = Math.min(1, Math.max(...ys) + 0.12);
-          box = {
-            x: minX,
-            y: minY,
-            width: Math.max(0.25, maxX - minX),
-            height: Math.max(0.2, maxY - minY),
-          };
+      // 1. Optional async native GPU BarcodeDetector (non-blocking — never synchronous ZXing!)
+      if (this.nativeBarcodeDetector) {
+        try {
+          const detected = await this.nativeBarcodeDetector.detect(this.offscreenCanvas);
+          if (Array.isArray(detected) && detected.length > 0) {
+            const first = detected[0];
+            if (first.rawValue) {
+              this.lastBarcodeText = first.rawValue;
+            }
+            let box: BoundingBox = { x: 0.2, y: 0.2, width: 0.6, height: 0.6 };
+            if (first.boundingBox) {
+              const b = first.boundingBox;
+              const bx = Math.max(0, b.x / sWidth - 0.1);
+              const by = Math.max(0, b.y / sHeight - 0.1);
+              const bw = Math.min(1 - bx, b.width / sWidth + 0.2);
+              const bh = Math.min(1 - by, b.height / sHeight + 0.2);
+              box = {
+                x: bx,
+                y: by,
+                width: Math.max(0.25, bw),
+                height: Math.max(0.2, bh),
+              };
+            }
+            this.registerDetection('LABEL', 0.95, box);
+            return;
+          }
+        } catch (_) {
+          // Hardware BarcodeDetector optional
         }
-        this.registerDetection('LABEL', 0.95, box);
-        return;
       }
 
-      // 2. Luminance & Edge density vision analysis
+      // 2. Lightweight Luminance & Edge density vision analysis on 160x90
       const imgData = ctx.getImageData(0, 0, sWidth, sHeight);
       const data = imgData.data;
       const analysis = this.analyzeLuminanceAndEdges(data, sWidth, sHeight);
@@ -191,7 +197,6 @@ export class AiFocusEngine {
       if (analysis.detectedType !== 'OVERVIEW' && analysis.confidence >= this.calibration.minConfidence) {
         this.registerDetection(analysis.detectedType, analysis.confidence, analysis.box);
       } else {
-        // If nothing detected for holdTimeMs, default back to OVERVIEW / PRODUCT
         if (now - this.lastDetectionTime > this.calibration.holdTimeMs) {
           if (analysis.hasCentralActivity) {
             this.registerDetection('PRODUCT', 0.65, analysis.centralBox);
@@ -381,21 +386,25 @@ export class AiFocusEngine {
   }
 
   /**
-   * Renders the video frame to the recording canvas without any cropping or digital zoom (1.0x Full Frame).
-   * Dynamically tracks the auto-focus target area coordinates for optical auto-focus and visual feedback.
+   * Renders the video frame to the recording canvas without cropping, digital zoom,
+   * mid-recording canvas resizing, or heavy per-frame ctx.filter shader passes.
    */
   public renderFrameToCanvas(
     video: HTMLVideoElement,
     canvas: HTMLCanvasElement,
-    ctx: CanvasRenderingContext2D
+    ctx: CanvasRenderingContext2D,
+    lockDimensions = false
   ): FocusState {
     const vWidth = video.videoWidth || 1280;
     const vHeight = video.videoHeight || 720;
 
-    if (canvas.width !== vWidth || canvas.height !== vHeight) {
+    if (!lockDimensions && (canvas.width !== vWidth || canvas.height !== vHeight)) {
       canvas.width = vWidth;
       canvas.height = vHeight;
     }
+
+    const targetW = canvas.width || vWidth;
+    const targetH = canvas.height || vHeight;
 
     // Smooth Bounding Box transition for visual reticle
     const speed = Math.max(0.08, Math.min(0.4, this.calibration.transitionSpeed));
@@ -404,19 +413,13 @@ export class AiFocusEngine {
     this.currentBoundingBox.width += (this.lastTargetBox.width - this.currentBoundingBox.width) * speed;
     this.currentBoundingBox.height += (this.lastTargetBox.height - this.currentBoundingBox.height) * speed;
 
-    // Draw the 100% FULL, uncropped video frame directly
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-
-    // Apply mild clarity boost to enhance edge contrast for barcodes & text without zooming
-    if (this.calibration.enableClarityEnhance && this.lastDetectedType !== 'OVERVIEW') {
-      ctx.filter = 'contrast(104%) brightness(101%)';
-    } else {
-      ctx.filter = 'none';
+    // Fast direct GPU blit without full-frame ctx.filter overhead (prevents frame drops!)
+    const needsScale = targetW !== vWidth || targetH !== vHeight;
+    ctx.imageSmoothingEnabled = needsScale;
+    if (needsScale) {
+      ctx.imageSmoothingQuality = 'medium';
     }
-
-    ctx.drawImage(video, 0, 0, vWidth, vHeight);
-    ctx.filter = 'none';
+    ctx.drawImage(video, 0, 0, targetW, targetH);
 
     // Determine current descriptive label
     let label = 'STATION OVERVIEW';
@@ -452,19 +455,20 @@ export class AiFocusEngine {
    * Applies hardware camera track point of interest optical autofocus if supported by webcam.
    * Tells the camera lens to focus directly on the target coordinates.
    */
-  public async applyHardwarePoi(track: MediaStreamTrack | null): Promise<void> {
-    if (!track || !this.calibration.autoHardwareFocus) return;
+  public async applyHardwarePoi(track: MediaStreamTrack | null, isRecording = false): Promise<void> {
+    // Never spam UVC camera applyConstraints while recording — USB drivers reset/stall frames!
+    if (isRecording || !track || !this.calibration.autoHardwareFocus) return;
 
     const now = Date.now();
-    // Throttle hardware constraint calls to prevent camera driver spam
-    if (now - this.lastHardwarePoiTime < 350) return;
+    // Throttle hardware constraint calls generously to avoid driver hiccups
+    if (now - this.lastHardwarePoiTime < 1500) return;
 
     const normX = Math.max(0.05, Math.min(0.95, this.currentBoundingBox.x + this.currentBoundingBox.width / 2));
     const normY = Math.max(0.05, Math.min(0.95, this.currentBoundingBox.y + this.currentBoundingBox.height / 2));
 
-    // Only send if shifted by more than 5%
+    // Only send if shifted by more than 8%
     const dist = Math.hypot(normX - this.lastPoiCoords.x, normY - this.lastPoiCoords.y);
-    if (dist < 0.05 && now - this.lastHardwarePoiTime < 2500) return;
+    if (dist < 0.08 && now - this.lastHardwarePoiTime < 4000) return;
 
     this.lastHardwarePoiTime = now;
     this.lastPoiCoords = { x: normX, y: normY };
