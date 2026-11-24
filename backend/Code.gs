@@ -3093,6 +3093,21 @@ function deleteLogEntry_(p){
  * Groups by normalized Order ID + Recording Type (Forward vs Return are distinct).
  * Guarantees that every tab retains its 1 unique keeper record, and only surplus duplicates are cleaned.
  */
+// "17.98 MB", "1.4 KB", "512 bytes" or a plain byte count -> bytes; -1 when unknown.
+function parseSizeBytes_(v) {
+  if (typeof v === 'number') return v > 0 ? v : -1;
+  const m = String(v || '').trim().match(/^([\d.]+)\s*(bytes?|b|kb|mb|gb)?$/i);
+  if (!m) return -1;
+  const n = parseFloat(m[1]);
+  const unit = (m[2] || 'b').toLowerCase();
+  const mult = unit === 'kb' ? 1024 : unit === 'mb' ? 1048576 : unit === 'gb' ? 1073741824 : 1;
+  return Math.round(n * mult);
+}
+
+function isTinyVideo_(bytes) {
+  return bytes >= 0 && bytes < 64 * 1024;
+}
+
 function scanDuplicateRecords_(p) {
   const user = session_(p.token);
   const targetOrderId = p.orderId ? normalizeOrderId_(p.orderId) : '';
@@ -3171,6 +3186,9 @@ function scanDuplicateRecords_(p) {
       let timeCol = headers.findIndex(function(h) { return /timestamp|date|time/i.test(h); });
       if (timeCol === -1) timeCol = 0;
 
+      // 10. Locate File Size Column (OrderLog calls it "Package Weight")
+      let sizeCol = headers.findIndex(function(h) { return /file\s*size|^size$|package\s*weight/i.test(h); });
+
       for (let i = 1; i < v.length; i++) {
         const rawOrder = String(v[i][orderCol] || '').trim();
         const normOrder = normalizeOrderId_(rawOrder);
@@ -3216,7 +3234,8 @@ function scanDuplicateRecords_(p) {
           fileId: fid,
           fileName: fileNameVal,
           playbackUrl: playback || (fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : ''),
-          status: statusVal
+          status: statusVal,
+          sizeBytes: sizeCol >= 0 ? parseSizeBytes_(v[i][sizeCol]) : -1
         });
       }
     } catch(sheetErr) {
@@ -3250,6 +3269,8 @@ function scanDuplicateRecords_(p) {
       } else {
         entries.sort(function(a, b) { return b.timeMs - a.timeMs; });
       }
+      // Never keep a near-empty video (a recording stopped right after it started) over a real one.
+      entries.sort(function(a, b) { return (isTinyVideo_(a.sizeBytes) ? 1 : 0) - (isTinyVideo_(b.sizeBytes) ? 1 : 0); });
 
       if (entries.length > 1) {
         hasAnySheetDuplicates = true;

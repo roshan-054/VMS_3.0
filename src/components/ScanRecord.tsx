@@ -39,7 +39,7 @@ import {
 } from 'lucide-react';
 import { PlatformType, RecordingType, QueueItem, OrderManifest, ManifestItem, User } from '../types';
 import { syncCloudBranding } from '../lib/branding';
-import { dbPutQueue, exceedsMaxVideoSize, formatVideoSizeLimit, getStoredVideoBitrate } from '../lib/storage';
+import { dbPutQueue, dbGetAllQueue, exceedsMaxVideoSize, formatVideoSizeLimit, getStoredVideoBitrate } from '../lib/storage';
 import { normalizeOrderId, checkDuplicate } from '../lib/api';
 import { triggerUploadWorker, setRecordingInProgress } from '../lib/uploadWorker';
 import { saveRecordingLocally, ensureBackupPermission, backupPathParts } from '../lib/localBackup';
@@ -55,6 +55,9 @@ import {
   getVerificationSettings,
 } from '../lib/manifestStorage';
 import { PackVerificationModal } from './PackVerificationModal';
+
+const MIN_VIDEO_BYTES = 64 * 1024; // anything smaller has no real footage
+const MIN_VIDEO_MS = 2000;
 
 interface ScanRecordProps {
   onQueueUpdated: () => void;
@@ -110,6 +113,12 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   // Live refs read from timers/callbacks without re-running effects
   const isCameraActiveRef = useRef<boolean>(false);
   const isRecordingRef = useRef<boolean>(false);
+  // True from Stop until the video is safely queued. A second Start in that window (a double click
+  // on Stop/Start, or a scanner Enter) used to record the same order again as a near-empty video.
+  const isSavingRef = useRef<boolean>(false);
+  const [isSavingRecording, setIsSavingRecording] = useState(false);
+  const recordStartedAtRef = useRef<number>(0);
+  const recordDurationRef = useRef<number>(Infinity);
   orderIdRef.current = orderId;
 
   // Snapshotted order metadata for the active recording session
@@ -392,7 +401,9 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
         if (isMounted) {
           const sameObj = sameRes as any;
           const otherObj = otherRes as any;
-          const isSameDup = Boolean(
+          const localSame = await findLocalRecording(trimmed, recordingType);
+          if (!isMounted) return;
+          const isSameDup = Boolean(localSame) || Boolean(
             sameRes &&
               (sameRes.fileId ||
                 sameObj?.isDuplicate ||
@@ -411,7 +422,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
             checkedOrder: trimmed,
             hasSameTypeDup: isSameDup,
             hasOtherTypeRecord: isOtherDup,
-            existingRecord: sameRes,
+            existingRecord: sameRes || (localSame ? ({ timestamp: new Date(localSame.createdAt).toISOString(), playbackUrl: localSame.webViewLink || '' } as any) : sameRes),
             otherTypeRecord: otherRes,
           });
         }
@@ -977,8 +988,21 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     onShowToast(nextState ? 'Microphone enabled' : 'Microphone disabled (muted)', 'info');
   };
 
+  // This computer's own queue already holds a video for the order (pending, uploading, failed or
+  // just uploaded). The sheet may not show it yet, so the server check alone cannot catch it.
+  const findLocalRecording = async (oid: string, type: RecordingType) => {
+    const key = normalizeOrderId(oid);
+    if (!key) return null;
+    const items = await dbGetAllQueue().catch(() => []);
+    return items.find((q) => normalizeOrderId(q.orderId) === key && q.recordingType === type) || null;
+  };
+
   const startRecording = async (verifiedItemsOverride?: ManifestItem[]) => {
     if (isRecordingRef.current) return;
+    if (isSavingRef.current) {
+      onShowToast('Still saving the previous video. Start again in a moment.', 'info');
+      return;
+    }
     const verifiedItems = verifiedItemsOverride ?? verifiedOrderItems;
 
     if (!orderId.trim()) {
@@ -1013,6 +1037,22 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       setStatusMessage({ text: collisionMsg, type: 'error' });
       onShowToast(collisionMsg, 'error');
       return;
+    }
+    if (!bypassDuplicateRef.current) {
+      const local = await findLocalRecording(orderId.trim(), recordingType);
+      if (local) {
+        const msg = `Order "${orderId.trim()}" was already recorded (${recordingType}) on this computer. Check 'Re-record & Upload Anyway' below to record it again.`;
+        setDuplicateStatus((prev) => ({
+          checkedOrder: orderId.trim(),
+          hasSameTypeDup: true,
+          hasOtherTypeRecord: prev?.hasOtherTypeRecord || false,
+          existingRecord: { timestamp: new Date(local.createdAt).toISOString(), playbackUrl: local.webViewLink || '' } as any,
+          otherTypeRecord: prev?.otherTypeRecord || null,
+        }));
+        setStatusMessage({ text: msg, type: 'error' });
+        onShowToast(msg, 'error');
+        return;
+      }
     }
 
     if (!streamRef.current || !isCameraActiveRef.current) {
@@ -1106,6 +1146,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
 
     setIsRecording(true);
     setIsPaused(false);
+    recordStartedAtRef.current = Date.now();
     recordedBytesRef.current = 0;
     setRecStartedAt(Date.now());
 
@@ -1120,7 +1161,10 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
 
     const session = recordingSessionRef.current;
     recordingSessionRef.current = null;
+    recordDurationRef.current = recordStartedAtRef.current ? Date.now() - recordStartedAtRef.current : Infinity;
     if (session) {
+      isSavingRef.current = true;
+      setIsSavingRecording(true);
       setStatusMessage({ text: 'Saving video…', type: 'info' });
       session
         .stop()
@@ -1129,6 +1173,8 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
           console.error('Stopping recorder failed:', err);
           onShowToast(`Recording could not be saved: ${err?.message || err}`, 'error');
           recordingMetaRef.current = null;
+          isSavingRef.current = false;
+          setIsSavingRecording(false);
           releaseWakeLock();
           setRecordingInProgress(false);
         });
@@ -1157,6 +1203,15 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       const fileName = `${cleanOrderId}_${cleanPlatform}_${meta.recordingType}${ext}`;
 
       const blob = result.blob;
+      const recordedMs = recordDurationRef.current;
+      if (blob.size < MIN_VIDEO_BYTES || recordedMs < MIN_VIDEO_MS) {
+        // A recording stopped right after it started holds no packing footage (e.g. 1.4 KB). It
+        // would only add a second, empty entry for the order, so it is not saved or uploaded.
+        releaseWakeLock();
+        onShowToast(`Recording for ${meta.orderId} was under 2 seconds, so it was discarded. Nothing was uploaded.`, 'info');
+        setStatusMessage({ text: `Very short recording for ${meta.orderId} discarded.`, type: 'info' });
+        return;
+      }
       // Encoder has finished flushing. The camera stays on so the next order can start instantly
       // (no camera warm-up or dark first second).
       releaseWakeLock();
@@ -1271,6 +1326,8 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     } finally {
       recordingMetaRef.current = null;
       isRecordingRef.current = false;
+      isSavingRef.current = false;
+      setIsSavingRecording(false);
       if (releaseCameraAfterSaveRef.current) {
         releaseCameraAfterSaveRef.current = false;
         releaseCameraTracks();
@@ -1528,7 +1585,8 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                       <button
                         id="start-recording-btn"
                         onClick={() => startRecording()}
-                        className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm rounded-lg shadow-sm transition inline-flex items-center gap-2 cursor-pointer"
+                        disabled={isSavingRecording}
+                        className="disabled:opacity-60 disabled:cursor-wait px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm rounded-lg shadow-sm transition inline-flex items-center gap-2 cursor-pointer"
                       >
                         <Play className="w-4 h-4 fill-white" />
                         Start Recording
