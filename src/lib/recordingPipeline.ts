@@ -73,62 +73,103 @@ function cleanMime(m: string): string {
   return (m || 'video/webm').split(';')[0];
 }
 
-async function startWebCodecs(o: StartRecordingOptions, width: number, height: number): Promise<RecordingSession | null> {
-  const source = o.cameraTrack.clone(); // stopping the recorder must never stop the live preview
-  // Buffer up to ~2 s of frames so a stalled page delays frames instead of dropping them.
-  const processor = new g.MediaStreamTrackProcessor({ track: source, maxBufferSize: 60 });
-  const worker = newWorker();
+/**
+ * One long-lived camera feed (track processor -> worker) per camera track, reused by every
+ * recording. Creating a new processor per order made Chrome stop delivering frames after a
+ * couple of recordings.
+ */
+interface CameraFeed {
+  track: MediaStreamTrack;
+  worker: Worker;
+  listeners: Set<(m: any) => void>;
+}
+let feed: CameraFeed | null = null;
 
-  let resolveDone: (r: RecordingResult) => void;
-  let rejectDone: (e: Error) => void;
+function getCameraFeed(track: MediaStreamTrack): CameraFeed {
+  if (feed && feed.track === track && track.readyState === 'live') return feed;
+  releaseCameraFeed();
+  // Buffer up to ~2 s of frames so a stalled page delays frames instead of dropping them.
+  const processor = new g.MediaStreamTrackProcessor({ track, maxBufferSize: 60 });
+  const worker = newWorker();
+  const f: CameraFeed = { track, worker, listeners: new Set() };
+  worker.onmessage = (e) => f.listeners.forEach((l) => l(e.data || {}));
+  worker.onerror = (ev) => f.listeners.forEach((l) => l({ type: 'fatal', message: ev.message || 'recording worker failed' }));
+  worker.postMessage({ type: 'attach', readable: processor.readable }, [processor.readable]);
+  feed = f;
+  return f;
+}
+
+/** Start the camera feed as soon as the camera opens, so pressing Record starts instantly. */
+export function prepareCameraFeed(track: MediaStreamTrack | undefined | null): void {
+  if (!track || !hasProcessor() || !hasEncoder()) return;
+  try {
+    getCameraFeed(track);
+  } catch (err) {
+    console.warn('Camera feed could not be prepared:', err);
+  }
+}
+
+/** Call when the camera is turned off. */
+export function releaseCameraFeed(): void {
+  if (!feed) return;
+  const w = feed.worker;
+  w.postMessage({ type: 'detach' });
+  setTimeout(() => w.terminate(), 300);
+  feed = null;
+}
+
+async function startWebCodecs(o: StartRecordingOptions, width: number, height: number): Promise<RecordingSession | null> {
+  const f = getCameraFeed(o.cameraTrack);
+  let resolveDone!: (r: RecordingResult) => void;
+  let rejectDone!: (e: Error) => void;
   const done = new Promise<RecordingResult>((res, rej) => {
     resolveDone = res;
     rejectDone = rej;
   });
-  const started = new Promise<{ ok: boolean; codec?: string }>((resolve) => {
-    worker.onmessage = (e) => {
-      const m = e.data || {};
-      if (m.type === 'started') resolve({ ok: true, codec: m.codec });
-      else if (m.type === 'unsupported') resolve({ ok: false });
+  done.catch(() => {});
+  let codec = '';
+  let listener: (m: any) => void = () => {};
+  const started = new Promise<boolean>((resolve) => {
+    listener = (m) => {
+      if (m.type === 'started') codec = m.codec;
+      else if (m.type === 'first-frame') resolve(true);
+      else if (m.type === 'unsupported') resolve(false);
       else if (m.type === 'progress') o.onProgress?.(m.bytes);
       else if (m.type === 'done') {
         if (m.error) o.onError?.(m.error);
         resolveDone(cleanResult(new Blob([m.buffer], { type: m.mimeType }), m.mimeType));
       } else if (m.type === 'fatal') {
-        resolve({ ok: false });
+        resolve(false);
         o.onError?.(m.message);
         rejectDone(new Error(m.message));
+      } else if (m.type === 'feed-ended') {
+        resolve(false);
       }
     };
-    worker.onerror = (ev) => {
-      resolve({ ok: false });
-      rejectDone(new Error(ev.message || 'recording worker failed'));
-    };
+    f.listeners.add(listener);
   });
+  f.worker.postMessage({ type: 'encode', width, height, bitrate: o.videoBitsPerSecond, preferWebm: !!o.preferWebm });
 
-  worker.postMessage(
-    { type: 'encode', readable: processor.readable, width, height, bitrate: o.videoBitsPerSecond, preferWebm: !!o.preferWebm },
-    [processor.readable]
-  );
-  const st = await Promise.race([started, new Promise<{ ok: boolean }>((r) => setTimeout(() => r({ ok: false }), 4000))]);
-  if (!st.ok) {
-    worker.terminate();
-    source.stop();
+  // Only commit to this engine once camera frames are actually being encoded; otherwise the
+  // caller falls back, so a recording is never lost.
+  const ok = await Promise.race([started, new Promise<boolean>((r) => setTimeout(() => r(false), 1500))]);
+  if (!ok) {
+    f.worker.postMessage({ type: 'stop' });
+    f.listeners.delete(listener);
+    releaseCameraFeed(); // a fresh feed is built on the next attempt
     return null;
   }
-
   return {
     mode: 'webcodecs',
-    codec: (st as any).codec || '',
+    codec,
     width,
     height,
     stop: async () => {
-      worker.postMessage({ type: 'stop' });
+      f.worker.postMessage({ type: 'stop' });
       try {
         return await done;
       } finally {
-        source.stop();
-        worker.terminate();
+        f.listeners.delete(listener);
       }
     },
   };
@@ -139,8 +180,7 @@ function cleanResult(blob: Blob, mimeType: string): RecordingResult {
 }
 
 function workerCompositeStream(o: StartRecordingOptions, width: number, height: number) {
-  const source = o.cameraTrack.clone();
-  const processor = new g.MediaStreamTrackProcessor({ track: source, maxBufferSize: 30 });
+  const processor = new g.MediaStreamTrackProcessor({ track: o.cameraTrack, maxBufferSize: 30 });
   const generator = new g.MediaStreamTrackGenerator({ kind: 'video' });
   const worker = newWorker();
   worker.postMessage({ type: 'composite', readable: processor.readable, writable: generator.writable, width, height }, [
@@ -150,8 +190,7 @@ function workerCompositeStream(o: StartRecordingOptions, width: number, height: 
   return {
     stream: new MediaStream([generator]),
     stop: () => {
-      worker.postMessage({ type: 'stop' });
-      source.stop();
+      worker.postMessage({ type: 'detach' });
       setTimeout(() => {
         worker.terminate();
         generator.stop();
@@ -276,15 +315,22 @@ export async function startRecordingSession(o: StartRecordingOptions): Promise<R
   const want = o.forceMode;
   const hasAudio = (o.audioTracks || []).length > 0;
 
+  let processorDelivered = true;
   if ((!want || want === 'webcodecs') && !hasAudio && hasProcessor() && hasEncoder()) {
-    try {
-      const s = await startWebCodecs(o, width, height);
-      if (s) return s;
-    } catch (err) {
-      console.warn('WebCodecs recorder unavailable, falling back:', err);
+    // Two tries (the second on a freshly built camera feed). If camera frames still do not reach
+    // the worker, the track-processor engines are skipped and the canvas engine is used.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const s = await startWebCodecs(o, width, height);
+        if (s) return s;
+      } catch (err) {
+        console.warn('WebCodecs recorder unavailable, falling back:', err);
+      }
     }
+    processorDelivered = false;
+    console.warn('Camera frames did not reach the recording worker; using the canvas recorder.');
   }
-  if ((!want || want === 'worker-recorder') && hasProcessor() && hasGenerator()) {
+  if ((!want || want === 'worker-recorder') && processorDelivered && hasProcessor() && hasGenerator()) {
     try {
       return startMediaRecorder(o, workerCompositeStream(o, width, height), 'worker-recorder', width, height);
     } catch (err) {
