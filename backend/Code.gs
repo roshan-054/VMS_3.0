@@ -75,7 +75,7 @@ const ADMIN_ACTIONS = [
   'scanDuplicates', 'scanDuplicateRecords', 'cleanDuplicates', 'removeDuplicates', 'removeDuplicateRecords',
   'scanOlder', 'scanOlderVideos', 'deleteOlder', 'deleteOlderVideos',
   'applyConditionalFormatting', 'saveBranding', 'uploadBrandingImage', 'checkDriveFolder',
-  'getStationQueues'
+  'getStationQueues', 'getDriveStorage'
 ];
 
 function doPost(e) {
@@ -141,6 +141,7 @@ function doPost(e) {
       case 'getVideoChunk': return output_(getVideoChunk_(p));
       case 'reportStationQueue': return output_(reportStationQueue_(p));
       case 'getStationQueues': return output_(getStationQueues_(p));
+      case 'getDriveStorage': return output_(getDriveStorage_(p));
       case 'saveOrderManifest': return output_(manifestWrite_(saveOrderManifest_(p)));
       case 'saveOrderManifestsBatch': return output_(manifestWrite_(saveOrderManifestsBatch_(p)));
       case 'getOrderManifests': return output_(getOrderManifests_(p));
@@ -4465,6 +4466,89 @@ function getStationQueues_(p) {
     });
   });
   return { success: true, stations: stations, totals: totals, serverTime: now };
+}
+
+// ---------------------------------------------------------------------------
+// Drive storage status for the admin panel: the Google account's quota, and how much of it the
+// VMS videos take (summed from the OrderLog / ReturnLog sizes, so it is instant even with
+// thousands of videos). Cached for 10 minutes; { refresh: true } recomputes.
+const DRIVE_STORAGE_CACHE_KEY_ = 'VMS_DRIVE_STORAGE_V1';
+
+function getDriveStorage_(p) {
+  const cache = CacheService.getScriptCache();
+  if (!(p && p.refresh)) {
+    const hit = cache.get(DRIVE_STORAGE_CACHE_KEY_);
+    if (hit) {
+      try { const r = JSON.parse(hit); r.cached = true; return r; } catch (_) {}
+    }
+  }
+  let used = -1, limit = -1, quotaError = '';
+  try { used = Number(DriveApp.getStorageUsed()); } catch (e) { quotaError = String(e && e.message || e); }
+  try { limit = Number(DriveApp.getStorageLimit()); } catch (e) { quotaError = quotaError || String(e && e.message || e); }
+  // Some Workspace plans report 0 or an absurd number for pooled / unlimited storage.
+  const unlimited = !(limit > 0) || limit >= Math.pow(2, 53) / 2;
+
+  const now = new Date();
+  const monthKey = now.getFullYear() + '-' + now.getMonth();
+  const weekAgo = now.getTime() - 7 * 86400000;
+  const videos = { count: 0, bytes: 0, monthBytes: 0, monthCount: 0, last7Bytes: 0, unknownSize: 0 };
+  const byPlatform = {};
+  [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET].forEach(function(name) {
+    let sh = null;
+    try { sh = ss_().getSheetByName(name); } catch (_) {}
+    if (!sh) return;
+    const v = sh.getDataRange().getValues();
+    if (v.length < 2) return;
+    const h = v[0].map(function(x) { return String(x || '').trim().toLowerCase(); });
+    // Standard OrderLog/ReturnLog layout (E = Video Drive ID, G = size, C = platform) if headers differ.
+    let idCol = h.findIndex(function(x) { return /video drive id|drive file id|file id/.test(x); });
+    let sizeCol = h.findIndex(function(x) { return /file\s*size|^size$|package\s*weight/.test(x); });
+    let platCol = h.indexOf('platform');
+    if (idCol < 0) idCol = 4;
+    if (sizeCol < 0) sizeCol = 6;
+    if (platCol < 0) platCol = 2;
+    for (let i = 1; i < v.length; i++) {
+      const fid = idCol >= 0 ? String(v[i][idCol] || '').trim() : '';
+      if (!fid) continue;
+      const bytes = sizeCol >= 0 ? parseSizeBytes_(v[i][sizeCol]) : -1;
+      videos.count++;
+      if (bytes < 0) { videos.unknownSize++; continue; }
+      videos.bytes += bytes;
+      const d = rowDate_(v[i][0]);
+      if (!isNaN(d.getTime())) {
+        if ((d.getFullYear() + '-' + d.getMonth()) === monthKey) { videos.monthBytes += bytes; videos.monthCount++; }
+        if (d.getTime() >= weekAgo) videos.last7Bytes += bytes;
+      }
+      const plat = platCol >= 0 ? (String(v[i][platCol] || '').trim() || 'Other') : 'Other';
+      byPlatform[plat] = (byPlatform[plat] || 0) + bytes;
+    }
+  });
+
+  const perDay = videos.last7Bytes / 7;
+  const free = (!unlimited && used >= 0) ? Math.max(0, limit - used) : -1;
+  let folder = { id: '', name: '', url: '' };
+  try {
+    const id = videoRootFolderId_();
+    folder.id = id;
+    folder.url = 'https://drive.google.com/drive/folders/' + id;
+    try { folder.name = DriveApp.getFolderById(id).getName(); } catch (_) {}
+  } catch (_) {}
+
+  const out = {
+    success: true,
+    account: { used: used, limit: unlimited ? -1 : limit, free: free, unlimited: unlimited,
+               percent: (!unlimited && used >= 0) ? Math.round(used / limit * 1000) / 10 : -1, error: quotaError },
+    videos: videos,
+    byPlatform: Object.keys(byPlatform).map(function(k) { return { platform: k, bytes: byPlatform[k] }; })
+      .sort(function(a, b) { return b.bytes - a.bytes; }),
+    perDayBytes: Math.round(perDay),
+    daysLeft: (free >= 0 && perDay > 0) ? Math.floor(free / perDay) : -1,
+    folder: folder,
+    checkedAt: now.toISOString(),
+    cached: false
+  };
+  try { cache.put(DRIVE_STORAGE_CACHE_KEY_, JSON.stringify(out), 600); } catch (_) {}
+  return out;
 }
 
 // ---------------------------------------------------------------------------
