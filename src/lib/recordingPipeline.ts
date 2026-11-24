@@ -73,11 +73,12 @@ function cleanMime(m: string): string {
   return (m || 'video/webm').split(';')[0];
 }
 
-async function startWebCodecs(o: StartRecordingOptions, width: number, height: number): Promise<RecordingSession | null> {
+async function startWebCodecs(o: StartRecordingOptions, width: number, height: number, useClone = false): Promise<RecordingSession | null> {
   // Read the live camera track itself (not a clone): a clone can stop receiving frames after the
   // auto-focus code changes camera constraints. Cancelling the reader at stop releases it without
   // stopping the preview. Buffer up to ~2 s so a stalled page delays frames instead of dropping them.
-  const processor = new g.MediaStreamTrackProcessor({ track: o.cameraTrack, maxBufferSize: 60 });
+  const track = useClone ? o.cameraTrack.clone() : o.cameraTrack;
+  const processor = new g.MediaStreamTrackProcessor({ track, maxBufferSize: 60 });
   const worker = newWorker();
 
   let resolveDone: (r: RecordingResult) => void;
@@ -115,10 +116,14 @@ async function startWebCodecs(o: StartRecordingOptions, width: number, height: n
   );
   // Only commit to this engine once camera frames are actually flowing through it; otherwise the
   // caller falls back to another engine, so a recording is never lost.
-  const st = await Promise.race([started, new Promise<{ ok: boolean }>((r) => setTimeout(() => r({ ok: false }), 3000))]);
+  const st = await Promise.race([started, new Promise<{ ok: boolean }>((r) => setTimeout(() => r({ ok: false }), 1500))]);
   if (!st.ok) {
+    done.catch(() => {});
     worker.postMessage({ type: 'stop' });
-    setTimeout(() => worker.terminate(), 200);
+    setTimeout(() => {
+      worker.terminate();
+      if (useClone) track.stop();
+    }, 300);
     return null;
   }
 
@@ -132,7 +137,11 @@ async function startWebCodecs(o: StartRecordingOptions, width: number, height: n
       try {
         return await done;
       } finally {
-        worker.terminate();
+        // Give the cancel a moment to reach the camera side before the worker goes away.
+        setTimeout(() => {
+          worker.terminate();
+          if (useClone) track.stop();
+        }, 300);
       }
     },
   };
@@ -278,15 +287,22 @@ export async function startRecordingSession(o: StartRecordingOptions): Promise<R
   const want = o.forceMode;
   const hasAudio = (o.audioTracks || []).length > 0;
 
+  let processorDelivered = true;
   if ((!want || want === 'webcodecs') && !hasAudio && hasProcessor() && hasEncoder()) {
-    try {
-      const s = await startWebCodecs(o, width, height);
-      if (s) return s;
-    } catch (err) {
-      console.warn('WebCodecs recorder unavailable, falling back:', err);
+    // Try the live track, then a fresh clone of it. If neither delivers camera frames, the
+    // track-processor engines are skipped and the canvas engine (fed by the preview) is used.
+    for (const useClone of [false, true]) {
+      try {
+        const s = await startWebCodecs(o, width, height, useClone);
+        if (s) return s;
+      } catch (err) {
+        console.warn('WebCodecs recorder unavailable, falling back:', err);
+      }
     }
+    processorDelivered = false;
+    console.warn('Camera frames did not reach the recording worker; using the canvas recorder.');
   }
-  if ((!want || want === 'worker-recorder') && hasProcessor() && hasGenerator()) {
+  if ((!want || want === 'worker-recorder') && processorDelivered && hasProcessor() && hasGenerator()) {
     try {
       return startMediaRecorder(o, workerCompositeStream(o, width, height), 'worker-recorder', width, height);
     } catch (err) {
