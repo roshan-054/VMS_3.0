@@ -363,6 +363,20 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     setActiveSuggestion(null);
   };
 
+  // A USB scanner ends every scan with Enter. In an item's GTIN/SKU box that Enter must not submit
+  // the whole order form; instead, an exact catalog match fills the row (and nothing else changes).
+  const handleItemScanEnter = (e: React.KeyboardEvent<HTMLInputElement>, index: number) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const code = e.currentTarget.value.trim();
+    const product = code ? findProductInCatalog(code) : null;
+    if (product) {
+      handleSelectProductFromCatalog(index, product);
+    } else if (code) {
+      onShowToast(`Barcode ${code} is not in the GTIN catalog. Fill in the product name and SKU for this item.`, 'info');
+    }
+  };
+
   const handleFieldBlur = (index: number, field: 'gtin' | 'sku' | 'productName') => {
     setTimeout(() => {
       setActiveSuggestion((curr) => (curr?.rowIndex === index && curr?.field === field ? null : curr));
@@ -2167,6 +2181,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                           handleItemFieldChange(index, 'sku', e.target.value);
                           setActiveSuggestion({ rowIndex: index, field: 'sku' });
                         }}
+                        onKeyDown={(e) => handleItemScanEnter(e, index)}
                         placeholder="e.g. SKU-SHIRT-BLUE"
                         className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-indigo-500 uppercase shadow-inner"
                       />
@@ -2218,6 +2233,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                             handleItemFieldChange(index, 'gtin', e.target.value);
                             setActiveSuggestion({ rowIndex: index, field: 'gtin' });
                           }}
+                          onKeyDown={(e) => handleItemScanEnter(e, index)}
                           placeholder="Scan or type barcode..."
                           className="w-full pl-8 pr-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900 focus:outline-none focus:border-indigo-500 shadow-inner"
                         />
