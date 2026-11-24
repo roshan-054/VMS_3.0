@@ -31,6 +31,43 @@ function notifySessionExpired(message: string) {
   } catch (_) {}
 }
 
+/**
+ * How long to wait for Apps Script before giving up. Quick lookups keep a short limit so the UI
+ * stays responsive, but calls that carry or produce megabytes of video (an upload chunk is 4–16 MB
+ * of base64 that must first travel up the warehouse internet line, then on to Drive) get minutes.
+ * A 12 s limit on uploadChunk cut off every attempt on slower lines, which left uploads at
+ * "Session Created 0%" and later "Interrupted / Stale".
+ */
+const ACTION_TIMEOUT_MS: Record<string, number> = {
+  uploadChunk: 300000,
+  finishUpload: 120000,
+  startUpload: 60000,
+  getVideoChunk: 120000,
+  getAnalyticsData: 90000,
+  getReportData: 90000,
+  getOrderRecordingReport: 90000,
+  uploadLogs: 60000,
+  getUploadLogs: 60000,
+  advancedSearch: 60000,
+  searchOrders: 60000,
+  syncExternalGtinSheet: 120000,
+  getGtinCatalog: 60000,
+  saveGtinCatalogBatch: 120000,
+  getOrderManifests: 60000,
+  saveOrderManifestsBatch: 60000,
+  uploadBrandingImage: 120000,
+  cleanupStuckUploads: 90000,
+  scanDuplicateRecords: 120000,
+  removeDuplicateRecords: 120000,
+  scanOlderVideos: 120000,
+  deleteOlderVideos: 300000,
+  setup: 120000,
+};
+export const DEFAULT_API_TIMEOUT_MS = 20000;
+export function apiTimeoutFor(action: string): number {
+  return ACTION_TIMEOUT_MS[action] || DEFAULT_API_TIMEOUT_MS;
+}
+
 export async function requestApi<T = any>(
   action: string,
   payload: Record<string, any> = {},
@@ -52,10 +89,12 @@ export async function requestApi<T = any>(
     let response: Response | null = null;
     let lastFetchErr: any = null;
 
-    // Single attempt for fast responsiveness, with 12s abort limit
+    // Single attempt; the time limit depends on the action (see ACTION_TIMEOUT_MS) and covers the
+    // whole exchange, including reading the reply.
+    const timeoutMs = apiTimeoutFor(action);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12000);
       response = await fetch(url, {
         method: 'POST',
         mode: 'cors',
@@ -67,19 +106,29 @@ export async function requestApi<T = any>(
         },
         body,
       });
-      clearTimeout(timeoutId);
     } catch (fetchErr: any) {
       lastFetchErr = fetchErr;
     }
 
     if (!response) {
+      clearTimeout(timeoutId);
       if (lastFetchErr && lastFetchErr.name === 'AbortError') {
-        throw new Error('Request timed out (12s limit). Google Apps Script may be waking up or slow.');
+        throw new Error(`Request timed out (${Math.round(timeoutMs / 1000)}s limit). Google Apps Script may be waking up or slow.`);
       }
       throw lastFetchErr || new Error('Network request failed. Please check your connection.');
     }
 
-    const text = await response.text();
+    let text: string;
+    try {
+      text = await response.text();
+    } catch (readErr: any) {
+      if (readErr?.name === 'AbortError') {
+        throw new Error(`Request timed out (${Math.round(timeoutMs / 1000)}s limit) while reading the reply.`);
+      }
+      throw readErr;
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (response.status === 404 || text.includes('找不到網頁') || text.includes('無法開啟這個檔案')) {
       throw new Error(
