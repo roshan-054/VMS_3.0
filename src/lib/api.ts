@@ -642,6 +642,10 @@ export interface DeleteOlderVideosResult {
   removedSheetRowsCount: number;
   movedDriveVideosCount: number;
   freedSizeBytes?: number;
+  alreadyGoneCount?: number;
+  failedCount?: number;
+  errors?: string[];
+  done?: boolean;
   removedBySheet?: Record<string, number>;
   scannedTabs?: string[];
   movedFiles?: Array<{
@@ -675,7 +679,7 @@ export async function scanOlderVideos(params: {
       driveFolderId: params.driveFolderId || getStoredDriveFolderId(),
     });
 
-    if (res && res.success && Array.isArray(res.items) && res.items.length > 0) {
+    if (res && res.success && Array.isArray(res.items)) {
       return {
         success: true,
         daysThreshold,
@@ -844,88 +848,85 @@ export async function scanOlderVideos(params: {
   };
 }
 
-export async function deleteOlderVideos(params: {
-  days?: number;
-  platform?: string;
-  recordingType?: string;
-  driveFolderId?: string;
-  moveDriveVideosToTrash?: boolean;
-  removeSheetEntries?: boolean;
-}): Promise<DeleteOlderVideosResult> {
-  const daysThreshold = params.days || 90;
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - daysThreshold);
-  const cutoffStr = cutoff.toISOString().split('T')[0];
+export interface DeleteOlderProgress {
+  round: number;
+  movedDriveVideosCount: number;
+  removedSheetRowsCount: number;
+  remainingVideos: number;
+  message?: string;
+}
 
-  try {
-    const res = await requestApi<DeleteOlderVideosResult>('deleteOlderVideos', {
+/**
+ * Runs the server cleanup in rounds: each call works for up to ~4 minutes and returns
+ * done:false with what is left, so thousands of videos finish without hitting the
+ * Apps Script time limit. No per-row fallback: a failure is reported, never guessed around.
+ */
+export async function deleteOlderVideos(
+  params: {
+    days?: number;
+    platform?: string;
+    recordingType?: string;
+    driveFolderId?: string;
+    moveDriveVideosToTrash?: boolean;
+    removeSheetEntries?: boolean;
+  },
+  onProgress?: (p: DeleteOlderProgress) => void
+): Promise<DeleteOlderVideosResult> {
+  const daysThreshold = params.days || 90;
+  const total = {
+    movedDriveVideosCount: 0,
+    removedSheetRowsCount: 0,
+    alreadyGoneCount: 0,
+    failedCount: 0,
+    errors: [] as string[],
+    removedBySheet: {} as Record<string, number>,
+  };
+  let last: any = null;
+  for (let round = 1; round <= 40; round++) {
+    const res: any = await requestApi<DeleteOlderVideosResult>('deleteOlderVideos', {
       days: daysThreshold,
       platform: params.platform || '',
       recordingType: params.recordingType || '',
-      driveFolderId: params.driveFolderId || getStoredDriveFolderId(),
       moveDriveVideosToTrash: params.moveDriveVideosToTrash !== false,
       removeSheetEntries: params.removeSheetEntries !== false,
     });
-
-    if (res && res.success && ((res.deletedOrdersCount || 0) > 0 || (res.removedSheetRowsCount || 0) > 0 || (res.movedDriveVideosCount || 0) > 0)) {
-      return {
-        success: true,
-        daysThreshold,
-        cutoffDate: res.cutoffDate || cutoffStr,
-        deletedOrdersCount: res.deletedOrdersCount || 0,
-        removedSheetRowsCount: res.removedSheetRowsCount || 0,
-        movedDriveVideosCount: res.movedDriveVideosCount || 0,
-        freedSizeBytes: res.freedSizeBytes || 0,
-        removedBySheet: res.removedBySheet || {},
-        scannedTabs: res.scannedTabs || [],
-        movedFiles: res.movedFiles || [],
-        message: res.message,
-      };
-    }
-  } catch (err: any) {
-    console.warn('deleteOlderVideos direct endpoint call failed, executing fallback individual log deletions:', err);
-  }
-
-  // Fallback deletion: Scan older items and remove entries via deleteLogEntry
-  let deletedOrdersCount = 0;
-  let removedSheetRowsCount = 0;
-  let movedDriveVideosCount = 0;
-
-  try {
-    const scanRes = await scanOlderVideos({
-      days: daysThreshold,
-      platform: params.platform,
-      recordingType: params.recordingType,
+    if (!res || res.success === false) throw new Error(res?.error || 'The cleanup did not run.');
+    last = res;
+    total.movedDriveVideosCount += res.movedDriveVideosCount || 0;
+    total.removedSheetRowsCount += res.removedSheetRowsCount || 0;
+    total.alreadyGoneCount += res.alreadyGoneCount || 0;
+    total.failedCount = res.failedCount || 0; // failures are retried each round; the last count is current
+    total.errors = res.errors || [];
+    Object.entries(res.removedBySheet || {}).forEach(([k, v]) => {
+      total.removedBySheet[k] = (total.removedBySheet[k] || 0) + Number(v || 0);
     });
-
-    if (scanRes.items && scanRes.items.length > 0) {
-      for (const item of scanRes.items) {
-        try {
-          await requestApi('deleteLogEntry', {
-            orderId: item.orderId,
-            sheet: item.sheet,
-            driveFileId: item.fileId,
-          });
-          deletedOrdersCount++;
-          removedSheetRowsCount++;
-          if (item.fileId) movedDriveVideosCount++;
-        } catch (delErr) {
-          console.warn(`Could not delete log entry for order ${item.orderId}:`, delErr);
-        }
-      }
-    }
-  } catch (fallbackErr) {
-    console.warn('Fallback deletion process error:', fallbackErr);
+    onProgress?.({
+      round,
+      movedDriveVideosCount: total.movedDriveVideosCount,
+      removedSheetRowsCount: total.removedSheetRowsCount,
+      remainingVideos: res.remainingVideos || 0,
+      message: res.message,
+    });
+    if (res.done !== false) break;
   }
-
+  const doneMsg =
+    `${total.movedDriveVideosCount} video(s) moved to Drive Trash, ${total.removedSheetRowsCount} log row(s) removed` +
+    (total.alreadyGoneCount ? `, ${total.alreadyGoneCount} were already deleted` : '') +
+    (total.failedCount ? `, ${total.failedCount} could not be deleted` : '') +
+    '.';
   return {
     success: true,
     daysThreshold,
-    cutoffDate: cutoffStr,
-    deletedOrdersCount,
-    removedSheetRowsCount,
-    movedDriveVideosCount,
-    message: `Cleaned ${deletedOrdersCount} record(s) older than ${daysThreshold} days.`,
+    cutoffDate: last?.cutoffDate || '',
+    deletedOrdersCount: total.removedSheetRowsCount || total.movedDriveVideosCount,
+    removedSheetRowsCount: total.removedSheetRowsCount,
+    movedDriveVideosCount: total.movedDriveVideosCount,
+    alreadyGoneCount: total.alreadyGoneCount,
+    failedCount: total.failedCount,
+    errors: total.errors,
+    done: last?.done !== false,
+    removedBySheet: total.removedBySheet,
+    message: doneMsg,
   };
 }
 

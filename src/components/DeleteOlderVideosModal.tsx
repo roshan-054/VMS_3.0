@@ -24,6 +24,7 @@ import {
 import {
   scanOlderVideos,
   deleteOlderVideos,
+  type DeleteOlderProgress,
   ScanOlderVideosResult,
   DeleteOlderVideosResult,
   OlderVideoItem,
@@ -61,6 +62,7 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
 
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
   const [deleteResult, setDeleteResult] = useState<DeleteOlderVideosResult | null>(null);
+  const [deleteProgress, setDeleteProgress] = useState<DeleteOlderProgress | null>(null);
 
   const [showConfirm, setShowConfirm] = useState<boolean>(false);
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -134,6 +136,7 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
 
   const handleExecuteDelete = async () => {
     setIsDeleting(true);
+    setDeleteProgress(null);
     try {
       const res = await deleteOlderVideos({
         days: daysThreshold,
@@ -142,8 +145,10 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
         driveFolderId: getStoredDriveFolderId(),
         moveDriveVideosToTrash: moveDriveVideos,
         removeSheetEntries: removeSheetRows,
-      });
+      }, setDeleteProgress);
 
+      // Show what is left (e.g. videos that could not be trashed) instead of the old list.
+      await handleScan(daysThreshold, platformFilter, typeFilter);
       setDeleteResult(res);
       setShowConfirm(false);
 
@@ -162,6 +167,7 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
       onShowToast(`Deletion failed: ${err.message || 'Failed to execute video deletion'}`, 'error');
     } finally {
       setIsDeleting(false);
+      setDeleteProgress(null);
     }
   };
 
@@ -441,7 +447,7 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
                             {item.recordingType}
                           </span>
                           <span className="font-mono font-bold text-slate-900 truncate">
-                            #{item.orderId}
+                            {item.orderId.startsWith('#') ? item.orderId : `#${item.orderId}`}
                           </span>
                           <span className="text-slate-500 text-[11px]">
                             • {item.platform}
@@ -494,9 +500,18 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
                 </div>
               </div>
 
+              {isDeleting && (
+                <p id="delete-older-progress" className="text-xs font-semibold text-red-800">
+                  {deleteProgress
+                    ? `${deleteProgress.movedDriveVideosCount} video(s) moved to Trash, ${deleteProgress.removedSheetRowsCount} row(s) removed` +
+                      (deleteProgress.remainingVideos ? `, ${deleteProgress.remainingVideos} left. Still working…` : '…')
+                    : 'Working… large cleanups run in rounds of about 4 minutes. Keep this window open.'}
+                </p>
+              )}
               <div className="flex items-center justify-end gap-2 pt-1">
                 <button
                   type="button"
+                  disabled={isDeleting}
                   onClick={() => setShowConfirm(false)}
                   className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-xl text-xs font-bold transition cursor-pointer"
                 >
@@ -517,15 +532,25 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
 
           {/* Delete Execution Result Banner */}
           {deleteResult && (
-            <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-950 space-y-2">
+            <div id="delete-older-result" className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-950 space-y-2">
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="w-5 h-5 text-emerald-600" />
                 <h4 className="text-sm font-bold text-emerald-900">
-                  Older Videos Purge Completed Successfully!
+                  {deleteResult.failedCount ? 'Cleanup finished, some videos were not deleted' : 'Cleanup finished'}
                 </h4>
               </div>
               <p className="text-xs text-emerald-800">
-                Purged <span className="font-bold">{deleteResult.movedDriveVideosCount || deleteResult.deletedOrdersCount}</span> video file(s) and <span className="font-bold">{deleteResult.removedSheetRowsCount}</span> sheet log entry(s) older than {daysThreshold} days (Cutoff: {deleteResult.cutoffDate}).
+                <span className="font-bold">{deleteResult.movedDriveVideosCount}</span> video(s) moved to Google Drive Trash and{' '}
+                <span className="font-bold">{deleteResult.removedSheetRowsCount}</span> log row(s) removed (older than {daysThreshold} days, cutoff {deleteResult.cutoffDate}).
+                {deleteResult.alreadyGoneCount ? ` ${deleteResult.alreadyGoneCount} video(s) were already deleted.` : ''}
+              </p>
+              {!!deleteResult.failedCount && (
+                <p className="text-xs text-rose-700">
+                  {deleteResult.failedCount} video(s) could not be deleted, so their rows were kept: {(deleteResult.errors || []).join('; ')}
+                </p>
+              )}
+              <p className="text-[11px] text-emerald-700">
+                Drive keeps Trash for 30 days before the space is freed. To free it now, empty Trash in Google Drive.
               </p>
             </div>
           )}

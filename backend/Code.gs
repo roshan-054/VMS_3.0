@@ -5532,105 +5532,190 @@ function syncExternalGtinSheet_(p) {
 }
 
 /* ---------- Storage Retention & Older Video Purge ---------- */
-function scanOlderVideos_(p) {
-  const user = session_(p.token);
-  const daysThreshold = Math.max(1, Number(p.days || 90));
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - daysThreshold);
-  cutoff.setHours(23, 59, 59, 999);
-  const cutoffStr = cutoff.toISOString().split('T')[0];
+// ---------------------------------------------------------------------------
+// Retention: find and remove videos + log rows older than N days.
+// OrderLog/ReturnLog and UploadLog have different layouts, so columns are found by header
+// (with the standard positions as fallback). Deletion runs in time-boxed batches: each call
+// stops after ~4 minutes and returns done:false with what is left; the app calls again.
 
+function olderSheetCols_(sheetName, headerRow) {
+  const h = (headerRow || []).map(function(x) { return String(x || '').trim().toLowerCase(); });
+  const find = function(re, fallback) { const i = h.findIndex(function(x) { return re.test(x); }); return i >= 0 ? i : fallback; };
+  const upload = sheetName === CONFIG.UPLOAD_LOG_SHEET;
+  return {
+    order: find(/^order\s*id$/, 1),
+    platform: find(/^platform$/, 2),
+    fileId: find(/video drive id|drive file id/, upload ? 9 : 4),
+    playback: upload ? -1 : find(/playback url/, 5),
+    size: find(/file\s*size|package\s*weight/, upload ? 5 : 6),
+    type: find(/recording type/, upload ? 12 : 8),
+    fileName: upload ? find(/file\s*name/, 4) : -1
+  };
+}
+
+function olderCutoff_(days) {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  cutoff.setHours(23, 59, 59, 999);
+  return cutoff;
+}
+
+function validFileId_(fid) {
+  return !!fid && fid.length > 15 && /^[A-Za-z0-9_-]+$/.test(fid);
+}
+
+/** Every row older than the cutoff that matches the filters, per sheet. */
+function collectOlderRows_(p) {
+  const daysThreshold = Math.max(1, Number(p.days || 90));
+  const cutoff = olderCutoff_(daysThreshold);
   const platformFilter = normalize_(p.platform);
   const typeFilter = normalize_(p.recordingType);
-
-  const items = [];
-  const scannedTabs = [];
-  const tabSummary = {};
-  let totalOlderOrders = 0;
-  let totalOlderSheetRows = 0;
-  let totalOlderDriveVideos = 0;
-  let estimatedTotalSizeBytes = 0;
-
   const ss = ss_();
-  const sheetsToScan = [
+  const out = { daysThreshold: daysThreshold, cutoff: cutoff, sheets: [] };
+  [
     { name: CONFIG.ORDER_LOG_SHEET, defaultType: 'Forward' },
     { name: CONFIG.RETURN_LOG_SHEET, defaultType: 'Return' },
     { name: CONFIG.UPLOAD_LOG_SHEET, defaultType: 'Forward' }
-  ];
-
-  sheetsToScan.forEach(function(target) {
-    try {
-      const sh = ss.getSheetByName(target.name);
-      if (!sh) return;
-      scannedTabs.push(target.name);
-      tabSummary[target.name] = 0;
-
-      const v = sh.getDataRange().getValues();
-      if (!v || v.length <= 1) return;
-
-      for (let i = 1; i < v.length; i++) {
-        const rawTs = v[i][0];
-        if (!rawTs) continue;
-        const ts = rowDate_(rawTs);
-        if (isNaN(ts) || ts >= cutoff) continue;
-
-        const oid = String(v[i][1] || '').trim();
-        const pf = String(v[i][2] || '').trim();
-        const pe = String(v[i][3] || '').trim();
-        const fid = String(v[i][4] || '').trim();
-        const pUrl = String(v[i][5] || '').trim();
-        const fileSize = String(v[i][6] || '').trim();
-        const st = String(v[i][7] || 'Completed').trim();
-        const rawRt = String(v[i][8] || target.defaultType).trim();
-        const rtNorm = normalize_(rawRt);
-        const rt = (rtNorm === 'return' || rtNorm === 'inbound') ? 'Return' : 'Forward';
-
-        if (platformFilter && normalize_(pf) !== platformFilter) continue;
-        if (typeFilter && normalize_(rt) !== typeFilter) continue;
-
-        const diffDays = Math.floor((Date.now() - ts.getTime()) / (86400000));
-
-        totalOlderSheetRows++;
-        tabSummary[target.name] = (tabSummary[target.name] || 0) + 1;
-        if (fid && fid.length > 5 && fid !== 'undefined' && fid !== 'null') {
-          totalOlderDriveVideos++;
-        }
-
-        items.push({
-          orderId: oid || 'UNNAMED',
-          platform: pf || 'D2C',
-          recordingType: rt,
-          timestamp: ts.toISOString(),
-          dateStr: ts.toISOString().split('T')[0],
-          ageDays: diffDays,
-          sheet: target.name,
-          row: i + 1,
-          fileId: fid,
-          fileName: oid ? (oid + '_' + pf + '_' + rt + '.mp4') : '',
-          playbackUrl: pUrl || (fid ? ('https://drive.google.com/file/d/' + fid + '/preview') : ''),
-          fileSizeStr: fileSize
-        });
-      }
-    } catch(err) {
-      console.warn('Scan error in ' + target.name + ':', err);
+  ].forEach(function(target) {
+    const sh = ss.getSheetByName(target.name);
+    if (!sh) return;
+    const v = sh.getDataRange().getValues();
+    const entry = { name: target.name, sh: sh, rows: [] };
+    out.sheets.push(entry);
+    if (!v || v.length <= 1) return;
+    const c = olderSheetCols_(target.name, v[0]);
+    for (let i = 1; i < v.length; i++) {
+      const rawTs = v[i][0];
+      if (!rawTs) continue;
+      const ts = rowDate_(rawTs);
+      if (isNaN(ts.getTime()) || ts >= cutoff) continue;
+      const pf = String(v[i][c.platform] || '').trim();
+      const rtNorm = normalize_(v[i][c.type] || target.defaultType);
+      const rt = (rtNorm === 'return' || rtNorm === 'inbound') ? 'Return' : 'Forward';
+      if (platformFilter && normalize_(pf) !== platformFilter) continue;
+      if (typeFilter && normalize_(rt) !== typeFilter) continue;
+      const fid = String(v[i][c.fileId] || '').trim();
+      entry.rows.push({
+        row: i + 1, ts: ts, orderId: String(v[i][c.order] || '').trim(), platform: pf, recordingType: rt,
+        fileId: validFileId_(fid) ? fid : '',
+        playbackUrl: c.playback >= 0 ? String(v[i][c.playback] || '').trim() : '',
+        fileSizeStr: String(v[i][c.size] || '').trim(),
+        fileName: c.fileName >= 0 ? String(v[i][c.fileName] || '').trim() : ''
+      });
     }
   });
+  return out;
+}
 
-  totalOlderOrders = items.length;
-
+function scanOlderVideos_(p) {
+  session_(p.token);
+  const found = collectOlderRows_(p);
+  const items = [];
+  const tabSummary = {};
+  const fileIds = {};
+  let bytes = 0;
+  found.sheets.forEach(function(sht) {
+    tabSummary[sht.name] = sht.rows.length;
+    sht.rows.forEach(function(r) {
+      if (r.fileId && !fileIds[r.fileId]) {
+        fileIds[r.fileId] = true;
+        const b = parseSizeBytes_(r.fileSizeStr);
+        if (b > 0) bytes += b;
+      }
+      items.push({
+        orderId: r.orderId || 'UNNAMED',
+        platform: r.platform || 'D2C',
+        recordingType: r.recordingType,
+        timestamp: r.ts.toISOString(),
+        dateStr: Utilities.formatDate(r.ts, Session.getScriptTimeZone(), 'yyyy-MM-dd'),
+        ageDays: Math.floor((Date.now() - r.ts.getTime()) / 86400000),
+        sheet: sht.name,
+        row: r.row,
+        fileId: r.fileId,
+        fileName: r.fileName || (r.orderId ? (r.orderId + '_' + r.platform + '_' + r.recordingType + '.mp4') : ''),
+        playbackUrl: r.playbackUrl || (r.fileId ? ('https://drive.google.com/file/d/' + r.fileId + '/preview') : ''),
+        fileSizeStr: r.fileSizeStr
+      });
+    });
+  });
+  // Newest first, so the list starts with what is just past the cutoff.
+  items.sort(function(a, b) { return a.timestamp < b.timestamp ? 1 : a.timestamp > b.timestamp ? -1 : 0; });
+  const cutoffStr = found.cutoff.toISOString().split('T')[0];
   return {
     success: true,
-    daysThreshold: daysThreshold,
+    daysThreshold: found.daysThreshold,
     cutoffDate: cutoffStr,
-    totalOlderOrders: totalOlderOrders,
-    totalOlderSheetRows: totalOlderSheetRows,
-    totalOlderDriveVideos: totalOlderDriveVideos,
-    estimatedTotalSizeBytes: estimatedTotalSizeBytes,
+    totalOlderOrders: items.length,
+    totalOlderSheetRows: items.length,
+    totalOlderDriveVideos: Object.keys(fileIds).length,
+    estimatedTotalSizeBytes: bytes,
     items: items,
-    scannedTabs: scannedTabs,
+    scannedTabs: found.sheets.map(function(x) { return x.name; }),
     tabSummary: tabSummary,
-    message: 'Scanned ' + items.length + ' older record(s) older than ' + daysThreshold + ' days.'
+    message: 'Found ' + items.length + ' log row(s) and ' + Object.keys(fileIds).length + ' video(s) older than ' + found.daysThreshold + ' days.'
   };
+}
+
+/**
+ * Moves Drive files to Trash, many at once. Returns { id: 'trashed' | 'gone' | 'error: …' }.
+ * 'gone' = the file no longer exists (already deleted), so its log row can go too.
+ */
+function trashDriveFiles_(ids) {
+  const result = {};
+  if (!ids.length) return result;
+  let token = '';
+  try { token = ScriptApp.getOAuthToken(); } catch (_) {}
+  if (token && UrlFetchApp.fetchAll) {
+    const reqs = ids.map(function(id) {
+      return {
+        url: 'https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(id) + '?supportsAllDrives=true&fields=id,trashed',
+        method: 'patch',
+        contentType: 'application/json',
+        payload: JSON.stringify({ trashed: true }),
+        headers: { Authorization: 'Bearer ' + token },
+        muteHttpExceptions: true
+      };
+    });
+    try {
+      const resps = UrlFetchApp.fetchAll(reqs);
+      ids.forEach(function(id, i) {
+        const code = resps[i].getResponseCode();
+        if (code >= 200 && code < 300) result[id] = 'trashed';
+        else if (code === 404) result[id] = 'gone';
+        else {
+          let msg = '';
+          try { msg = JSON.parse(resps[i].getContentText()).error.message; } catch (_) { msg = 'HTTP ' + code; }
+          result[id] = 'error: ' + msg;
+        }
+      });
+      return result;
+    } catch (e) {
+      console.warn('trashDriveFiles_: batch request failed, trying one by one: ' + e);
+    }
+  }
+  ids.forEach(function(id) {
+    try {
+      DriveApp.getFileById(id).setTrashed(true);
+      result[id] = 'trashed';
+    } catch (e) {
+      const m = String(e && e.message || e);
+      result[id] = /not found|no item with the given id/i.test(m) ? 'gone' : 'error: ' + m;
+    }
+  });
+  return result;
+}
+
+/** Deletes sheet rows (1-based numbers) using as few deleteRows calls as possible. */
+function deleteRowNumbers_(sh, rowNums) {
+  const sorted = rowNums.slice().sort(function(a, b) { return b - a; });
+  let i = 0;
+  while (i < sorted.length) {
+    let end = sorted[i];
+    let start = end;
+    while (i + 1 < sorted.length && sorted[i + 1] === start - 1) { i++; start--; }
+    sh.deleteRows(start, end - start + 1);
+    i++;
+  }
 }
 
 function deleteOlderVideos_(p) {
@@ -5638,88 +5723,86 @@ function deleteOlderVideos_(p) {
   if (!isAdminRole_(user.role)) {
     throw new Error('Unauthorized: Admin rights required to delete older videos and logs.');
   }
-
-  const daysThreshold = Math.max(1, Number(p.days || 90));
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - daysThreshold);
-  cutoff.setHours(23, 59, 59, 999);
-  const cutoffStr = cutoff.toISOString().split('T')[0];
-
-  const platformFilter = normalize_(p.platform);
-  const typeFilter = normalize_(p.recordingType);
-
+  const started = Date.now();
+  const budgetMs = Number(p.budgetMs) > 0 ? Number(p.budgetMs) : 240000;
   const moveDrive = p.moveDriveVideosToTrash !== false;
   const removeSheet = p.removeSheetEntries !== false;
+  if (!moveDrive && !removeSheet) return { success: false, error: 'Choose at least one: move videos to Trash or remove log rows.' };
 
-  let deletedOrdersCount = 0;
-  let removedSheetRowsCount = 0;
-  let movedDriveVideosCount = 0;
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) return { success: false, error: 'Another cleanup is running. Try again in a minute.' };
+  try {
+    const found = collectOlderRows_(p);
+    const cutoffStr = found.cutoff.toISOString().split('T')[0];
 
-  const ss = ss_();
-  const sheetsToScan = [
-    CONFIG.ORDER_LOG_SHEET,
-    CONFIG.RETURN_LOG_SHEET,
-    CONFIG.UPLOAD_LOG_SHEET
-  ];
-
-  sheetsToScan.forEach(function(sheetName) {
-    try {
-      const sh = ss.getSheetByName(sheetName);
-      if (!sh) return;
-      const v = sh.getDataRange().getValues();
-      if (!v || v.length <= 1) return;
-
-      // Scan bottom to top to safely delete rows without index shifting
-      for (let i = v.length - 1; i >= 1; i--) {
-        const rawTs = v[i][0];
-        if (!rawTs) continue;
-        const ts = rowDate_(rawTs);
-        if (isNaN(ts) || ts >= cutoff) continue;
-
-        const pf = String(v[i][2] || '').trim();
-        const fid = String(v[i][4] || '').trim();
-        const rawRt = String(v[i][8] || (sheetName === CONFIG.RETURN_LOG_SHEET ? 'Return' : 'Forward')).trim();
-        const rtNorm = normalize_(rawRt);
-        const rt = (rtNorm === 'return' || rtNorm === 'inbound') ? 'Return' : 'Forward';
-
-        if (platformFilter && normalize_(pf) !== platformFilter) continue;
-        if (typeFilter && normalize_(rt) !== typeFilter) continue;
-
-        // Move drive video to trash if present and requested
-        if (moveDrive && fid && fid.length > 5 && fid !== 'undefined' && fid !== 'null') {
-          try {
-            const f = DriveApp.getFileById(fid);
-            if (f) {
-              f.setTrashed(true);
-              movedDriveVideosCount++;
-            }
-          } catch(e) {
-            console.warn('Could not trash file ' + fid + ':', e);
-          }
-        }
-
-        // Delete row if requested
-        if (removeSheet) {
-          sh.deleteRow(i + 1);
-          removedSheetRowsCount++;
-        }
-
-        deletedOrdersCount++;
-      }
-    } catch(err) {
-      console.warn('Delete older error in ' + sheetName + ':', err);
+    // 1. Unique Drive files across all three logs (UploadLog repeats the OrderLog file).
+    const status = {};
+    const order = [];
+    if (moveDrive) {
+      found.sheets.forEach(function(sht) {
+        sht.rows.forEach(function(r) { if (r.fileId && !status[r.fileId]) { status[r.fileId] = 'pending'; order.push(r.fileId); } });
+      });
     }
-  });
+    let trashed = 0, gone = 0, failed = 0;
+    const errors = [];
+    let outOfTime = false;
+    for (let i = 0; i < order.length; i += 50) {
+      if (i > 0 && Date.now() - started > budgetMs) { outOfTime = true; break; }
+      const res = trashDriveFiles_(order.slice(i, i + 50));
+      Object.keys(res).forEach(function(id) {
+        status[id] = res[id];
+        if (res[id] === 'trashed') trashed++;
+        else if (res[id] === 'gone') gone++;
+        else { failed++; if (errors.length < 5) errors.push(id + ': ' + res[id].replace(/^error: /, '')); }
+      });
+    }
 
-  return {
-    success: true,
-    daysThreshold: daysThreshold,
-    cutoffDate: cutoffStr,
-    deletedOrdersCount: deletedOrdersCount,
-    removedSheetRowsCount: removedSheetRowsCount,
-    movedDriveVideosCount: movedDriveVideosCount,
-    message: 'Deleted ' + deletedOrdersCount + ' record(s) older than ' + daysThreshold + ' days.'
-  };
+    // 2. Remove log rows whose video is now in Trash / already gone (or that never had one).
+    // A row whose file could not be trashed stays, so nothing is lost track of.
+    let removedRows = 0;
+    const removedBySheet = {};
+    if (removeSheet) {
+      found.sheets.forEach(function(sht) {
+        const rowNums = sht.rows.filter(function(r) {
+          if (!moveDrive || !r.fileId) return true;
+          return status[r.fileId] === 'trashed' || status[r.fileId] === 'gone';
+        }).map(function(r) { return r.row; });
+        if (!rowNums.length) return;
+        deleteRowNumbers_(sht.sh, rowNums);
+        removedRows += rowNums.length;
+        removedBySheet[sht.name] = rowNums.length;
+      });
+    }
+
+    const remainingVideos = order.filter(function(id) { return status[id] === 'pending'; }).length;
+    if (trashed || removedRows) {
+      try { bumpAnalyticsVersion_(); } catch (_) {}
+      try { CacheService.getScriptCache().remove(DRIVE_STORAGE_CACHE_KEY_); } catch (_) {}
+    }
+    try {
+      securityLog_(user.email, 'DELETE_OLDER', 'OK', 'days=' + found.daysThreshold + ' trashed=' + trashed + ' rows=' + removedRows + ' failed=' + failed);
+    } catch (_) {}
+
+    const done = !outOfTime;
+    return {
+      success: true,
+      done: done,
+      daysThreshold: found.daysThreshold,
+      cutoffDate: cutoffStr,
+      deletedOrdersCount: removedRows || (trashed + gone),
+      removedSheetRowsCount: removedRows,
+      movedDriveVideosCount: trashed,
+      alreadyGoneCount: gone,
+      failedCount: failed,
+      remainingVideos: remainingVideos,
+      errors: errors,
+      removedBySheet: removedBySheet,
+      message: (done ? 'Done. ' : 'Still working. ') + trashed + ' video(s) moved to Drive Trash, ' + removedRows + ' log row(s) removed' +
+        (gone ? ', ' + gone + ' video(s) were already deleted' : '') + (failed ? ', ' + failed + ' could not be deleted' : '') + '.'
+    };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 

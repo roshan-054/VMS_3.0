@@ -28,6 +28,7 @@ class MockSheet {
   getDataRange() { const s = this; return { getValues: () => s.rows.map((r) => r.slice()) }; }
   appendRow(row) { this.rows.push(row.slice()); return this; }
   deleteRow(r) { this.rows.splice(r - 1, 1); }
+  deleteRows(r, n) { this.rows.splice(r - 1, n); }
   getLastRow() { return this.rows.length; }
   createTextFinder(text) {
     const s = this;
