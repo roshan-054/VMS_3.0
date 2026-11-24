@@ -529,16 +529,6 @@ export function App() {
             </div>
             <div className="flex items-center gap-1">
               <button
-                id="footer-clear-cache-btn"
-                onClick={() => handleClearCache(false)}
-                disabled={isClearingCache}
-                className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition shrink-0 cursor-pointer disabled:opacity-50"
-                title="Quick Clear Cache"
-                aria-label="Clear Cache"
-              >
-                <RefreshCw className={`w-4 h-4 ${isClearingCache ? 'animate-spin text-blue-600' : ''}`} />
-              </button>
-              <button
                 onClick={toggleNightMode}
                 className="p-1.5 text-slate-400 hover:text-amber-500 hover:bg-slate-100 rounded-lg transition shrink-0 cursor-pointer"
                 title={isNightMode ? 'Switch to Light Mode' : 'Switch to Warehouse Night Mode'}
