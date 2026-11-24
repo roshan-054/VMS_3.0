@@ -39,7 +39,6 @@ import {
   Wrench,
   CheckCheck
 } from 'lucide-react';
-import * as XLSX from 'xlsx';
 import { PlatformType, User, OrderManifest, ManifestItem, GtinCatalogProduct, PackVerificationLog } from '../types';
 import {
   getStoredManifests,
@@ -1162,7 +1161,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   };
 
   // Export Manifest Orders Report as Genuine Excel (.xlsx)
-  const handleDownloadManifestExcel = () => {
+  const handleDownloadManifestExcel = async () => {
     if (filteredManifests.length === 0) {
       onShowToast('No manifest orders found matching current filters to export', 'error');
       return;
@@ -1218,6 +1217,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         });
       });
 
+      const XLSX = await import('xlsx');
       const wb = XLSX.utils.book_new();
       const wsOrders = XLSX.utils.json_to_sheet(ordersSummaryData);
       const wsItems = XLSX.utils.json_to_sheet(itemsBreakdownData);

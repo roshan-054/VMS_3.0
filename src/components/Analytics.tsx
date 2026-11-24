@@ -27,7 +27,6 @@ import {
   X,
   Tag
 } from 'lucide-react';
-import * as XLSX from 'xlsx';
 import { AnalyticsData, DailyMetricItem, VideoRecord } from '../types';
 import { requestApi } from '../lib/api';
 import { computeLocalAnalyticsData } from '../lib/localAnalytics';
@@ -1059,7 +1058,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
     onShowToast('Daily platform breakdown exported to CSV', 'success');
   };
 
-  const handleExportPlatformDailyExcel = () => {
+  const handleExportPlatformDailyExcel = async () => {
     if (!dailyPlatformMetrics.length) {
       onShowToast('No daily platform records to export', 'error');
       return;
@@ -1073,6 +1072,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
         'Custom': row.Custom,
         'Total Orders': row.total
       }));
+      const XLSX = await import('xlsx');
       const wb = XLSX.utils.book_new();
       const ws = XLSX.utils.json_to_sheet(data);
       ws['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 14 }];
@@ -1111,7 +1111,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
     onShowToast('SKU intelligence report exported to CSV', 'success');
   };
 
-  const handleExportSkuIntelligenceExcel = () => {
+  const handleExportSkuIntelligenceExcel = async () => {
     if (!skuIntelligenceData.length) {
       onShowToast('No SKU intelligence data to export', 'error');
       return;
@@ -1125,6 +1125,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
         'Processed Quantity': item.processedQty,
         'Variance': item.packedQty - item.processedQty
       }));
+      const XLSX = await import('xlsx');
       const wb = XLSX.utils.book_new();
       const ws = XLSX.utils.json_to_sheet(data);
       ws['!cols'] = [{ wch: 22 }, { wch: 32 }, { wch: 20 }, { wch: 16 }, { wch: 18 }, { wch: 14 }];
