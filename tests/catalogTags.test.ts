@@ -29,3 +29,17 @@ test('a Status column is only used for tags when there is no Tag column', () => 
   assert.equal(detectCatalogColumns(['SKU', 'Status'])['tag'], 1);
   assert.equal(detectCatalogColumns(['SKU', 'Status', 'Tags'])['tag'], 2);
 });
+
+test('Master_UE layout: a column headed "Active-online" is recognised as the tag column', async () => {
+  const { guessTagColumn } = await import('../src/lib/catalogTags.ts');
+  const rows = [
+    ['Product SKU', 'GTIN Number', 'Product Name', 'Quantity', 'COGS', 'Active-online', 'Image'],
+    ['UP-KUM-01', '8906191690025', 'Kumkum Powder', '1', '11.31', 'Active-online', 'https://x/a.jpg'],
+    ['UP-GO-CH-01', '8906191691732', 'Gopi Chandan', '1', '11.31', 'Active-online', 'https://x/b.jpg'],
+    ['OFF-01', '8906191698888', 'Offline Item', '1', '9.5', 'Offline', ''],
+  ];
+  const cols = detectCatalogColumns(rows[0]);
+  assert.equal(cols.tag, undefined);
+  assert.equal(guessTagColumn(rows, rows[0], Object.values(cols) as number[], ['Active-online']), 5);
+  assert.equal(guessTagColumn(rows, rows[0], Object.values(cols) as number[], []), 5);
+});

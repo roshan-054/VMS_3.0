@@ -4627,6 +4627,48 @@ function requestedCatalogTags_(p) {
 }
 
 /**
+ * Some sheets have no "Tag" header: the tag column is headed with a tag value itself
+ * (e.g. a column titled "Active-online" holding Active-online / Offline). Find it from
+ * the data: a column whose header equals one of its own common values or a requested tag,
+ * otherwise the column of short, repeated text values that contains the requested tags.
+ */
+function guessTagColumn_(data, headerRow, col, requestedTags) {
+  var taken = {};
+  Object.keys(col).forEach(function(k) { taken[col[k]] = true; });
+  var wanted = {};
+  requestedTags.forEach(function(t) { wanted[normTag_(t)] = true; });
+  var best = -1, bestScore = 0;
+  var rows = Math.min(data.length, 2001);
+  for (var c = 0; c < headerRow.length; c++) {
+    if (taken[c]) continue;
+    var values = {}, textRows = 0, filled = 0, hits = 0;
+    for (var i = 1; i < rows; i++) {
+      var v = data[i][c];
+      if (v === '' || v === null || v === undefined) continue;
+      filled++;
+      if (v instanceof Date || typeof v === 'number') continue;
+      var str = String(v).trim();
+      if (!str || str.length > 40 || /^https?:/i.test(str) || /^[\d.,\s-]+$/.test(str)) continue;
+      textRows++;
+      splitTags_(str).forEach(function(tk) {
+        var k = normTag_(tk);
+        values[k] = (values[k] || 0) + 1;
+        if (wanted[k]) hits++;
+      });
+    }
+    if (filled === 0 || textRows / filled < 0.6) continue;
+    var distinct = Object.keys(values).length;
+    var head = normTag_(headerRow[c]);
+    var score = 0;
+    if (head && (wanted[head] || values[head] >= Math.max(1, textRows * 0.2))) score = 3;
+    else if (distinct <= Math.max(12, textRows * 0.2)) score = hits > 0 ? 2 : 1;
+    if (requestedTags.length > 0 && hits === 0 && score < 3) score = 0;
+    if (score > bestScore) { bestScore = score; best = c; }
+  }
+  return best >= 0 ? best : undefined;
+}
+
+/**
  * Turns a catalog tab (first row = headers) into products, keeping only rows whose tag
  * exactly matches one of the requested tags. Also reports which column was used for each
  * field and which tags exist in the tab, so a wrong tag or header is easy to spot.
@@ -4637,6 +4679,10 @@ function readCatalogRows_(data, requestedTags, opts) {
   var col = detectCatalogColumns_(headerRow);
   if (col.gtin === undefined && col.sku === undefined) {
     return { error: 'Could not find a GTIN/Barcode or SKU column. Headers found: ' + headerRow.filter(String).join(', ') };
+  }
+  if (col.tag === undefined) {
+    var guessed = guessTagColumn_(data, headerRow, col, requestedTags);
+    if (guessed !== undefined) col.tag = guessed;
   }
   var tagCol = col.tag !== undefined ? col.tag : col.category;
   var wanted = {};
