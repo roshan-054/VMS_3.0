@@ -765,6 +765,8 @@ export async function triggerUploadWorker(): Promise<void> {
                   if (fin && (fin.webViewLink || fin.playbackUrl)) {
                     finalWebViewLink = fin.webViewLink || fin.playbackUrl;
                   }
+                  // The order was already in Drive: the backend kept that file and removed this copy.
+                  if (fin && fin.fileId) finalFileId = fin.fileId;
                 } catch (finErr) {
                   console.warn('finishUpload notice:', finErr);
                 }
@@ -821,6 +823,8 @@ export async function triggerUploadWorker(): Promise<void> {
                   if (fin && (fin.webViewLink || fin.playbackUrl)) {
                     finalWebViewLink = fin.webViewLink || fin.playbackUrl;
                   }
+                  // The order was already in Drive: the backend kept that file and removed this copy.
+                  if (fin && fin.fileId) finalFileId = fin.fileId;
                 } catch (finErr) {
                   console.warn('finishUpload notice:', finErr);
                 }
@@ -975,7 +979,8 @@ export async function triggerUploadWorker(): Promise<void> {
                     driveFolderId: driveFolderId,
                     recordingDate: currentItem.recordingDate,
                     totalChunks: totalChunks,
-                    bypassDuplicate: true,
+                    // Same video (queue job) continues; only an explicit re-record may bypass duplicates.
+                    bypassDuplicate: !!currentItem.bypassDuplicate,
                     queueJobId: currentItem.id,
                     createdAt: currentItem.createdAt,
                   });
@@ -1357,13 +1362,13 @@ export async function resetStuckLocalQueue(): Promise<number> {
   let count = 0;
   for (const item of items) {
     if (deletedItemIds.has(item.id)) continue;
+    // Videos blocked as duplicates stay blocked: resetting stuck uploads must not upload them.
+    if (item.isDuplicate) continue;
     if (item.status === 'uploading' || (item.status === 'failed' && item.blob)) {
       item.status = 'pending';
       item.stage = 'Queued for upload';
       item.error = undefined;
-      item.isDuplicate = false;
       item.tooLarge = false;
-      item.bypassDuplicate = true; // allow retrying
       item.currentChunk = 0;
       item.uploadedBytes = 0;
       item.progress = 0;

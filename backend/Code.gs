@@ -1320,21 +1320,53 @@ function activeReservation_(k){
   }
 }
 
-function reserve_(order,platform,type,user,currentUploadId){
+function reserve_(order,platform,type,user,currentUploadId,queueJobId){
   const props=PropertiesService.getScriptProperties(), k=reservationKey_(order,platform,type), existing=activeReservation_(k);
+  const job = String(queueJobId || '');
   if(existing) {
-    // If it's the exact same uploadId or same user retrying within 10 minutes
     if (currentUploadId && existing.uploadId && existing.uploadId === currentUploadId) {
       return {allowed:true, key:k, existing:existing};
     }
-    if (existing.email && existing.email === user.email && (Date.now() - Number(existing.time || 0) < 600000)) {
-      props.setProperty(k, JSON.stringify({time:Date.now(), email:user.email, uploadId:currentUploadId||''}));
+    // The same station retrying the SAME video (same queue job) may take over its own reservation.
+    // A different video of the same order is a duplicate, even from the same packer: before, any
+    // second recording by the same packer within 10 minutes was let through.
+    const sameJob = job ? existing.queueJobId === job : !existing.queueJobId;
+    if (existing.email && existing.email === user.email && sameJob && (Date.now() - Number(existing.time || 0) < 600000)) {
+      props.setProperty(k, JSON.stringify({time:Date.now(), email:user.email, uploadId:currentUploadId||'', queueJobId: job}));
       return {allowed:true, key:k, existing:existing};
     }
     return {allowed:false, existing:existing, key:k};
   }
-  props.setProperty(k,JSON.stringify({time:Date.now(),email:user.email,uploadId:currentUploadId||''}));
+  props.setProperty(k,JSON.stringify({time:Date.now(),email:user.email,uploadId:currentUploadId||'',queueJobId: job}));
   return {allowed:true,key:k};
+}
+
+/**
+ * The OrderLog / ReturnLog row already written for this queue job (one recorded video), or null.
+ * Makes every upload of one video idempotent: retries, recoveries and parallel attempts all end on
+ * the same row and the same Drive file.
+ */
+function findLoggedJob_(queueJobId) {
+  const job = String(queueJobId || '').trim();
+  if (!job) return null;
+  const names = [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET];
+  for (let n = 0; n < names.length; n++) {
+    const sh = sheet_(names[n]);
+    if (!sh) continue;
+    const v = sh.getDataRange().getValues();
+    for (let i = v.length - 1; i >= 1; i--) {
+      if (String(v[i][9] || '').trim() !== job) continue;
+      const fid = String(v[i][4] || '').trim();
+      return {
+        sourceSheet: names[n], row: i + 1, orderId: String(v[i][1] || ''), platform: String(v[i][2] || ''),
+        recordingType: String(v[i][8] || ''), packerEmail: String(v[i][3] || ''), fileId: fid,
+        timestamp: v[i][0] instanceof Date ? v[i][0].toISOString() : String(v[i][0] || ''),
+        playbackUrl: String(v[i][5] || (fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : '')),
+        webViewLink: String(v[i][5] || (fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : ''))
+      };
+    }
+  }
+  return null;
 }
 
 function releaseReservation_(k){if(k)PropertiesService.getScriptProperties().deleteProperty(k)}
@@ -1964,6 +1996,20 @@ function startUpload_(p){
     return { success: false, code: 'VIDEO_TOO_LARGE', error: 'Video is ' + Math.round(size / 1048576) + ' MB, above the ' + limitMb + ' MB limit set in Admin. Raise the limit in Admin > Apps Script & Drive Settings to upload it.' };
   }
 
+  // This exact video (queue job) is already uploaded and logged: never upload it a second time,
+  // whatever the bypass flag says. The station marks it done with the existing Drive file.
+  const loggedJob = findLoggedJob_(p.queueJobId);
+  if (loggedJob && loggedJob.fileId) {
+    return {
+      success: false,
+      code: 'DUPLICATE_ORDER_ID',
+      isDuplicate: true,
+      alreadyUploaded: true,
+      error: 'This video was already uploaded to Google Drive.',
+      existing: loggedJob
+    };
+  }
+
   // Check duplicate: if duplicate exists and not explicitly bypassed, prevent duplicate upload
   const isBypass = p.bypassDuplicate === true || String(p.bypassDuplicate) === 'true' || p.bypassDuplicate === 1 || p.bypassDuplicate === '1';
   const done = completedDuplicate_(order,platform,type);
@@ -2022,7 +2068,7 @@ function startUpload_(p){
   let reservation = null;
   return withScriptLock_(function() {
     try {
-      reservation = reserve_(order, platform, type, user, uploadId);
+      reservation = reserve_(order, platform, type, user, uploadId, p.queueJobId);
       if (!reservation.allowed && !isBypass) {
         releaseGlobalUploadSlot_(uploadId);
         return {
@@ -2361,6 +2407,8 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
     const normTargetOrder = normalizeOrderId_(s.order);
     const targetType = normalize_(s.type || 'Forward');
 
+    let keptRow = null; // the row that already holds this order's video
+    let duplicateOrder = false;
     if (fid || s.queueJobId || normTargetOrder) {
       const existingData = targetLogSheet.getDataRange().getValues();
       for (let i = existingData.length - 1; i >= 1; i--) {
@@ -2371,13 +2419,16 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
 
         if ((fid && rowFid === fid) || (s.queueJobId && rowJob === s.queueJobId)) {
           alreadyLogged = true;
+          keptRow = existingData[i];
           break;
         }
 
         // Strict duplicate guard: if an identical order and recording type is ALREADY logged and not explicitly bypassed
-        if (normTargetOrder && rowOrder === normTargetOrder && rowType === targetType && !s.bypassDuplicate) {
+        if (normTargetOrder && rowOrder === normTargetOrder && rowType === targetType && !s.bypassDuplicate && rowFid) {
           console.warn('finalizeCompletedUpload_: Duplicate order ' + s.order + ' already logged at row ' + (i+1));
           alreadyLogged = true;
+          duplicateOrder = true;
+          keptRow = existingData[i];
           break;
         }
       }
@@ -2412,6 +2463,31 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
           s.type
         ]);
       } catch(_) {}
+    }
+    // A second video of an order that is already in Drive: keep the first, move the new file to
+    // Drive's trash (restorable for 30 days) and answer with the kept file.
+    const keptFid = keptRow ? String(keptRow[4] || '').trim() : '';
+    if (keptFid && keptFid !== fid) {
+      if (duplicateOrder || (s.queueJobId && String(keptRow[9] || '').trim() === s.queueJobId)) {
+        try { DriveApp.getFileById(fid).setTrashed(true); } catch (_) {}
+        updateUploadLog_(uploadId, 'Duplicate removed: order already in Drive', 100, keptFid, 'Completed', '', s.queueJobId, s.order, s.type, s.createdAt);
+        if(s.reservationKey) releaseReservation_(s.reservationKey);
+        releaseReservation_(reservationKey_(s.order, s.platform, s.type));
+        const keptPlay = String(keptRow[5] || '') || ('https://drive.google.com/file/d/' + keptFid + '/preview');
+        try {
+          PropertiesService.getScriptProperties().setProperty('UPLOAD_' + uploadId, JSON.stringify({
+            completed: true, fileId: keptFid, webViewLink: keptPlay, playbackUrl: keptPlay,
+            order: s.order, platform: s.platform, type: s.type, completedAt: Date.now()
+          }));
+        } catch(_) {}
+        return {
+          success: true, complete: true, completed: true, duplicateRemoved: true,
+          fileId: keptFid, webViewLink: keptPlay, playbackUrl: keptPlay,
+          downloadUrl: 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(keptFid),
+          stage: 'Already in Google Drive (duplicate removed)', status: 'Completed',
+          orderId: s.order, platform: s.platform, recordingType: s.type
+        };
+      }
     }
     updateUploadLog_(uploadId, 'Uploaded to Google Drive', 100, fid, 'Completed', '', s.queueJobId, s.order, s.type, s.createdAt);
     if(s.reservationKey) releaseReservation_(s.reservationKey);
