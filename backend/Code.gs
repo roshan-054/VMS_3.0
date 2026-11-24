@@ -74,7 +74,7 @@ const ADMIN_ACTIONS = [
   'deleteLogEntry', 'removeUploadLog', 'deleteOrderLog',
   'scanDuplicates', 'scanDuplicateRecords', 'cleanDuplicates', 'removeDuplicates', 'removeDuplicateRecords',
   'scanOlder', 'scanOlderVideos', 'deleteOlder', 'deleteOlderVideos',
-  'applyConditionalFormatting', 'saveBranding', 'uploadBrandingImage'
+  'applyConditionalFormatting', 'saveBranding', 'uploadBrandingImage', 'checkDriveFolder'
 ];
 
 function doPost(e) {
@@ -133,6 +133,7 @@ function doPost(e) {
       case 'deleteOlderVideos': return output_(deleteOlderVideos_(p));
       case 'applyConditionalFormatting': return output_(applyFormattingEndpoint_());
       case 'getBranding': return output_(getBrandingConfig_());
+      case 'checkDriveFolder': return output_(checkDriveFolder_(p));
       case 'saveBranding': return output_(saveBrandingConfig_(p));
       case 'uploadBrandingImage': return output_(uploadBrandingImage_(p));
       case 'getDriveFileSize': return output_(getDriveFileSize_(p));
@@ -209,7 +210,68 @@ function ss_() {
   throw new Error('Google Sheet is not configured. Please open your Google Sheet -> Extensions -> Apps Script and run setupSystem(), or set SPREADSHEET_ID in Project Settings -> Script Properties.');
 }
 
-function parentFolder_(customFolderId) {
+const VIDEO_ROOT_CACHE_KEY = 'VMS_VIDEO_ROOT_FOLDER_ID';
+
+function cleanFolderId_(raw) {
+  const v = String(raw || '').trim();
+  const m = v.match(/folders\/([a-zA-Z0-9_-]+)/) || v.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  return m ? m[1] : v;
+}
+
+/** The one Drive folder all stations upload videos into: Branding sheet row VideoDriveFolderId
+ *  (set from Admin > System Settings), then the PARENT_FOLDER_ID script property, then the built-in default. */
+function videoRootFolderId_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(VIDEO_ROOT_CACHE_KEY);
+  if (cached) return cached;
+  let id = '';
+  try {
+    const sh = ss_().getSheetByName(CONFIG.BRANDING_SHEET);
+    if (sh) {
+      const data = sh.getDataRange().getValues();
+      for (let i = 1; i < data.length; i++) {
+        const k = String(data[i][0] || '').trim();
+        if (k === 'VideoDriveFolderId' || k === 'DriveFolderId') {
+          id = cleanFolderId_(data[i][1]);
+          if (id) break;
+        }
+      }
+    }
+  } catch (e) {}
+  if (!id) id = scriptProps_().getProperty('PARENT_FOLDER_ID') || CONFIG.HARDWIRED_PARENT_FOLDER_ID;
+  cache.put(VIDEO_ROOT_CACHE_KEY, id, 300);
+  return id;
+}
+
+/** Admin check of a Drive folder before it becomes the video location. */
+function checkDriveFolder_(p) {
+  const id = cleanFolderId_(p.folder || p.videoDriveFolderId || p.driveFolderId);
+  if (!id || id.length < 10) return { success: false, error: 'Paste a Google Drive folder link or folder ID.' };
+  let folder;
+  try {
+    folder = DriveApp.getFolderById(id);
+    folder.getName();
+  } catch (e) {
+    return {
+      success: false,
+      error: 'This Google account cannot open that folder. Share it with the account that deployed the Apps Script (as Editor), or use a Shared Drive folder.',
+      folderId: id
+    };
+  }
+  let canWrite = false;
+  try {
+    const probe = folder.createFile('vms_write_check.txt', 'VMS write check - safe to delete');
+    probe.setTrashed(true);
+    canWrite = true;
+  } catch (e) {}
+  let owner = '';
+  try { const o = folder.getOwner(); owner = o ? o.getEmail() : ''; } catch (e) {}
+  const info = { success: canWrite, folderId: id, name: folder.getName(), url: folder.getUrl(), owner: owner, canWrite: canWrite };
+  if (!canWrite) info.error = 'The folder opens but this account cannot add files to it. Give the Apps Script account Editor access.';
+  return info;
+}
+
+function parentFolder_(customFolderId, strict) {
   const props = scriptProps_();
   let folderId = customFolderId;
 
@@ -249,6 +311,9 @@ function parentFolder_(customFolderId) {
     try {
       return DriveApp.getFolderById(folderId);
     } catch(e){
+      if (strict) {
+        throw new Error('Cannot open the Google Drive video folder (' + folderId + '). Ask an admin to check Admin > System Settings > Video storage location: ' + e.message);
+      }
       console.warn('Could not access folder ID: '+folderId+', falling back to default root.');
     }
   }
@@ -1515,7 +1580,9 @@ function getOrCreateFolder_(parent, name) {
  * Example: VMS_Packing_Videos / Amazon / Forward / Aug-2026 / 2026-08-21 /
  */
 function dateFolder_(platform, type, customDriveFolderId, targetDateStr) {
-  const root = parentFolder_(customDriveFolderId);
+  // Strict: if the configured video folder can't be opened, fail the upload (it stays queued on the
+  // station) instead of silently filing videos somewhere else.
+  const root = parentFolder_(customDriveFolderId, true);
   const pf = getOrCreateFolder_(root, platform || 'Custom');
   const tf = getOrCreateFolder_(pf, type || 'Forward');
   let dateName = targetDateStr ? String(targetDateStr).trim() : '';
@@ -1877,7 +1944,8 @@ function startUpload_(p){
   const platform = String(p.platform||'').trim();
   const type = String(p.recordingType||'Forward').trim();
   const size = Number(p.fileSize||0);
-  const driveFolderId = p.driveFolderId || CONFIG.HARDWIRED_PARENT_FOLDER_ID;
+  // The video folder is decided centrally (Admin > Drive location), never by the uploading station.
+  const driveFolderId = videoRootFolderId_();
 
   if(!order||!platform)throw new Error('Order ID and platform are required.');
   if(!['Forward','Return'].includes(type))throw new Error('Invalid recording type.');
@@ -2108,7 +2176,7 @@ function uploadChunk_(p){
   const chunkIndex = Number(p.chunkIndex !== undefined ? p.chunkIndex : 0);
   const totalChunks = Number(p.totalChunks || 1);
   const base64Chunk = String(p.base64 || '');
-  const driveFolderId = p.driveFolderId || s.driveFolderId || CONFIG.HARDWIRED_PARENT_FOLDER_ID;
+  const driveFolderId = s.driveFolderId || videoRootFolderId_();
 
   if(!base64Chunk) throw new Error('Missing base64 chunk data.');
 
@@ -2164,7 +2232,7 @@ function uploadChunk_(p){
 
         if (!fid) {
           try {
-            const folder = dateFolder_(s.platform, s.type, s.driveFolderId || CONFIG.HARDWIRED_PARENT_FOLDER_ID, s.recordingDate);
+            const folder = dateFolder_(s.platform, s.type, s.driveFolderId || videoRootFolderId_(), s.recordingDate);
             const it = folder.getFilesByName(s.name);
             if (it.hasNext()) {
               fid = it.next().getId();
@@ -2393,7 +2461,7 @@ function finishUpload_(p) {
       mime: String(p.mimeType || 'video/mp4'),
       packerEmail: user.email,
       queueJobId: String(p.queueJobId || ''),
-      driveFolderId: p.driveFolderId || CONFIG.HARDWIRED_PARENT_FOLDER_ID,
+      driveFolderId: videoRootFolderId_(),
       reservationKey: '',
       createdAt: p.createdAt ? new Date(p.createdAt).getTime() : Date.now()
     };
@@ -4013,13 +4081,15 @@ function saveBrandingConfig_(p) {
     props.setProperty('VMS_BRANDING_FOLDER_ID', val);
     updateOrInsert('BrandingFolderId', val, 'Google Drive Folder for Brand Assets');
   }
+  let folderInfo = null;
   if (p.videoDriveFolderId !== undefined || p.driveFolderId !== undefined) {
-    const rawVal = String(p.videoDriveFolderId || p.driveFolderId || '').trim();
-    let cleanFolderId = rawVal;
-    const urlMatch = rawVal.match(/folders\/([a-zA-Z0-9_-]+)/);
-    if (urlMatch) {
-      cleanFolderId = urlMatch[1];
+    const cleanFolderId = cleanFolderId_(p.videoDriveFolderId || p.driveFolderId);
+    if (cleanFolderId && cleanFolderId !== videoRootFolderId_()) {
+      // Only switch every station to a folder this account can actually write to.
+      folderInfo = checkDriveFolder_({ folder: cleanFolderId });
+      if (!folderInfo.success) return folderInfo;
     }
+    CacheService.getScriptCache().remove(VIDEO_ROOT_CACHE_KEY);
     props.setProperty('PARENT_FOLDER_ID', cleanFolderId);
     updateOrInsert('VideoDriveFolderId', cleanFolderId, 'Google Drive Root Folder ID for Video Uploads');
   }
@@ -4031,7 +4101,8 @@ function saveBrandingConfig_(p) {
     appSubtitle: p.appSubtitle,
     logoUrl: p.logoUrl,
     faviconUrl: p.faviconUrl,
-    videoDriveFolderId: p.videoDriveFolderId || p.driveFolderId
+    videoDriveFolderId: p.videoDriveFolderId || p.driveFolderId,
+    folder: folderInfo
   };
 }
 

@@ -92,7 +92,13 @@ function createRuntime({ users = [] } = {}) {
       computeDigest: (_alg, str) => Array.from(crypto.createHash('sha256').update(String(str), 'utf8').digest()).map((b) => (b > 127 ? b - 256 : b)),
       getUuid: () => crypto.randomUUID(),
       sleep() {},
-      formatDate: (d) => new Date(d).toISOString(),
+      formatDate: (d, _tz, fmt) => {
+        const x = new Date(d);
+        const p2 = (n) => String(n).padStart(2, '0');
+        const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        if (!fmt) return x.toISOString();
+        return fmt.replace('yyyy', x.getFullYear()).replace('MMM', MON[x.getMonth()]).replace('MM', p2(x.getMonth() + 1)).replace('dd', p2(x.getDate())).replace('HH', p2(x.getHours())).replace('mm', p2(x.getMinutes())).replace('ss', p2(x.getSeconds()));
+      },
       base64Encode: (s) => Buffer.from(String(s)).toString('base64'),
       base64EncodeWebSafe: (s) => Buffer.from(String(s)).toString('base64url'),
       base64Decode: (s) => Array.from(Buffer.from(String(s), 'base64')),
