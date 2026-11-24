@@ -865,15 +865,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
           <div className="flex items-center gap-2">
             <h2 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
               <Shield className="w-5 h-5 text-blue-600" />
-              Administrator Control Center
+              Admin
             </h2>
-            <span className="bg-purple-100 text-purple-700 text-[10px] font-bold px-2 py-0.5 rounded-full border border-purple-200">
-              Admin Exclusive
-            </span>
           </div>
-          <p className="text-xs text-slate-500 mt-1">
-            Manage workstation operator credentials, permissions, system branding, logo, and browser favicon.
-          </p>
         </div>
 
         {/* Sub-tab Navigation Switcher */}
@@ -929,12 +923,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                   <div className="flex items-center gap-2">
-                    <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-xs">
-                      1
-                    </div>
                     <div>
                       <h4 className="text-xs font-bold text-slate-900">Apps Script Web App Exec URL</h4>
-                      <p className="text-[11px] text-slate-500">The backend webhook that manages uploads, logs, and authentication</p>
                     </div>
                   </div>
 
@@ -1007,19 +997,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                   <div className="flex items-center gap-2">
-                    <div className="w-7 h-7 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center font-bold text-xs">
-                      2
-                    </div>
                     <div>
                       <h4 className="text-xs font-bold text-slate-900">Google Drive Root Folder ID</h4>
-                      <p className="text-[11px] text-slate-500">Parent folder where all platform, recording type, and date subfolders are created</p>
                     </div>
                   </div>
 
-                  <span className="bg-emerald-50 text-emerald-700 text-[10px] font-bold px-2.5 py-1 rounded-lg border border-emerald-200 flex items-center gap-1 shrink-0">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                    Sheet Synced: &quot;Branding&quot; Tab
-                  </span>
                 </div>
 
                 <DriveLocationSetting
@@ -1034,12 +1016,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-3">
                   <div className="flex items-center gap-2">
-                    <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-xs">
-                      3
-                    </div>
                     <div>
                       <h4 className="text-xs font-bold text-slate-900">GTIN Catalog Google Sheet &amp; Tab Sync</h4>
-                      <p className="text-[11px] text-slate-500">Configure master or separate product spreadsheet, tab name, and tag conditions</p>
                     </div>
                   </div>
 
@@ -1177,12 +1155,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                   <div className="flex items-center gap-2">
-                    <div className="w-7 h-7 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center font-bold text-xs">
-                      4
-                    </div>
                     <div>
                       <h4 className="text-xs font-bold text-slate-900">Video Upload Chunk Size</h4>
-                      <p className="text-[11px] text-slate-500">Configure slice size for fast & resumable video uploads</p>
                     </div>
                   </div>
 
@@ -1221,9 +1195,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                       </button>
                     ))}
                   </div>
-                  <p className="text-[11px] text-slate-400 mt-2">
-                    <strong>16 MB</strong> is the optimal balance between high upload speed and resilient resumability for warehouse packing stations.
-                  </p>
                 </div>
 
                 <div className="pt-2 border-t border-slate-100">
@@ -1239,12 +1210,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
               {/* 4. Automated Upload & Resume Toggles */}
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-3">
                 <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-                  <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-xs">
-                    4
-                  </div>
                   <div>
                     <h4 className="text-xs font-bold text-slate-900">Automation Policies</h4>
-                    <p className="text-[11px] text-slate-500">Auto-upload and interruption recovery preferences</p>
                   </div>
                 </div>
 
@@ -1291,12 +1258,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                   <div className="flex items-center gap-2">
-                    <div className="w-7 h-7 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center font-bold text-xs">
-                      5
-                    </div>
                     <div>
                       <h4 className="text-xs font-bold text-slate-900">Upload Concurrency Mode</h4>
-                      <p className="text-[11px] text-slate-500">Allow 1-by-1 sequential upload or simultaneous parallel uploads (up to 3 videos)</p>
                     </div>
                   </div>
 
@@ -1337,9 +1300,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                       </button>
                     ))}
                   </div>
-                  <p className="text-[11px] text-slate-400 mt-2">
-                    <strong>1 Video at a Time</strong> guarantees stable upload on standard networks. <strong>2 or 3 Parallel Streams</strong> accelerates queue drain time on high-speed warehouse connections.
-                  </p>
                 </div>
               </div>
 
@@ -1347,12 +1307,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                   <div className="flex items-center gap-2">
-                    <div className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-xs">
-                      6
-                    </div>
                     <div>
                       <h4 className="text-xs font-bold text-slate-900">Night Mode / Dark Theme</h4>
-                      <p className="text-[11px] text-slate-500">Toggle dark visual canvas for low-light warehouse packing stations</p>
                     </div>
                   </div>
 
@@ -1401,12 +1357,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                   <div className="flex items-center gap-2">
-                    <div className="w-7 h-7 rounded-lg bg-teal-50 text-teal-600 flex items-center justify-center font-bold text-xs">
-                      5
-                    </div>
                     <div>
                       <h4 className="text-xs font-bold text-slate-900">Auto-Refresh Interval Rate</h4>
-                      <p className="text-[11px] text-slate-500">Configure status refresh frequency for upload logs and queue status</p>
                     </div>
                   </div>
 
@@ -1454,21 +1406,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                       className="w-20 px-2.5 py-1 bg-slate-50 border border-slate-300 rounded-lg text-xs font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500"
                     />
                   </div>
-                  <p className="text-[11px] text-slate-400 mt-2">
-                    <strong>6 Seconds</strong> is the recommended default interval for real-time tracking without excessive network bandwidth usage.
-                  </p>
                 </div>
               </div>
 
               {/* 6. Google Sheet Maintenance & Playback Links Repair */}
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
                 <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-                  <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-xs">
-                    6
-                  </div>
                   <div>
                     <h4 className="text-xs font-bold text-slate-900">Google Sheet & Drive Structure Maintenance</h4>
-                    <p className="text-[11px] text-slate-500">Reorganize monthly Drive folders (MMM-YYYY), repair playback URLs & sync sheet tabs</p>
                   </div>
                 </div>
 
@@ -1480,7 +1425,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                         Reorganize Drive Folders into Monthly Structure (MMM-YYYY)
                       </span>
                       <span className="text-[11px] text-purple-700/80">
-                        Scans Drive, groups existing daily folders under their Month (e.g. Aug-2026), files loose videos, and verifies all Sheet links
+                        Moves daily folders into month folders (e.g. Aug-2026).
                       </span>
                     </div>
                     <button
@@ -1500,7 +1445,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                         Refine Sheet Duplicate Highlighting (Forward vs Return)
                       </span>
                       <span className="text-[11px] text-emerald-700/80">
-                        Updates UploadLog, OrderLog, and ReturnLog so same Order IDs with different Recording Types (Forward vs Return) are NOT highlighted in red.
+                        Forward and Return of the same order are not marked as duplicates.
                       </span>
                     </div>
                     <button
@@ -1520,7 +1465,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                         Fix Non-Clickable Playback URLs (Column F)
                       </span>
                       <span className="text-[11px] text-slate-500">
-                        Scans OrderLog & ReturnLog sheets, converting plain file names in Column F to clickable Google Drive preview links
+                        Turns file names in column F into Drive links.
                       </span>
                     </div>
                     <button
@@ -1540,7 +1485,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                         Run Sheet Setup & Sync All Tabs (Branding, ReturnLog, OrderLog)
                       </span>
                       <span className="text-[11px] text-slate-500">
-                        Initializes Google Sheet headers, ensures Branding & ReturnLog tabs are visible, reorganizes Drive folders, and configures duplicate highlights
+                        Creates missing tabs and headers in the Google Sheet.
                       </span>
                     </div>
                     <button
@@ -1566,26 +1511,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                     <div>
                       <div className="flex items-center gap-2">
                         <h4 className="text-xs font-bold text-slate-900">Remove Duplicate Videos & Sheet Entries</h4>
-                        <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 border border-purple-200">
-                          Non-Destructive Trash Mover
-                        </span>
                       </div>
-                      <p className="text-[11px] text-slate-500">
-                        Scans OrderLog, ReturnLog, UploadLog, and Google Drive for duplicate order recordings
-                      </p>
                     </div>
                   </div>
                 </div>
 
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-3 bg-white rounded-xl border border-purple-100">
-                  <div className="space-y-1">
-                    <span className="text-xs font-semibold text-slate-800 block">
-                      Dedicated Deduplication & Safe Date-Series Trash Manager
-                    </span>
-                    <span className="text-[11px] text-slate-500 block leading-relaxed">
-                      Safely moves duplicate video files into a dedicated <code className="bg-purple-50 text-purple-700 px-1 py-0.5 rounded font-mono font-bold">Trash</code> folder directly inside the exact same date-series folder hierarchy (<span className="font-mono text-[10px]">.../&lt;Platform&gt;/&lt;Type&gt;/&lt;Month&gt;/&lt;Date&gt;/Trash/</span>). Duplicate rows in Google Sheets are removed and archived into <span className="font-mono font-bold">TrashLog</span>. Videos are never permanently deleted or sent to system trash.
-                    </span>
-                  </div>
+                  <p className="text-xs text-slate-600">Duplicates move to a Trash folder next to the original video; their rows are archived to TrashLog.</p>
 
                   <button
                     type="button"
@@ -1608,26 +1540,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                     <div>
                       <div className="flex items-center gap-2">
                         <h4 className="text-xs font-bold text-slate-900">Delete Videos & Logs Older Than 90 Days</h4>
-                        <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
-                          Automated Storage Retention Purge
-                        </span>
                       </div>
-                      <p className="text-[11px] text-slate-500">
-                        Scan and delete video recordings and sheet log entries older than 90 days from Google Drive & Sheets
-                      </p>
                     </div>
                   </div>
                 </div>
 
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-3 bg-white rounded-xl border border-red-100">
-                  <div className="space-y-1">
-                    <span className="text-xs font-semibold text-slate-800 block">
-                      Cloud Storage Retention & Retention Policy Purge Manager
-                    </span>
-                    <span className="text-[11px] text-slate-500 block leading-relaxed">
-                      Scans OrderLog, ReturnLog, UploadLog, and Google Drive for files and logs created prior to 90 days ago. Moves video files to Drive Trash and purges corresponding sheet rows to reclaim storage space and preserve Google Sheet responsiveness.
-                    </span>
-                  </div>
+                  <p className="text-xs text-slate-600">Moves old videos to Google Drive Trash and removes their log rows.</p>
 
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
                     <button
@@ -1658,12 +1577,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
               {/* 9. Cache & Storage Management */}
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
                 <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-                  <div className="w-7 h-7 rounded-lg bg-red-50 text-red-600 flex items-center justify-center font-bold text-xs">
-                    8
-                  </div>
                   <div>
                     <h4 className="text-xs font-bold text-slate-900">Cache & Storage Management</h4>
-                    <p className="text-[11px] text-slate-500">Remove cached application state and local queue data</p>
                   </div>
                 </div>
 
@@ -1709,7 +1624,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                     <FolderSync className="w-4 h-4 text-purple-400" />
                     Drive Folder Hierarchy
                   </span>
-                  <span className="text-[10px] text-purple-400 font-mono">Auto-Organized</span>
                 </div>
 
                 <div className="space-y-2 font-mono text-[11px] text-slate-300 bg-slate-800/80 p-3.5 rounded-xl border border-slate-700 leading-relaxed">
@@ -1734,9 +1648,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                   </div>
                 </div>
 
-                <p className="text-xs text-slate-400 leading-relaxed">
-                  All recorded videos are organized automatically into this hierarchy on Google Drive, and indexed with direct view links in Google Sheets.
-                </p>
               </div>
 
               {/* Quick Code Reference */}
@@ -1746,13 +1657,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                     <FileCode className="w-4 h-4 text-blue-600" />
                     Google Apps Script (Code.gs)
                   </div>
-                  <span className="text-[10px] font-mono text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 font-semibold">
-                    v3.0 Verified
-                  </span>
                 </div>
-                <p className="text-xs text-slate-500 leading-relaxed">
-                  Contains all 2,112 lines of backend logic for Drive hierarchy, chunked upload, Google Sheets logging, and duplicate prevention.
-                </p>
                 <button
                   type="button"
                   onClick={handleOpenCodeModal}
@@ -1775,12 +1680,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
               <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs space-y-4">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                   <div className="flex items-center gap-2">
-                    <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-xs">
-                      1
-                    </div>
                     <div>
                       <h4 className="text-xs font-bold text-slate-900">Application Logo</h4>
-                      <p className="text-[11px] text-slate-500">Displayed in sidebar, mobile header, and login screen</p>
                     </div>
                   </div>
 
@@ -1834,7 +1735,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                           {isUploadingLogo ? 'Uploading to Drive "VMS_Branding" folder...' : 'Click to browse and upload company logo'}
                         </span>
                         <p className="text-[11px] text-slate-400 mt-0.5">
-                          PNG, SVG, JPG, or WebP (Saved to Drive & Google Sheet permanently)
+                          PNG, SVG, JPG, or WebP
                         </p>
                       </div>
                     </div>
@@ -1885,12 +1786,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
               <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs space-y-4">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                   <div className="flex items-center gap-2">
-                    <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-xs">
-                      2
-                    </div>
                     <div>
                       <h4 className="text-xs font-bold text-slate-900">Browser Favicon</h4>
-                      <p className="text-[11px] text-slate-500">Displayed on the browser tab header</p>
                     </div>
                   </div>
 
@@ -1944,7 +1841,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                           {isUploadingFavicon ? 'Uploading to Drive "VMS_Branding" folder...' : 'Click to browse and upload browser favicon'}
                         </span>
                         <p className="text-[11px] text-slate-400 mt-0.5">
-                          ICO, PNG, or SVG (Saved to Drive & Google Sheet permanently)
+                          ICO, PNG, or SVG
                         </p>
                       </div>
                     </div>
@@ -1994,12 +1891,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
               {/* 3. System Titles */}
               <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs space-y-4">
                 <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-                  <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-xs">
-                    3
-                  </div>
                   <div>
                     <h4 className="text-xs font-bold text-slate-900">Workstation Title & Subtitle</h4>
-                    <p className="text-[11px] text-slate-500">Custom name for your packing station brand</p>
                   </div>
                 </div>
 
@@ -2419,7 +2312,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                     {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
-                <p className="text-[10px] text-slate-400 mt-1">Minimum 6 characters. Click the eye icon to view or verify typed password.</p>
+                <p className="text-[10px] text-slate-400 mt-1">At least 6 characters.</p>
               </div>
 
               <div className="grid grid-cols-2 gap-3">

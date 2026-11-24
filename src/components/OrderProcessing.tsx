@@ -1355,13 +1355,8 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
             </div>
             <div>
               <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
-                Order Processing &amp; Pre-Pack Manifest
+                Order Processing
               </h1>
-              <p className="text-xs text-slate-500">
-                {isUserAdmin
-                  ? 'Pre-enter order items, assign to packers, and manage the master GTIN barcode catalog.'
-                  : 'View your assigned orders and verify physical GTIN barcodes before video packing.'}
-              </p>
             </div>
           </div>
         </div>
@@ -1435,9 +1430,6 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                 </span>
               )}
             </div>
-            <p className="text-[11px] text-slate-500">
-              Filter Total Manifest, Pending, and Packed metrics by date
-            </p>
           </div>
         </div>
 
@@ -1662,13 +1654,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
             <div>
               <h2 className="text-base font-black text-slate-900 tracking-tight flex items-center gap-2">
                 <span>Enter Order &amp; Product Details</span>
-                <span className="text-[10px] font-mono bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full font-bold border border-indigo-200">
-                  Pre-Pack Step
-                </span>
               </h2>
-              <p className="text-xs text-slate-400">
-                Packers will only be allowed to pack orders assigned to their account, and must scan each item's GTIN.
-              </p>
             </div>
 
             {/* Who Processed This Badge (Auto-fetched from logged-in user account) */}
@@ -1762,9 +1748,6 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                 </select>
                 <UserCheck className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
               </div>
-              <span className="text-[10px] text-slate-400 mt-1 block">
-                Packer will see this in their queue and physically verify each GTIN.
-              </span>
             </div>
           </div>
 
@@ -1773,11 +1756,8 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
             <div className="flex items-center justify-between">
               <div>
                 <label className="text-xs font-bold text-slate-800 uppercase tracking-wider block">
-                  Products in This Order (Multi-Item Supported)
+                  Products
                 </label>
-                <span className="text-[11px] text-slate-400">
-                  Product Name, SKU, and Barcode are all compulsory for packer scan verification.
-                </span>
               </div>
               <button
                 type="button"
@@ -1789,18 +1769,6 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
               </button>
             </div>
 
-            {/* Smart 1-Step Auto-Fill Helper Banner */}
-            <div className="bg-gradient-to-r from-indigo-50/90 via-purple-50/70 to-slate-50 border border-indigo-200/90 rounded-2xl p-3 text-xs text-indigo-950 flex items-start gap-2.5 shadow-2xs">
-              <Sparkles className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
-              <div className="space-y-0.5">
-                <span className="font-bold text-indigo-900 block">
-                  Smart 1-Field Auto-Fill: Enter ANY 1 detail (Product Name, SKU, or Barcode) — the system automatically fetches &amp; fills the other two!
-                </span>
-                <span className="text-[11px] text-slate-600 block">
-                  All 3 details (Product Name, SKU, and Barcode) are compulsory so the packing operator can verify the physical item and scan its exact barcode.
-                </span>
-              </div>
-            </div>
 
             <div className="space-y-3">
               {orderItems.map((item, index) => (
@@ -2971,9 +2939,6 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                   {gtinCatalog.length} Products
                 </span>
               </h2>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Master product database used for instantaneous auto-fetch during order entry and live camera barcode verification.
-              </p>
             </div>
 
             {/* Admin GTIN Management Actions */}
@@ -3461,18 +3426,12 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                 {verificationLogs.length} Events
               </span>
             </h2>
-            <p className="text-xs text-slate-400">
-              Live audit trail of scanned GTIN barcodes vs expected manifest values, recording verified packers, timestamps, and video links.
-            </p>
           </div>
 
           {verificationLogs.length === 0 ? (
             <div className="p-12 text-center text-slate-400 space-y-2 border-2 border-dashed border-slate-200 rounded-2xl">
               <ShieldCheck className="w-10 h-10 mx-auto text-slate-300" />
               <div className="font-bold text-sm text-slate-600">No Verification Logs Yet</div>
-              <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                Audit logs are automatically created every time a packer verifies an order's physical GTIN barcodes.
-              </p>
             </div>
           ) : (
             <div className="overflow-x-auto border border-slate-200 rounded-2xl">

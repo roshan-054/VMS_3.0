@@ -397,11 +397,8 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
         <div>
           <h3 className="text-base font-bold text-slate-900 tracking-tight flex items-center gap-2">
             <UploadCloud className="w-5 h-5 text-blue-600" />
-            Manual Backup Video Upload (Single & Bulk)
+            Manual Upload
           </h3>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Manually upload local packing videos with automatic date folder detection to sync directly to Google Drive hierarchy.
-          </p>
         </div>
 
         {stagedFiles.length > 0 && (
@@ -455,7 +452,7 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
           <span className="text-xs text-slate-500">or drag and drop here</span>
         </div>
         <p className="text-[11px] text-slate-400">
-          Supports MP4, WebM, MOV, MKV. Automatically extracts Order ID, Platform, and Recording Date from video metadata or filename.
+          MP4, WebM, MOV or MKV
         </p>
       </div>
 

@@ -209,13 +209,7 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
                 <h3 className="text-lg font-bold text-white tracking-tight">
                   Delete Videos & Logs Older Than {daysThreshold} Days
                 </h3>
-                <span className="text-[10px] font-mono font-bold bg-white/20 text-white px-2 py-0.5 rounded-full border border-white/30 uppercase tracking-wider">
-                  Retention Policy
-                </span>
               </div>
-              <p className="text-xs text-red-100 mt-0.5">
-                Automatically scan & purge old recordings from Google Drive and Google Sheets to save cloud storage
-              </p>
             </div>
           </div>
           <button
@@ -350,7 +344,7 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
                   Move Drive Video Files to Trash
                 </span>
                 <span className="text-[11px] text-slate-500">
-                  Safely moves matching older video MP4 files into Google Drive Trash / Trash subfolders
+                  Videos go to Google Drive Trash
                 </span>
               </div>
             </label>

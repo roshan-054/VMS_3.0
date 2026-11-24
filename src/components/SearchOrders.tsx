@@ -318,11 +318,8 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast, current
         <div>
           <h2 className="text-xl font-bold text-slate-800 tracking-tight flex items-center gap-2">
             <Search className="w-5 h-5 text-blue-600" />
-            Search Packing Videos & Order Audit
+            Search Videos
           </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Look up any order barcode, play high-definition recordings, and inspect full package logs from Google Drive & Sheets.
-          </p>
         </div>
         <div className="flex items-center gap-2">
           {activeFilterCount > 0 && (
@@ -393,7 +390,6 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast, current
           <div className="lg:col-span-6">
             <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
               <span>Date Filter Preset</span>
-              <span className="text-[10px] text-slate-400 font-normal">Fast range filtering</span>
             </label>
             <div className="flex flex-wrap gap-1.5">
               {[

@@ -105,7 +105,7 @@ export const VideoSizeLimitSetting: React.FC<{
         </button>
       </div>
       <p className="text-[11px] text-slate-400 mt-2">
-        A recording above this size is still saved on the station's computer but is not uploaded. The server checks the same limit.
+        Larger recordings stay on the station and are not uploaded.
       </p>
     </div>
   );

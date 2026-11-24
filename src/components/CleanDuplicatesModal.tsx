@@ -180,9 +180,6 @@ export const CleanDuplicatesModal: React.FC<CleanDuplicatesModalProps> = ({
                   Safe Deduplication
                 </span>
               </div>
-              <p className="text-xs text-slate-300 mt-0.5">
-                Clean redundant recordings from Google Sheets and move duplicate videos into date-series "Trash" folders
-              </p>
             </div>
           </div>
           <button

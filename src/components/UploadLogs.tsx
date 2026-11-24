@@ -1276,11 +1276,8 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
             </div>
             <div>
               <h2 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
-                Upload Logs & Activity History
+                Upload Logs
               </h2>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Audit trail and status tracking for all video uploads, chunk streams, pending jobs, and cloud syncs.
-              </p>
             </div>
           </div>
         </div>

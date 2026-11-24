@@ -9,7 +9,6 @@ import {
   AlertTriangle,
   FileVideo,
   ExternalLink,
-  Zap,
   Check,
   XCircle,
   RefreshCw,
@@ -429,22 +428,9 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-lg font-bold text-slate-900 tracking-tight">
-                Automatic Upload Queue & Duplicate Guard
+                Upload Queue
               </h2>
-              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
-                Sequential Upload: 1-by-1 FIFO
-              </span>
-              {currentChunkSizeMb !== null && currentChunkSizeMb > 0 && (
-                <span className="bg-blue-50 text-blue-700 text-[10px] font-bold px-2 py-0.5 rounded-full border border-blue-200 flex items-center gap-1">
-                  <Zap className="w-3 h-3 text-amber-500" />
-                  {currentChunkSizeMb} MB Chunks
-                </span>
-              )}
             </div>
-            <p className="text-xs text-slate-500 mt-1">
-              Strict sequential upload system: Files upload one after another. As soon as one file finishes, the next one begins automatically.
-            </p>
           </div>
         </div>
 
