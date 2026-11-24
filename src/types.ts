@@ -72,6 +72,8 @@ export interface QueueItem {
   isDuplicate?: boolean;
   duplicateReason?: string;
   bypassDuplicate?: boolean;
+  /** Server refused it as above the admin's video size limit; not auto-retried. */
+  tooLarge?: boolean;
 }
 
 export interface UploadLogItem {

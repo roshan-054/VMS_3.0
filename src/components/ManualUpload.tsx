@@ -16,7 +16,7 @@ import {
   X
 } from 'lucide-react';
 import { PlatformType, RecordingType, QueueItem } from '../types';
-import { dbPutQueue, getStoredDriveFolderId, manualFileCache } from '../lib/storage';
+import { dbPutQueue, getStoredDriveFolderId, manualFileCache, exceedsMaxVideoSize, formatVideoSizeLimit } from '../lib/storage';
 import { checkDuplicate, requestApi } from '../lib/api';
 import { triggerUploadWorker } from '../lib/uploadWorker';
 
@@ -165,12 +165,11 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
     if (!files || files.length === 0) return;
 
     const newItems: StagedFile[] = [];
-    const maxSizeBytes = (parseInt(localStorage.getItem('ops_max_video_size_mb') || '1024', 10)) * 1024 * 1024;
     let skippedSize = 0;
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      if (file.size > maxSizeBytes) {
+      if (exceedsMaxVideoSize(file.size)) {
         skippedSize++;
         continue;
       }
@@ -197,7 +196,7 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
       setStagedFiles((prev) => [...prev, ...newItems]);
       
       if (skippedSize > 0) {
-        onShowToast(`Added ${newItems.length} video(s). Skipped ${skippedSize} file(s) exceeding max limit (${maxSizeBytes / (1024 * 1024)} MB).`, 'info');
+        onShowToast(`Added ${newItems.length} video(s). Skipped ${skippedSize} file(s) above the ${formatVideoSizeLimit()} limit set in Admin.`, 'info');
       } else {
         onShowToast(`Added ${newItems.length} video(s). Target date folders auto-detected.`, 'success');
       }
@@ -205,7 +204,7 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
       // Run duplicate check on new items
       checkDuplicatesForBatch(newItems);
     } else if (skippedSize > 0) {
-      onShowToast(`Skipped ${skippedSize} file(s) because they exceed the max configured size limit (${maxSizeBytes / (1024 * 1024)} MB).`, 'error');
+      onShowToast(`Skipped ${skippedSize} file(s) because they are above the ${formatVideoSizeLimit()} limit set in Admin.`, 'error');
     }
   };
 

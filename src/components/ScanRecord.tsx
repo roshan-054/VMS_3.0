@@ -39,7 +39,8 @@ import {
   Boxes
 } from 'lucide-react';
 import { PlatformType, RecordingType, QueueItem, OrderManifest, ManifestItem, User } from '../types';
-import { dbPutQueue, getStoredMaxVideoSizeMb, getStoredVideoBitrate } from '../lib/storage';
+import { syncCloudBranding } from '../lib/branding';
+import { dbPutQueue, exceedsMaxVideoSize, formatVideoSizeLimit, getStoredVideoBitrate } from '../lib/storage';
 import { normalizeOrderId, checkDuplicate } from '../lib/api';
 import { triggerUploadWorker, setRecordingInProgress } from '../lib/uploadWorker';
 import { saveRecordingLocally, ensureBackupPermission, backupPathParts } from '../lib/localBackup';
@@ -1235,10 +1236,14 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       releaseWakeLock();
 
       const sizeMb = (blob.size / (1024 * 1024)).toFixed(2);
-      const maxSizeBytes = getStoredMaxVideoSizeMb() * 1024 * 1024;
-      
-      if (blob.size > maxSizeBytes) {
-        onShowToast(`Recorded video (${sizeMb} MB) exceeds maximum allowed size (${getStoredMaxVideoSizeMb()} MB). Adjust limits in Admin panel if needed.`, 'error');
+      let overLimit = exceedsMaxVideoSize(blob.size);
+      if (overLimit) {
+        // The admin may have raised the limit since this station loaded: re-check once.
+        await syncCloudBranding().catch(() => undefined);
+        overLimit = exceedsMaxVideoSize(blob.size);
+      }
+      if (overLimit) {
+        onShowToast(`Recorded video (${sizeMb} MB) is above the ${formatVideoSizeLimit()} limit set in Admin. It is saved on this computer but not uploaded. An admin can raise the limit in Admin settings.`, 'error');
         // We still trigger download so they don't lose the footage
       }
 
@@ -1255,7 +1260,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       });
       (window as any).__vmsLastLocalSave = local;
 
-      if (blob.size > maxSizeBytes) {
+      if (overLimit) {
         setOrderId('');
         setRecordingType('Forward');
         setPlatform('Amazon');

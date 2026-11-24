@@ -39,7 +39,7 @@ const CONFIG = {
   GTIN_CATALOG_SHEET: 'GTINCatalog',
 
   // Limits
-  MAX_VIDEO_BYTES: 1024 * 1024 * 1024 * 5, // 5 GB
+  MAX_VIDEO_BYTES: 1024 * 1024 * 1024 * 20, // 20 GB technical ceiling; the admin limit (Branding MaxVideoSizeMb) applies below it
   DEFAULT_CHUNK_BYTES: 4 * 1024 * 1024, // 4 MB (aligned to 256 KB Google Drive blocks)
   SESSION_SECONDS: 86400, // 24 hours
   RESERVATION_SECONDS: 86400,
@@ -1957,7 +1957,11 @@ function startUpload_(p){
 
   if(!order||!platform)throw new Error('Order ID and platform are required.');
   if(!['Forward','Return'].includes(type))throw new Error('Invalid recording type.');
-  if(size<=0||size>CONFIG.MAX_VIDEO_BYTES)throw new Error('Invalid video size or video exceeds maximum backend limits (5 GB).');
+  if(size<=0||size>CONFIG.MAX_VIDEO_BYTES)throw new Error('Invalid video size or video exceeds the 20 GB technical limit.');
+  const limitMb = maxVideoSizeMb_();
+  if (limitMb > 0 && size > limitMb * 1024 * 1024) {
+    return { success: false, code: 'VIDEO_TOO_LARGE', error: 'Video is ' + Math.round(size / 1048576) + ' MB, above the ' + limitMb + ' MB limit set in Admin. Raise the limit in Admin > Apps Script & Drive Settings to upload it.' };
+  }
 
   // Check duplicate: if duplicate exists and not explicitly bypassed, prevent duplicate upload
   const isBypass = p.bypassDuplicate === true || String(p.bypassDuplicate) === 'true' || p.bypassDuplicate === 1 || p.bypassDuplicate === '1';
@@ -3986,6 +3990,23 @@ function cleanupOldStartedUploads_(order, currentUploadId) {
   } catch(_) {}
 }
 
+/* Admin-set maximum video size in MB for every station (Branding sheet MaxVideoSizeMb). 0 = no limit. */
+var DEFAULT_MAX_VIDEO_MB_ = 1024;
+function maxVideoSizeMb_() {
+  try {
+    var data = sheet_(CONFIG.BRANDING_SHEET).getDataRange().getValues();
+    for (var i = 1; i < data.length; i++) {
+      if (String(data[i][0] || '').trim() === 'MaxVideoSizeMb') {
+        var v = String(data[i][1]).trim();
+        if (v === '') break;
+        var n = Number(v);
+        return isNaN(n) || n < 0 ? DEFAULT_MAX_VIDEO_MB_ : Math.floor(n);
+      }
+    }
+  } catch (_) {}
+  return DEFAULT_MAX_VIDEO_MB_;
+}
+
 function getBrandingConfig_() {
   const props = scriptProps_();
   let appName = 'VMS 3.0';
@@ -4031,7 +4052,8 @@ function getBrandingConfig_() {
     logoUrl: logoUrl,
     faviconUrl: faviconUrl,
     brandingFolderId: brandingFolderId,
-    videoDriveFolderId: videoDriveFolderId
+    videoDriveFolderId: videoDriveFolderId,
+    maxVideoSizeMb: maxVideoSizeMb_()
   };
 }
 
@@ -4101,8 +4123,17 @@ function saveBrandingConfig_(p) {
     updateOrInsert('VideoDriveFolderId', cleanFolderId, 'Google Drive Root Folder ID for Video Uploads');
   }
 
+  if (p.maxVideoSizeMb !== undefined && p.maxVideoSizeMb !== null && p.maxVideoSizeMb !== '') {
+    const mb = Number(p.maxVideoSizeMb);
+    if (isNaN(mb) || mb < 0 || (mb > 0 && mb < 50) || mb > 20480) {
+      return { success: false, error: 'Max video size must be 0 (no limit) or between 50 MB and 20480 MB (20 GB).' };
+    }
+    updateOrInsert('MaxVideoSizeMb', Math.floor(mb), 'Largest video (MB) any station may upload; 0 = no limit');
+  }
+
   return {
     success: true,
+    maxVideoSizeMb: maxVideoSizeMb_(),
     message: 'Settings saved to Google Sheet "Branding" tab and Script Properties permanently.',
     appName: p.appName,
     appSubtitle: p.appSubtitle,

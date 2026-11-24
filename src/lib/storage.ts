@@ -412,12 +412,32 @@ export async function dbDeleteQueueItem(id: string): Promise<void> {
     tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
   });
 }
+/** Max video size in MB set by the admin (shared from the server). 0 = no limit. Default 1 GB. */
+export const DEFAULT_MAX_VIDEO_SIZE_MB = 1024;
 export function getStoredMaxVideoSizeMb(): number {
-  return parseInt(localStorage.getItem('ops_max_video_size_mb') || '1024', 10);
+  try {
+    const raw = localStorage.getItem('ops_max_video_size_mb');
+    if (raw === null || raw === '') return DEFAULT_MAX_VIDEO_SIZE_MB;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) && n >= 0 ? n : DEFAULT_MAX_VIDEO_SIZE_MB;
+  } catch {
+    return DEFAULT_MAX_VIDEO_SIZE_MB;
+  }
 }
 
 export function setStoredMaxVideoSizeMb(sizeMb: number): void {
-  localStorage.setItem('ops_max_video_size_mb', sizeMb.toString());
+  localStorage.setItem('ops_max_video_size_mb', Math.max(0, Math.round(sizeMb)).toString());
+}
+
+/** True when a file of this many bytes is above the admin limit (never true when the limit is 0 = no limit). */
+export function exceedsMaxVideoSize(bytes: number): boolean {
+  const mb = getStoredMaxVideoSizeMb();
+  return mb > 0 && bytes > mb * 1024 * 1024;
+}
+
+export function formatVideoSizeLimit(mb: number = getStoredMaxVideoSizeMb()): string {
+  if (!mb) return 'No limit';
+  return mb >= 1024 && mb % 1024 === 0 ? `${mb / 1024} GB` : mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`;
 }
 
 export function getStoredNightMode(): boolean {

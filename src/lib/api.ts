@@ -127,6 +127,7 @@ export async function requestApi<T = any>(
       // Mark it so callers can tell "the server said no" from "the server could not be reached".
       const serverErr: any = new Error(errMsg);
       serverErr.serverError = true;
+      if ((data as any).code) serverErr.code = (data as any).code;
       throw serverErr;
     }
 
@@ -937,6 +938,7 @@ export async function fetchCloudBranding(): Promise<{
   appName?: string;
   appSubtitle?: string;
   videoDriveFolderId?: string;
+  maxVideoSizeMb?: number;
 } | null> {
   try {
     const res = await requestApi<{
@@ -945,6 +947,7 @@ export async function fetchCloudBranding(): Promise<{
       appName?: string;
       appSubtitle?: string;
       videoDriveFolderId?: string;
+      maxVideoSizeMb?: number;
     }>('getBranding', {});
     if (res.success) {
       return {
@@ -953,6 +956,7 @@ export async function fetchCloudBranding(): Promise<{
         appName: res.appName || '',
         appSubtitle: res.appSubtitle || '',
         videoDriveFolderId: res.videoDriveFolderId || '',
+        maxVideoSizeMb: typeof res.maxVideoSizeMb === 'number' ? res.maxVideoSizeMb : undefined,
       };
     }
   } catch (err) {}
@@ -965,6 +969,7 @@ export async function saveCloudBranding(config: {
   appName?: string;
   appSubtitle?: string;
   videoDriveFolderId?: string;
+  maxVideoSizeMb?: number;
 }): Promise<boolean> {
   try {
     const res = await requestApi('saveBranding', config);
