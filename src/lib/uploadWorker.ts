@@ -557,9 +557,8 @@ export async function triggerUploadWorker(): Promise<void> {
     }
 
     // -------------------------------------------------------------
-    // GLOBAL 1-BY-1 CLOUD QUEUE HANDLING:
-    // If another workstation is currently transmitting an upload, gracefully wait
-    // and poll until the single-lane cloud slot is freed.
+    // SHARED UPLOAD SLOTS: several stations upload at once; when every slot is busy,
+    // wait and retry until one is free.
     // -------------------------------------------------------------
     if (startRes?.queuedInCloud) {
       currentItem.status = 'uploading';
@@ -567,7 +566,8 @@ export async function triggerUploadWorker(): Promise<void> {
         ? `Station (${startRes.activeUploader.split('@')[0]})`
         : 'Another station';
       const orderWho = startRes.activeOrderId ? `Order #${startRes.activeOrderId}` : 'video';
-      const waitStage = `⏳ 1-by-1 Queue: Waiting for ${activeWho} to finish ${orderWho}...`;
+      const slots = startRes.limit ? `all ${startRes.limit} upload slots are busy` : `${activeWho} is uploading ${orderWho}`;
+      const waitStage = `⏳ Waiting for a free upload slot (${slots})...`;
       currentItem.stage = waitStage;
       currentItem.progress = Math.max(currentItem.progress || 0, 5);
       await safePutQueue(currentItem);
