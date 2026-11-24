@@ -1,4 +1,4 @@
-import { getStoredApiUrl, getStoredToken, getStoredDriveFolderId, dbGetAllQueue } from './storage';
+import { getStoredApiUrl, getStoredToken, setStoredToken, getStoredDriveFolderId, dbGetAllQueue } from './storage';
 import { User, VideoRecord, AnalyticsData } from '../types';
 import { computeLocalAnalyticsData, getLocalWorkstationLogs } from './localAnalytics';
 import {
@@ -18,6 +18,20 @@ export interface ApiResponse<T = any> {
   error?: string;
   message?: string;
   [key: string]: any;
+}
+
+export const SESSION_EXPIRED_EVENT = 'ops_session_expired';
+
+let lastSessionExpiredNotice = 0;
+function notifySessionExpired(message: string) {
+  setStoredToken('');
+  const now = Date.now();
+  // Many background loops may hit the same expired token at once; notify only once.
+  if (now - lastSessionExpiredNotice < 5000) return;
+  lastSessionExpiredNotice = now;
+  try {
+    window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT, { detail: { message } }));
+  } catch (_) {}
 }
 
 export async function requestApi<T = any>(
@@ -106,6 +120,14 @@ export async function requestApi<T = any>(
 
     if (!data.success) {
       const errMsg = data.error || 'Request failed.';
+      if ((data as any).code === 'AUTH_REQUIRED') {
+        // Backend rejected the session token: sign the workstation out so the user logs in again.
+        // Only sign out if we actually sent a session (background loops can run before login).
+        if (!isAuthAction && token) notifySessionExpired(errMsg);
+        const authErr: any = new Error(errMsg);
+        authErr.code = 'AUTH_REQUIRED';
+        throw authErr;
+      }
       if (errMsg.toLowerCase().includes('version') && errMsg.toLowerCase().includes('less than')) {
         throw new Error(
           `Google Apps Script Version Error: ${errMsg}. Please update your Web App URL in "Drive & Script Config" to use the latest deployment endpoint ("/exec").`
@@ -126,6 +148,11 @@ export async function requestApi<T = any>(
 
     return data;
   } catch (remoteError: any) {
+    // Never hide an expired / missing session behind local fallback data.
+    if (remoteError && remoteError.code === 'AUTH_REQUIRED') {
+      throw remoteError;
+    }
+
     // If it's an authentication action and remote is unavailable or invalid Apps Script response,
     // seamlessly fall back to the verified local workstation store
     if (isAuthAction) {

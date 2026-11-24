@@ -61,11 +61,28 @@ function doGet(e) {
   return output_(payload, callback);
 }
 
+// Actions that may be called without signing in.
+const PUBLIC_ACTIONS = ['health', 'login', 'signup', 'logout', 'validateSession', 'getBranding'];
+
+// Actions that change system setup or permanently remove data: administrators only.
+const ADMIN_ACTIONS = [
+  'setup', 'repairPlaybackUrls', 'migrateReturns', 'migrateDriveFolders', 'migrateMonthlyFolders',
+  'adminCreateUser', 'adminManageUser', 'adminResetPassword', 'adminDeleteUser',
+  'deleteLogEntry', 'removeUploadLog', 'deleteOrderLog',
+  'scanDuplicates', 'scanDuplicateRecords', 'cleanDuplicates', 'removeDuplicates', 'removeDuplicateRecords',
+  'scanOlder', 'scanOlderVideos', 'deleteOlder', 'deleteOlderVideos',
+  'applyConditionalFormatting', 'saveBranding', 'uploadBrandingImage'
+];
+
 function doPost(e) {
   try {
     const raw = (e && e.postData && e.postData.contents) || '{}';
     const p = JSON.parse(raw);
     const a = String(p.action || '');
+    if (PUBLIC_ACTIONS.indexOf(a) === -1) {
+      if (ADMIN_ACTIONS.indexOf(a) !== -1) admin_(p.token);
+      else session_(p.token);
+    }
     switch(a) {
       case 'health': return output_({success:true, status:'online', version:'3.0.0', service:'Order Packing Video System (VMS 3.0)'});
       case 'setup': return output_(setupSystem());
@@ -135,7 +152,9 @@ function doPost(e) {
       default: return output_({success:false, error:'Unknown action: '+a});
     }
   } catch(err) {
-    return output_({success:false, error:err && err.message ? err.message : String(err)});
+    const out = {success:false, error:err && err.message ? err.message : String(err)};
+    if (err && err.code) out.code = err.code;
+    return output_(out);
   }
 }
 
@@ -610,26 +629,58 @@ function newToken_(){return Utilities.getUuid()+'-'+Utilities.getUuid()}
 
 function saveSession_(user){
   const t=newToken_();
-  CacheService.getScriptCache().put('SESSION_'+t,JSON.stringify(user),CONFIG.SESSION_SECONDS);
-  PropertiesService.getScriptProperties().setProperty('SESS_'+t, JSON.stringify(user));
+  const record=JSON.stringify({user:user, exp:Date.now()+CONFIG.SESSION_SECONDS*1000});
+  CacheService.getScriptCache().put('SESSION_'+t,record,CONFIG.SESSION_SECONDS);
+  PropertiesService.getScriptProperties().setProperty('SESS_'+t, record);
+  pruneExpiredSessions_();
   return t;
 }
 
+function authError_(message){
+  const err=new Error(message||'Your session has expired. Please sign in again.');
+  err.code='AUTH_REQUIRED';
+  return err;
+}
+
+// Returns the signed-in user for a token, or throws AUTH_REQUIRED.
+// Missing, unknown, expired and legacy (no expiry) sessions are all rejected.
 function session_(token){
-  if(!token) {
-    return { name: 'Packing Operator', email: 'packer@vms.local', role: 'Admin' };
+  token=String(token||'').trim();
+  if(!token) throw authError_('Please sign in to continue.');
+  let raw=CacheService.getScriptCache().get('SESSION_'+token);
+  if(!raw) raw=PropertiesService.getScriptProperties().getProperty('SESS_'+token);
+  if(!raw) throw authError_();
+  let rec=null;
+  try{rec=JSON.parse(raw)}catch(_){rec=null}
+  if(!rec||!rec.user||!rec.exp||Number(rec.exp)<Date.now()){
+    try{CacheService.getScriptCache().remove('SESSION_'+token)}catch(_){}
+    try{PropertiesService.getScriptProperties().deleteProperty('SESS_'+token)}catch(_){}
+    throw authError_();
   }
-  const raw = CacheService.getScriptCache().get('SESSION_'+token) || PropertiesService.getScriptProperties().getProperty('SESS_'+token);
-  if(!raw) {
-    return { name: 'Packing Operator', email: 'packer@vms.local', role: 'Admin' };
-  }
-  return JSON.parse(raw);
+  return rec.user;
+}
+
+function isAdminRole_(role){
+  const r=String(role||'').toLowerCase().replace(/[\s_-]/g,'');
+  return r==='admin'||r==='masteradmin'||r==='superadmin';
 }
 
 function admin_(token){
   const u=session_(token);
-  if(String(u.role).toLowerCase()!=='admin')throw new Error('Administrator permission required.');
+  if(!isAdminRole_(u.role))throw new Error('Administrator permission required.');
   return u;
+}
+
+function pruneExpiredSessions_(){
+  try{
+    const props=PropertiesService.getScriptProperties(), all=props.getProperties(), now=Date.now();
+    Object.keys(all).forEach(function(k){
+      if(k.indexOf('SESS_')!==0)return;
+      let rec=null;
+      try{rec=JSON.parse(all[k])}catch(_){}
+      if(!rec||!rec.exp||Number(rec.exp)<now)props.deleteProperty(k);
+    });
+  }catch(_){}
 }
 
 function securityLog_(email,action,result,details){
@@ -665,13 +716,13 @@ function login_(p){
     }
 
     const storedPass = String(values[i][3] || '').trim();
-    // Allow either SHA-256 hash match OR plain-text match (e.g. if manually reset in Google Sheets)
-    const isPasswordMatch = (
-      storedPass === wanted ||
-      storedPass === password ||
-      storedPass.toLowerCase() === wanted.toLowerCase() ||
-      storedPass.toLowerCase() === password.toLowerCase()
-    );
+    // Stored value is normally a SHA-256 hex hash. A plain-text value is accepted only when it
+    // does not look like a hash (e.g. an admin typed a temporary password into the sheet), so the
+    // hash itself can never be used as a password. Comparison is exact (case-sensitive).
+    const storedIsHash = /^[0-9a-f]{64}$/i.test(storedPass);
+    const isPasswordMatch = storedIsHash
+      ? storedPass.toLowerCase() === wanted
+      : (storedPass !== '' && storedPass === password);
 
     if(!isPasswordMatch){
       securityLog_(email, 'LOGIN', 'FAILED', 'Invalid password');
@@ -679,7 +730,7 @@ function login_(p){
     }
 
     // Auto-upgrade plain-text password to SHA-256 hash in Google Sheet for future security
-    if (storedPass === password && storedPass !== wanted) {
+    if (!storedIsHash) {
       try {
         sh.getRange(i + 1, 4).setValue(wanted);
       } catch (_) {}
@@ -719,8 +770,11 @@ function signup_(p){
 }
 
 function validateSession_(p){
-  const u=session_(p.token);
-  return {success:true,user:u};
+  try{
+    return {success:true,user:session_(p.token)};
+  }catch(err){
+    return {success:false,code:'AUTH_REQUIRED',error:err.message};
+  }
 }
 
 function logout_(p){
@@ -1214,7 +1268,7 @@ function cleanAlphanumeric_(s) {
 
 /* ---------- Search ---------- */
 function advancedSearch_(p){
-  const user=session_(p.token), isAdmin=normalize_(user.role)==='admin', email=normalize_(user.email);
+  const user=session_(p.token), isAdmin=isAdminRole_(user.role), email=normalize_(user.email);
   const rawOrder = String(p.orderId || '').trim();
   const order = normalizeOrderId_(rawOrder);
   const cleanOrder = cleanAlphanumeric_(rawOrder);
@@ -3517,7 +3571,7 @@ function parseDateEnd_(s){
 }
 
 function getReportData_(p){
-  const user=session_(p.token), isAdmin=normalize_(user.role)==='admin', email=normalize_(user.email);
+  const user=session_(p.token), isAdmin=isAdminRole_(user.role), email=normalize_(user.email);
   const from=parseDateStart_(p.fromDate), to=parseDateEnd_(p.toDate), today=dateOnly_(new Date());
   if(isNaN(from)||isNaN(to))throw new Error('Invalid report dates.');
   if(from>to)throw new Error('From Date cannot be after To Date.');
@@ -3587,7 +3641,7 @@ function getReportData_(p){
 }
 
 function getAnalyticsData_(p){
-  const user=session_(p.token), isAdmin=normalize_(user.role)==='admin', email=normalize_(user.email);
+  const user=session_(p.token), isAdmin=isAdminRole_(user.role), email=normalize_(user.email);
   const from=parseDateStart_(p.fromDate), to=parseDateEnd_(p.toDate), today=dateOnly_(new Date());
   if(isNaN(from)||isNaN(to))throw new Error('Invalid analytics dates.');
   if(from>to)throw new Error('From Date cannot be after To Date.');
@@ -5136,7 +5190,7 @@ function scanOlderVideos_(p) {
 
 function deleteOlderVideos_(p) {
   const user = session_(p.token);
-  if (normalize_(user.role) !== 'admin') {
+  if (!isAdminRole_(user.role)) {
     throw new Error('Unauthorized: Admin rights required to delete older videos and logs.');
   }
 
