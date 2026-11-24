@@ -44,6 +44,7 @@ import { DeleteOlderVideosModal } from './DeleteOlderVideosModal';
 import { DriveLocationSetting } from './DriveLocationSetting';
 import { VideoSizeLimitSetting } from './VideoSizeLimitSetting';
 import { requestApi, checkBackendHealth, uploadBrandingImage, repairSheetPlaybackUrls, runSystemSetup, migrateDriveMonthlyFolders, applySheetConditionalFormatting } from '../lib/api';
+import { DriveStorageCard } from './DriveStorageCard';
 import { getLocalUsers, deleteLocalUserByEmail, getDeletedUserEmails } from '../lib/localAuth';
 import {
   isMasterAdmin,
@@ -915,6 +916,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
           </button>
         </div>
       </div>
+
+      <DriveStorageCard />
 
       {/* SETTINGS & DRIVE INTEGRATION TAB */}
       {adminTab === 'settings' && (
