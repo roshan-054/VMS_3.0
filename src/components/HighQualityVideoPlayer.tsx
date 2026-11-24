@@ -21,7 +21,6 @@ import {
   RotateCw,
   Move
 } from 'lucide-react';
-import { AiVideoFocusModal } from './AiVideoFocusModal';
 
 interface HighQualityVideoPlayerProps {
   fileId?: string;
@@ -57,9 +56,6 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
   const [duration, setDuration] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [toastMessage, setToastMessage] = useState<string>('');
-  const [showToast, setShowToast] = useState(false);
-  const [isAiFocusModalOpen, setIsAiFocusModalOpen] = useState(false);
 
   // High-Precision Inspection Zoom & Pan State
   const [zoom, setZoom] = useState<number>(1);
@@ -396,13 +392,6 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
           )}
         </div>
 
-        {/* Action Toast Feedback */}
-        {showToast && (
-          <div className="absolute top-3 right-3 bg-emerald-600 text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 shadow-2xl animate-fade-in z-30">
-            <Check className="w-4 h-4" />
-            {toastMessage}
-          </div>
-        )}
       </div>
 
       {/* Playback & Action Toolbar */}
@@ -568,16 +557,6 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
               </a>
             )}
 
-            {/* AI Focus Area Analysis with Gemini */}
-            <button
-              onClick={() => setIsAiFocusModalOpen(true)}
-              className="px-3.5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-95 text-white font-bold rounded-xl shadow-md transition flex items-center gap-2 cursor-pointer"
-              title="Use Gemini AI to analyze focus shifts for shipping labels, invoices, and product packing"
-            >
-              <Sparkles className="w-4 h-4 text-emerald-200" />
-              <span>AI Focus Analysis</span>
-            </button>
-
             {/* Fullscreen Button */}
             <button
               onClick={handleToggleFullscreen}
@@ -589,20 +568,6 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
           </div>
         </div>
       </div>
-
-      {/* AI Video Focus Analysis Modal */}
-      <AiVideoFocusModal
-        isOpen={isAiFocusModalOpen}
-        onClose={() => setIsAiFocusModalOpen(false)}
-        orderId={orderId}
-        fileId={fileId}
-        driveLink={driveLink}
-        onShowToast={(msg) => {
-          setToastMessage(msg);
-          setShowToast(true);
-          setTimeout(() => setShowToast(false), 3000);
-        }}
-      />
     </div>
   );
 };

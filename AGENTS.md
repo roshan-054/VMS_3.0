@@ -43,7 +43,8 @@
 - **Favicon Synchronization**: Dynamically updates the document `<link rel="icon">` element and browser tab title.
 - **Permanent Retention**: Configured branding remains permanently active across all screens (Sidebar, Mobile header, Login screen, and Browser tabs).
 
-### 8. AI Dynamic Auto-Focus & Vision Intelligence (Area Targeting & Drive Video Analysis)
+### 8. AI Dynamic Auto-Focus (Area Targeting)
+- *(Note: Gemini AI analysis of uploaded Drive videos was removed as per user requirement.)*
 - **Pure Auto-Focusing (Zero Auto-Zooming)**:
   - Preserves the full, uncropped 1.0x wide-angle packing station camera view at all times (no digital zooming or cropping).
   - Automatically identifies the active focusing area in real-time:
@@ -52,9 +53,6 @@
     - **Product Packing Action**: Locks optical focus onto product handling, polybag insertion, box taping, and tamper-evident sealing.
     - **Station Overview**: Returns to default station focus across the wide packing table.
   - Video recording pipeline captures the full uncropped frame (`0, 0, vWidth, vHeight`) while physically focusing on the active target area.
-- **Gemini AI Drive Video Analysis & Calibration**:
-  - Uses Gemini 3.8 Flash (`/api/ai/analyze-packing-video`) to inspect already-uploaded packing videos in Google Drive.
-  - Pinpoints exact focus moments, rates label scanability and invoice legibility, and calibrates auto-focus parameters for the station's live camera engine.
 
 ### 9. Real-Time Wireless Phone Barcode Scanner Engine
 - **Turn Smartphone into Laser Barcode Reader**:
