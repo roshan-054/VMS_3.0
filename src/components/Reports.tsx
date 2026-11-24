@@ -1,5 +1,4 @@
 import React, { useState, useMemo } from 'react';
-import * as XLSX from 'xlsx';
 import {
   FileSpreadsheet,
   Download,
@@ -265,13 +264,14 @@ export const Reports: React.FC<ReportsProps> = ({ onShowToast }) => {
     onShowToast('CSV Report exported successfully!', 'success');
   };
 
-  const handleDownloadExcel = () => {
+  const handleDownloadExcel = async () => {
     if (displayRows.length === 0) {
       onShowToast('No data to export', 'error');
       return;
     }
 
     try {
+      const XLSX = await import('xlsx');
       const wb = XLSX.utils.book_new();
       const ws = XLSX.utils.json_to_sheet(displayRows);
       XLSX.utils.book_append_sheet(wb, ws, 'Audit Report');

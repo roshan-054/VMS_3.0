@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import {
   Camera,
   UploadCloud,
@@ -42,16 +42,24 @@ import { getStoredManifests, startGlobalManifestSyncLoop } from './lib/manifestS
 import { SESSION_EXPIRED_EVENT } from './lib/api';
 import { initUploadWorker } from './lib/uploadWorker';
 import { ScanRecord } from './components/ScanRecord';
-import { OrderProcessing } from './components/OrderProcessing';
-import { UploadQueue } from './components/UploadQueue';
-import { UploadLogs } from './components/UploadLogs';
-import { SearchOrders } from './components/SearchOrders';
-import { Reports } from './components/Reports';
-import { Analytics } from './components/Analytics';
-import { SystemHealth } from './components/SystemHealth';
-import { AdminPanel } from './components/AdminPanel';
 import { AuthView } from './components/AuthView';
-import { MobilePhoneScanner } from './components/MobilePhoneScanner';
+
+// Tabs other than Scan & Record load on first use, so stations download less up front.
+const lazyNamed = <K extends string>(load: () => Promise<Record<K, React.ComponentType<any>>>, name: K) =>
+  lazy(() => load().then((m) => ({ default: m[name] })));
+const OrderProcessing = lazyNamed(() => import('./components/OrderProcessing'), 'OrderProcessing');
+const UploadQueue = lazyNamed(() => import('./components/UploadQueue'), 'UploadQueue');
+const UploadLogs = lazyNamed(() => import('./components/UploadLogs'), 'UploadLogs');
+const SearchOrders = lazyNamed(() => import('./components/SearchOrders'), 'SearchOrders');
+const Reports = lazyNamed(() => import('./components/Reports'), 'Reports');
+const Analytics = lazyNamed(() => import('./components/Analytics'), 'Analytics');
+const SystemHealth = lazyNamed(() => import('./components/SystemHealth'), 'SystemHealth');
+const AdminPanel = lazyNamed(() => import('./components/AdminPanel'), 'AdminPanel');
+const MobilePhoneScanner = lazyNamed(() => import('./components/MobilePhoneScanner'), 'MobilePhoneScanner');
+
+const TabLoading = () => (
+  <div className="flex items-center justify-center py-24 text-sm text-slate-500">Loading…</div>
+);
 
 import {
   isMasterAdmin,
@@ -282,12 +290,14 @@ export function App() {
   if (isMobileScannerMode) {
     const params = new URLSearchParams(window.location.search);
     return (
-      <MobilePhoneScanner
-        initialPin={params.get('pin') || params.get('station') || ''}
-        onExit={() => {
-          window.location.href = window.location.pathname;
-        }}
-      />
+      <Suspense fallback={<TabLoading />}>
+        <MobilePhoneScanner
+          initialPin={params.get('pin') || params.get('station') || ''}
+          onExit={() => {
+            window.location.href = window.location.pathname;
+          }}
+        />
+      </Suspense>
     );
   }
 
@@ -573,6 +583,7 @@ export function App() {
       {/* Main Content Viewport */}
       <div className="flex-1 flex flex-col min-w-0 bg-slate-100">
         <main className="flex-1 w-full px-4 sm:px-6 lg:px-10 xl:px-12 py-6 transition-all duration-200">
+          <Suspense fallback={<TabLoading />}>
           {activeTab === 'record' && (
             <ScanRecord
               onQueueUpdated={refreshQueueBadge}
@@ -623,6 +634,7 @@ export function App() {
           {activeTab === 'admin' && (
             <AdminPanel onShowToast={showToast} currentUser={currentUser} />
           )}
+          </Suspense>
         </main>
       </div>
 
