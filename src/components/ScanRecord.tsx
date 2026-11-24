@@ -44,7 +44,7 @@ import { dbPutQueue, getStoredMaxVideoSizeMb, getStoredVideoBitrate } from '../l
 import { requestApi, normalizeOrderId, checkDuplicate } from '../lib/api';
 import { triggerUploadWorker, setRecordingInProgress } from '../lib/uploadWorker';
 import { LiveClock, ElapsedTimer, RecordedSize } from './RecordingIndicators';
-import { startRecordingSession, type RecordingSession, type RecordingResult } from '../lib/recordingPipeline';
+import { startRecordingSession, prepareCameraFeed, releaseCameraFeed, type RecordingSession, type RecordingResult } from '../lib/recordingPipeline';
 import { sharedAiFocusEngine, FocusMode, FocusState } from '../lib/aiFocusEngine';
 import { PhoneScannerModal } from './PhoneScannerModal';
 import { sharedScannerSync } from '../lib/phoneScannerSync';
@@ -435,6 +435,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
         recordingSessionRef.current.stop().catch(() => {});
         recordingSessionRef.current = null;
       }
+      releaseCameraFeed();
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
@@ -788,6 +789,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       }
 
       streamRef.current = newStream;
+      prepareCameraFeed(newStream.getVideoTracks()[0]);
       isCameraActiveRef.current = true;
       setIsCameraActive(true);
       setCameraPermissionError(null);
@@ -846,6 +848,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   };
 
   const releaseCameraTracks = () => {
+    releaseCameraFeed();
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
