@@ -43,6 +43,8 @@ import { PlatformType, RecordingType, QueueItem, OrderManifest, ManifestItem, Us
 import { dbPutQueue, getStoredMaxVideoSizeMb, getStoredVideoBitrate } from '../lib/storage';
 import { requestApi, normalizeOrderId, checkDuplicate } from '../lib/api';
 import { triggerUploadWorker, setRecordingInProgress } from '../lib/uploadWorker';
+import { saveRecordingLocally, ensureBackupPermission, backupPathParts } from '../lib/localBackup';
+import { LocalBackupFolderPicker } from './LocalBackupFolderPicker';
 import { LiveClock, ElapsedTimer, RecordedSize } from './RecordingIndicators';
 import { startRecordingSession, prepareCameraFeed, releaseCameraFeed, type RecordingSession, type RecordingResult } from '../lib/recordingPipeline';
 import { sharedAiFocusEngine, FocusMode, FocusState } from '../lib/aiFocusEngine';
@@ -134,6 +136,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     orderId: string;
     effectivePlatform: string;
     recordingType: RecordingType;
+    recordingDate?: string;
     mimeType: string;
     verifiedOrderItems: ManifestItem[] | null;
     bypassDuplicate: boolean;
@@ -1113,6 +1116,9 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       await new Promise((resolve) => setTimeout(resolve, 40));
     }
 
+    // Re-grant access to the local backup folder while we still have the click/scan as a user gesture
+    ensureBackupPermission().catch(() => {});
+
     // Pause background Drive upload chunk encoding while recording so main thread & IndexedDB stay 100% dedicated to video capture
     setRecordingInProgress(true);
 
@@ -1165,6 +1171,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       return;
     }
     recordingSessionRef.current = session;
+    console.info('[recording] started', session.mode, session.codec, 'camera track:', cameraTrack.readyState);
     (window as any).__vmsRecorderMode = `${session.mode}:${session.codec}`;
 
     // Snapshot recording metadata now so handleFinishRecording is immune to stale closures or mid-save state changes
@@ -1172,6 +1179,8 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       orderId: orderId.trim(),
       effectivePlatform,
       recordingType,
+      // Date the recording STARTED (local time) decides the Drive / local date folder.
+      recordingDate: new Date().toLocaleDateString('en-CA'),
       mimeType: session.mode === 'webcodecs' ? (session.codec.startsWith('avc') ? 'video/mp4' : 'video/webm') : session.codec || 'video/webm',
       verifiedOrderItems: verifiedItems,
       bypassDuplicate: bypassDuplicateRef.current,
@@ -1245,15 +1254,16 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
 
       const todayDateStr = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD
 
-      // Automatically download to computer's local drive (defer revokeObjectURL so large files finish initiating download cleanly)
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      // Save a local copy first: into the station's backup folder using the same
+      // Platform / Type / Month / Date structure as Drive, or to Downloads if no folder is set.
+      const recordingDate = meta.recordingDate || todayDateStr;
+      const local = await saveRecordingLocally(blob, {
+        fileName,
+        platform: meta.effectivePlatform,
+        recordingType: meta.recordingType,
+        recordingDate,
+      });
+      (window as any).__vmsLastLocalSave = local;
 
       if (blob.size > maxSizeBytes) {
         setOrderId('');
@@ -1294,7 +1304,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
         blob,
         status: 'pending',
         progress: 0,
-        recordingDate: todayDateStr,
+        recordingDate: meta.recordingDate || todayDateStr,
         bypassDuplicate: meta.bypassDuplicate,
       };
 
@@ -2277,11 +2287,12 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                 Google Drive Storage Hierarchy
               </div>
               <p className="font-mono text-[11px] text-slate-600 break-all bg-white p-2 rounded border border-slate-200">
-                VMS_Packing_Videos / {effectivePlatform} / {recordingType} / {new Date().toISOString().slice(0, 10)} / {orderId ? `${orderId.trim()}_${effectivePlatform}_${recordingType}.mp4` : '[OrderID]_[Platform]_[Type].mp4'}
+                {backupPathParts(effectivePlatform, recordingType, new Date().toLocaleDateString('en-CA')).join(' / ')} / {orderId ? `${orderId.trim()}_${effectivePlatform}_${recordingType}.mp4` : '[OrderID]_[Platform]_[Type].mp4'}
               </p>
               <p className="text-[11px] text-slate-400">
-                Uploaded automatically chunk-by-chunk directly into your configured Google Sheet & Drive.
+                Saved on this computer first, then queued and uploaded automatically to the same folders on Google Drive.
               </p>
+              <LocalBackupFolderPicker onShowToast={onShowToast} />
             </div>
           </div>
         </div>
