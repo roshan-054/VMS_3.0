@@ -144,7 +144,7 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
     if (isAssignedToCurrent && !isFullyVerified) {
       inputRef.current?.focus();
     }
-  }, [items, isAssignedToCurrent, isFullyVerified]);
+  }, [items, isAssignedToCurrent, isFullyVerified, mismatchError, lastScannedCode]);
 
   // If unauthorized: trigger warning tone once
   useEffect(() => {
@@ -300,6 +300,46 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
 
     applyItemMatch(matchIndex, cleanScan);
   };
+
+  // USB scanner bursts that arrive while the GTIN box does not have focus (e.g. after clicking
+  // elsewhere in the popup) are still read as product scans here, so they can never leak to the
+  // Order ID field behind the popup.
+  const processGtinScanRef = useRef(processGtinScan);
+  processGtinScanRef.current = processGtinScan;
+  useEffect(() => {
+    let buffer = '';
+    let lastAt = 0;
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target === inputRef.current) return;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT')) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const now = Date.now();
+      if (now - lastAt > 80) buffer = '';
+      lastAt = now;
+      if (e.key === 'Enter') {
+        const code = buffer;
+        buffer = '';
+        if (code.length >= 4) {
+          e.preventDefault();
+          e.stopPropagation();
+          processGtinScanRef.current(code);
+          inputRef.current?.focus();
+        }
+      } else if (e.key.length === 1) {
+        buffer += e.key;
+      }
+    };
+    const refocus = () => {
+      if (!isFullyVerified) inputRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('focus', refocus);
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('focus', refocus);
+    };
+  }, [isFullyVerified]);
 
   // Hardware Scanner & Wireless Phone Scanner real-time listener
   useEffect(() => {
@@ -521,6 +561,7 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
           <button
             type="button"
             onClick={onCancel}
+            aria-label="Close verification"
             className="p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition cursor-pointer"
           >
             <X className="w-5 h-5" />

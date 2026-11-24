@@ -52,6 +52,7 @@ import {
   getManifestByOrderId,
   getStoredManifests,
   findProductInCatalog,
+  isBarcodeEqual,
   updateManifestStatus,
   getVerificationSettings,
   syncManifestsWithCloud
@@ -115,12 +116,16 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   const recordingSessionRef = useRef<RecordingSession | null>(null);
   const releaseCameraAfterSaveRef = useRef<boolean>(false);
   const barcodeBufferRef = useRef<string>('');
+  const orderIdRef = useRef<string>('');
+  const inputBurstRef = useRef<{ text: string; lastAt: number }>({ text: '', lastAt: 0 });
+  const isPackVerificationOpenRef = useRef<boolean>(false);
   const barcodeTimeRef = useRef<number>(0);
   const wakeLockRef = useRef<any>(null);
 
   // Live refs read from timers/callbacks without re-running effects
   const isCameraActiveRef = useRef<boolean>(false);
   const isRecordingRef = useRef<boolean>(false);
+  orderIdRef.current = orderId;
   const aiFocusEnabledRef = useRef<boolean>(aiFocusEnabled);
   aiFocusEnabledRef.current = aiFocusEnabled;
 
@@ -156,6 +161,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   // Pre-Pack Manifest & Physical GTIN Barcode Verification
   const [activeManifest, setActiveManifest] = useState<OrderManifest | null>(null);
   const [isPackVerificationOpen, setIsPackVerificationOpen] = useState<boolean>(false);
+  isPackVerificationOpenRef.current = isPackVerificationOpen;
   const [verifiedOrderItems, setVerifiedOrderItems] = useState<ManifestItem[] | null>(null);
   const [unregisteredOrderWarning, setUnregisteredOrderWarning] = useState<{
     orderId: string;
@@ -245,6 +251,10 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     // 1. Direct match: Check if scanned string is an Order ID in the pre-pack manifest
     const manifest = getManifestByOrderId(clean);
     if (manifest) {
+      // The manifest knows the order's platform; barcode-shape guessing must not override it.
+      if (manifest.platform && manifest.platform !== 'Custom') {
+        setPlatform(manifest.platform);
+      }
       // If operator is in Return recording mode, allow return recording smoothly without pre-pack blocking
       if (recordingType === 'Return') {
         if (manifest.platform && manifest.platform !== 'Custom') {
@@ -299,7 +309,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     const allManifests = getStoredManifests();
 
     // Check if any pending manifest assigned to this operator requires this item
-    const matchingManifest = allManifests.find((m) => {
+    const matchingManifests = allManifests.filter((m) => {
       const isPending = (m.status || 'Pending') === 'Pending' || m.status === 'In Progress';
       if (!isPending) return false;
 
@@ -322,6 +332,19 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       });
     });
 
+    if (matchingManifests.length > 1) {
+      // The same product is in several pending orders: never guess which order the packer means.
+      onShowToast(
+        `Barcode ${clean} is in ${matchingManifests.length} pending orders. Scan the shipping label / Order ID instead.`,
+        'error'
+      );
+      setStatusMessage({
+        text: `Product ${clean} belongs to ${matchingManifests.length} pending orders, so no order was picked automatically. Scan the order's shipping label.`,
+        type: 'error',
+      });
+      return false;
+    }
+    const matchingManifest = matchingManifests[0];
     if (matchingManifest) {
       // Auto-switch to the matching pending order!
       setActiveManifest(matchingManifest);
@@ -622,34 +645,72 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     }
   };
 
-  // Listen for physical barcode scanner rapid keystrokes
+  // One entry point for every scanned / typed / pasted order code.
+  // While a video is recording the order is locked: a stray scan (e.g. a product barcode) can never
+  // replace the Order ID of the video being recorded.
+  const applyOrderCode = (raw: string, source: 'scanner' | 'typed' | 'pasted' | 'phone'): boolean => {
+    const cleaned = cleanBarcode(raw);
+    if (!cleaned) return false;
+    if (isRecordingRef.current) {
+      const current = recordingMetaRef.current?.orderId || orderIdRef.current;
+      if (cleaned.toUpperCase() !== current.toUpperCase()) {
+        onShowToast(`Recording Order ${current}. Stop & save it before scanning the next order (ignored ${cleaned}).`, 'error');
+      }
+      return false;
+    }
+    // A product barcode (GTIN/SKU) is never written into the Order ID box. If it belongs to exactly
+    // one pending order, that order is loaded; otherwise the packer is asked to scan the label.
+    if (!getManifestByOrderId(cleaned) && isKnownProductCode(cleaned)) {
+      checkAndOpenPackVerification(cleaned);
+      return false;
+    }
+    setOrderId(cleaned);
+    detectPlatformAndType(cleaned);
+    checkAndOpenPackVerification(cleaned);
+    if (source === 'scanner') onShowToast(`Scanned Order: ${cleaned}`, 'success');
+    if (source === 'pasted') onShowToast(`Scanned / Pasted Order: ${cleaned}`, 'info');
+    return true;
+  };
+  const isKnownProductCode = (code: string): boolean => {
+    if (findProductInCatalog(code)) return true;
+    return getStoredManifests().some((m) =>
+      (m.items || []).some((it) => isBarcodeEqual(it.gtin, code) || isBarcodeEqual(it.sku, code))
+    );
+  };
+  const applyOrderCodeRef = useRef(applyOrderCode);
+  applyOrderCodeRef.current = applyOrderCode;
+
+  // USB / Bluetooth barcode scanner (keyboard wedge) when no text field has focus.
+  // Scanners type a burst of keys a few ms apart and end with Enter; people type much slower.
+  // Keys typed into any input (including the Order ID box itself) are left to that input, and
+  // scans are ignored here while the product-verification popup is open (it handles them itself).
   useEffect(() => {
+    const SCAN_KEY_GAP_MS = 80;
+    const MIN_SCAN_LENGTH = 4;
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't intercept if user is typing in other inputs
-      const target = e.target as HTMLElement;
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') && target.id !== 'orderIdInput') {
+      if (isPackVerificationOpenRef.current) return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)
+      ) {
         return;
       }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
 
       const now = Date.now();
-      if (now - barcodeTimeRef.current > 150) {
+      if (now - barcodeTimeRef.current > SCAN_KEY_GAP_MS) {
         barcodeBufferRef.current = '';
       }
       barcodeTimeRef.current = now;
 
       if (e.key === 'Enter' || e.key === 'Tab') {
-        if (barcodeBufferRef.current.length >= 2) {
-          const raw = barcodeBufferRef.current;
-          const cleaned = cleanBarcode(raw);
-          if (cleaned) {
-            setOrderId(cleaned);
-            detectPlatformAndType(cleaned);
-            checkAndOpenPackVerification(cleaned);
-            onShowToast(`Scanned Order: ${cleaned}`, 'success');
-            barcodeBufferRef.current = '';
-            e.preventDefault();
-            e.stopPropagation();
-          }
+        const raw = barcodeBufferRef.current;
+        barcodeBufferRef.current = '';
+        if (raw.length >= MIN_SCAN_LENGTH) {
+          e.preventDefault();
+          e.stopPropagation();
+          applyOrderCodeRef.current(raw, 'scanner');
         }
       } else if (e.key.length === 1) {
         barcodeBufferRef.current += e.key;
@@ -658,7 +719,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
 
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [onShowToast]);
+  }, []);
 
   const startCamera = async (deviceId?: string) => {
     if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
@@ -999,8 +1060,9 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     onShowToast(nextState ? 'Microphone enabled' : 'Microphone disabled (muted)', 'info');
   };
 
-  const startRecording = async () => {
+  const startRecording = async (verifiedItemsOverride?: ManifestItem[]) => {
     if (isRecordingRef.current) return;
+    const verifiedItems = verifiedItemsOverride ?? verifiedOrderItems;
 
     if (!orderId.trim()) {
       setStatusMessage({ text: 'Please enter or scan an Order ID before recording.', type: 'error' });
@@ -1017,7 +1079,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     // Strictly for outbound 'Forward' packing! Inbound customer 'Return' verification recordings inspect returned packages and do not require pre-pack manifest blocking.
     if (recordingType === 'Forward') {
       const targetManifest = activeManifest || getManifestByOrderId(orderId.trim());
-      if (targetManifest && !verifiedOrderItems) {
+      if (targetManifest && !verifiedItems) {
         setActiveManifest(targetManifest);
         setIsPackVerificationOpen(true);
         onShowToast(`Please scan and verify product GTINs for Order ${targetManifest.orderId} first`, 'info');
@@ -1111,7 +1173,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       effectivePlatform,
       recordingType,
       mimeType: session.mode === 'webcodecs' ? (session.codec.startsWith('avc') ? 'video/mp4' : 'video/webm') : session.codec || 'video/webm',
-      verifiedOrderItems,
+      verifiedOrderItems: verifiedItems,
       bypassDuplicate: bypassDuplicateRef.current,
       duplicateStatus,
     };
@@ -1323,10 +1385,9 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
           lastStationBarcodeRef.current = cleaned;
           lastStationBarcodeTimeRef.current = now;
 
-          setOrderId(cleaned);
-          detectPlatformAndType(cleaned);
-          checkAndOpenPackVerification(cleaned);
-          onShowToast(`📱 Phone Scanned: ${cleaned} (${device || 'Mobile Phone'})`, 'success');
+          if (applyOrderCodeRef.current(cleaned, 'phone')) {
+            onShowToast(`📱 Phone Scanned: ${cleaned} (${device || 'Mobile Phone'})`, 'success');
+          }
         }
       },
       (connected, count, device) => {
@@ -1945,35 +2006,44 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                   type="text"
                   placeholder="Scan barcode (e.g. #OD-5035) or type Order ID"
                   value={orderId}
+                  readOnly={isRecording}
+                  title={isRecording ? 'Order ID is locked while recording' : undefined}
+                  onFocus={(e) => e.currentTarget.select()}
                   onChange={(e) => {
-                    setOrderId(e.target.value);
+                    if (!isRecordingRef.current) setOrderId(e.target.value);
                   }}
                   onKeyDown={(e) => {
+                    // Track the latest fast key burst so a scan into a box that still holds the
+                    // previous order replaces it instead of being glued onto the end of it.
+                    const now = Date.now();
+                    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                      const burst = inputBurstRef.current;
+                      if (now - burst.lastAt > 80) burst.text = '';
+                      burst.text += e.key;
+                      burst.lastAt = now;
+                      return;
+                    }
                     if (e.key === 'Enter') {
-                      const cleaned = cleanBarcode(orderId);
-                      if (cleaned) {
-                        setOrderId(cleaned);
-                        detectPlatformAndType(cleaned);
-                        checkAndOpenPackVerification(cleaned);
+                      e.preventDefault();
+                      const burst = inputBurstRef.current;
+                      const value = e.currentTarget.value;
+                      const scanned = burst.text.length >= 4 && now - burst.lastAt < 200 && value.length > burst.text.length && value.endsWith(burst.text);
+                      inputBurstRef.current = { text: '', lastAt: 0 };
+                      if (applyOrderCode(scanned ? burst.text : value, 'typed')) {
+                        e.currentTarget.select();
                       }
                     }
                   }}
                   onPaste={(e) => {
                     const pasted = e.clipboardData.getData('text');
-                    if (pasted) {
-                      const cleaned = cleanBarcode(pasted);
-                      if (cleaned) {
-                        setOrderId(cleaned);
-                        detectPlatformAndType(cleaned);
-                        checkAndOpenPackVerification(cleaned);
-                        onShowToast(`Scanned / Pasted Order: ${cleaned}`, 'info');
-                        e.preventDefault();
-                      }
+                    if (pasted && cleanBarcode(pasted)) {
+                      e.preventDefault();
+                      applyOrderCode(pasted, 'pasted');
                     }
                   }}
                   className="w-full pl-3.5 pr-10 py-2.5 rounded-lg text-sm font-mono placeholder:text-slate-400 focus:outline-none transition bg-slate-50 border border-slate-300 text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500"
                 />
-                {orderId && (
+                {orderId && !isRecording && (
                   <button
                     onClick={() => setOrderId('')}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs font-bold"
@@ -2227,6 +2297,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       {/* Pre-Pack Manifest & Physical GTIN Barcode Verification Modal */}
       {isPackVerificationOpen && activeManifest && (
         <PackVerificationModal
+          key={activeManifest.orderId}
           manifest={activeManifest}
           currentUser={currentUser}
           recordingType={recordingType}
@@ -2242,7 +2313,8 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
             onShowToast(`✓ Order ${activeManifest.orderId} verified! Starting packing recording…`, 'success');
             // Auto start recording now that items are verified
             if (!isRecording) {
-              startRecording();
+              // Pass the verified items directly: the state update above is not visible to this call yet.
+              startRecording(verified);
             }
           }}
           onCancel={() => {

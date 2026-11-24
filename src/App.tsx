@@ -216,8 +216,12 @@ export function App() {
     } catch (e) {}
   };
 
-  // Initialize global background upload worker, queue sync, and real-time manifest sync loop
+  // Initialize global background upload worker, queue sync, and real-time manifest sync loop.
+  // Runs once a user is signed in: the backend rejects these calls without a session, so starting
+  // before login left the station without manifests until the next poll.
+  const signedInEmail = currentUser?.email || '';
   useEffect(() => {
+    if (!signedInEmail) return;
     const cleanupWorker = initUploadWorker((msg, type) => {
       showToast(msg, type);
     });
@@ -248,7 +252,7 @@ export function App() {
       window.removeEventListener('vms_manifests_updated', handleManifestChange);
       clearInterval(timer);
     };
-  }, []);
+  }, [signedInEmail]);
 
   const showToast = (msg: string, type: 'info' | 'success' | 'error' = 'info') => {
     const id = Date.now();
