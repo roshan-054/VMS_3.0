@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { productHasTag } from '../lib/catalogTags';
 import {
   PackagePlus,
   Boxes,
@@ -59,6 +60,7 @@ import {
   GtinSheetConfig,
   syncGtinFromGoogleSheet,
   syncGtinWithMasterSheet,
+  syncGtinCatalogFromSavedConfig,
   syncManifestsWithCloud,
   syncVerificationLogsWithCloud,
   getStoredVerificationLogs,
@@ -153,7 +155,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         syncManifestsWithCloud().then((res) => {
           if (res && res.manifests && res.manifests.length > 0) setManifests(res.manifests);
         }),
-        syncGtinWithMasterSheet().then(() => {
+        syncGtinCatalogFromSavedConfig().then(() => {
           setGtinCatalog(getStoredGtinCatalog());
         }),
         syncVerificationLogsWithCloud().then((res) => {
@@ -526,14 +528,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   const handleSyncMasterSheet = async () => {
     setIsSyncingMasterSheet(true);
     try {
-      const cfg = getGtinSheetConfig();
-      let res: { success: boolean; count: number; message: string };
-
-      if (cfg.sheetIdOrUrl && cfg.sheetIdOrUrl.trim()) {
-        res = await syncGtinFromGoogleSheet(cfg.sheetIdOrUrl.trim(), cfg.tabName?.trim() || 'GTINCatalog', cfg.tagsFilter);
-      } else {
-        res = await syncGtinWithMasterSheet(cfg.tagsFilter, cfg.tabName?.trim() || 'GTINCatalog');
-      }
+      const res = await syncGtinCatalogFromSavedConfig();
 
       if (res.success) {
         const updatedCatalog = getStoredGtinCatalog();
@@ -1345,7 +1340,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
           if (clean) tagSet.add(clean);
         });
       }
-      if (p.category && p.category.trim() && p.category !== 'General') {
+      if (!(p.tag && p.tag.trim()) && p.category && p.category.trim() && p.category !== 'General') {
         tagSet.add(p.category.trim());
       }
     });
@@ -1358,12 +1353,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
     // Filter by tag if selected
     if (selectedTagFilter && selectedTagFilter !== 'ALL') {
-      const tagLower = selectedTagFilter.toLowerCase();
-      list = list.filter((p) => {
-        const itemTag = (p.tag || '').toLowerCase();
-        const itemCat = (p.category || '').toLowerCase();
-        return itemTag.includes(tagLower) || itemCat.includes(tagLower);
-      });
+      list = list.filter((p) => productHasTag(p, [selectedTagFilter]));
     }
 
     if (!gtinSearchQuery.trim()) return list;
@@ -3321,11 +3311,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                   All ({gtinCatalog.length})
                 </button>
                 {availableTags.map((tag) => {
-                  const count = gtinCatalog.filter((p) => {
-                    const t = (p.tag || '').toLowerCase();
-                    const c = (p.category || '').toLowerCase();
-                    return t.includes(tag.toLowerCase()) || c.includes(tag.toLowerCase());
-                  }).length;
+                  const count = gtinCatalog.filter((p) => productHasTag(p, [tag])).length;
                   return (
                     <button
                       key={tag}
@@ -3928,11 +3914,13 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                   type="text"
                   value={gtinSheetTagsInput}
                   onChange={(e) => setGtinSheetTagsInput(e.target.value)}
-                  placeholder="e.g. Active-online, Summer2024, Apparel (comma-separated)"
+                  placeholder="e.g. Active-online (comma-separated for several)"
                   className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500 shadow-inner"
                 />
                 <span className="text-[10px] text-slate-400 mt-1 block">
-                  {gtinSheetTagsInput.trim() ? `Filtering items by tags: [${gtinSheetTagsInput}]` : 'Empty = Fetch full master sheet data (100%)'}
+                  {gtinSheetTagsInput.trim()
+                    ? `Only products whose Tag is exactly ${gtinSheetTagsInput.split(',').map((t) => t.trim()).filter(Boolean).map((t) => `"${t}"`).join(' or ')} are synced. Products from earlier syncs with other tags are removed from this station.`
+                    : 'Empty = sync every product in the tab.'}
                 </span>
               </div>
             </div>
@@ -3959,10 +3947,11 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                 type="button"
                 onClick={() => {
                   const updatedConfig: GtinSheetConfig = {
+                    ...getGtinSheetConfig(),
                     sheetIdOrUrl: gtinSheetInput.trim(),
                     tabName: gtinSheetTab.trim() || 'GTINCatalog',
+                    tagsFilter: gtinSheetTagsInput.trim(),
                     autoSync: true,
-                    lastSyncTime: new Date().toISOString()
                   };
                   saveGtinSheetConfig(updatedConfig);
                   onShowToast('Sync Sheet & Tab configuration saved!', 'success');

@@ -124,7 +124,10 @@ export async function requestApi<T = any>(
           `Google Apps Script Version Error: ${errMsg}. Please update your Web App URL in "Drive & Script Config" to use the latest deployment endpoint ("/exec").`
         );
       }
-      throw new Error(errMsg);
+      // Mark it so callers can tell "the server said no" from "the server could not be reached".
+      const serverErr: any = new Error(errMsg);
+      serverErr.serverError = true;
+      throw serverErr;
     }
 
     // If remote action succeeded, sync local cache
