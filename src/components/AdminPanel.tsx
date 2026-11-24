@@ -41,6 +41,7 @@ import {
 import { User, UserRole, UserStatus, AdminPermissions } from '../types';
 import { CleanDuplicatesModal } from './CleanDuplicatesModal';
 import { DeleteOlderVideosModal } from './DeleteOlderVideosModal';
+import { DriveLocationSetting } from './DriveLocationSetting';
 import { requestApi, checkBackendHealth, uploadBrandingImage, repairSheetPlaybackUrls, runSystemSetup, migrateDriveMonthlyFolders, applySheetConditionalFormatting } from '../lib/api';
 import { getLocalUsers, deleteLocalUserByEmail, getDeletedUserEmails } from '../lib/localAuth';
 import {
@@ -291,9 +292,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
 
   const handleSaveSettings = (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanFolderId = driveFolderIdInput.trim();
     setStoredApiUrl(apiUrlInput.trim());
-    setStoredDriveFolderId(cleanFolderId);
     setStoredChunkSizeMb(chunkSizeMbInput);
     setStoredAutoUpload(autoUploadInput);
     setStoredAutoResume(autoResumeInput);
@@ -310,10 +309,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
       lastSyncTime: new Date().toISOString()
     });
 
-    // Save permanently to Google Sheet Branding tab and script properties
-    setStoredBranding({
-      videoDriveFolderId: cleanFolderId,
-    });
+    // The video Drive folder is saved by its own "Check & use this folder" button (validated on the server).
 
     window.dispatchEvent(new CustomEvent('ops_config_updated', { detail: { chunkSizeMb: chunkSizeMbInput } }));
     window.dispatchEvent(new CustomEvent('ops_queue_updated'));
@@ -1021,39 +1017,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                   </span>
                 </div>
 
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="block text-xs font-semibold text-slate-700">
-                      Drive Folder ID or Full Drive Folder URL
-                    </label>
-                    <span className="text-[10px] text-slate-400 font-mono">
-                      Key: VideoDriveFolderId
-                    </span>
-                  </div>
-                  <input
-                    type="text"
-                    disabled={disableSettings}
-                    value={driveFolderIdInput}
-                    onChange={(e) => {
-                      const val = e.target.value.trim();
-                      const match = val.match(/folders\/([a-zA-Z0-9_-]+)/);
-                      setDriveFolderIdInput(match ? match[1] : e.target.value);
-                    }}
-                    placeholder="e.g. 1DonGlWoJtRc30fsSi7zHjE5G5xlDPiLA or paste full folder link"
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50"
-                  />
-                  <div className="mt-2 bg-slate-50 rounded-xl p-3 border border-slate-200 text-[11px] text-slate-600 space-y-1">
-                    <p className="font-semibold text-slate-800 flex items-center gap-1.5">
-                      <span className="text-purple-600">✦</span> Stored Permanently in Google Sheet &quot;Branding&quot; Tab
-                    </p>
-                    <p>
-                      Changes made here save directly to row <code>VideoDriveFolderId</code> in your connected Google Sheet. Alternatively, you can directly open your Google Sheet, go to the <strong>Branding</strong> tab, and paste the new Folder ID into row <code>VideoDriveFolderId</code>.
-                    </p>
-                    <p className="text-slate-400 text-[10px]">
-                      Accepts either the raw Folder ID (e.g. <code>1DonGlWo...</code>) or the full Google Drive link (e.g. <code>https://drive.google.com/drive/folders/...</code>).
-                    </p>
-                  </div>
-                </div>
+                <DriveLocationSetting
+                  value={driveFolderIdInput}
+                  onChange={setDriveFolderIdInput}
+                  disabled={disableSettings}
+                  onShowToast={onShowToast}
+                />
               </div>
 
               {/* 3. GTIN Barcode Catalog Google Sheet & Tab Link */}
