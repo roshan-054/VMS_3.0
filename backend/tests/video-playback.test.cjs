@@ -15,8 +15,10 @@ function setup() {
   rt.addSheet('OrderLog', [['Timestamp', 'OrderId', 'DriveFileId'], [new Date(), 'ORD-1', FID]]);
   const files = { [FID]: VIDEO, [OTHER]: Buffer.from('secret') };
   const fetches = [];
+  const driveLookups = [];
   rt.sandbox.DriveApp = {
     getFileById: (id) => {
+      driveLookups.push(id);
       if (!files[id]) throw new Error('No item with the given ID could be found');
       return { getSize: () => files[id].length, getMimeType: () => 'video/mp4', getName: () => id + '.mp4' };
     },
@@ -26,17 +28,22 @@ function setup() {
     fetch: (url, opts) => {
       fetches.push({ url, range: opts.headers.Range, auth: opts.headers.Authorization });
       const id = decodeURIComponent(url.split('/files/')[1].split('?')[0]);
-      const [a, b] = opts.headers.Range.replace('bytes=', '').split('-').map(Number);
+      const [a, b0] = opts.headers.Range.replace('bytes=', '').split('-').map(Number);
+      const b = Math.min(b0, files[id].length - 1); // Drive trims a range that runs past the end
       const part = files[id].subarray(a, b + 1);
-      return { getResponseCode: () => 206, getContent: () => Array.from(part, (x) => (x > 127 ? x - 256 : x)) };
+      return {
+        getResponseCode: () => 206,
+        getHeaders: () => ({ 'Content-Range': `bytes ${a}-${b}/${files[id].length}`, 'Content-Type': 'video/mp4' }),
+        getContent: () => Array.from(part, (x) => (x > 127 ? x - 256 : x)),
+      };
     },
   };
   const token = rt.call('login', { email: 'pat@example.com', password: 'PackerPass1' }).token;
-  return { rt, token, fetches };
+  return { rt, token, fetches, driveLookups };
 }
 
 test('the original file is returned byte-for-byte in 8 MB chunks', () => {
-  const { rt, token, fetches } = setup();
+  const { rt, token, fetches, driveLookups } = setup();
   const parts = [];
   let start = 0;
   let size = Infinity;
@@ -53,6 +60,8 @@ test('the original file is returned byte-for-byte in 8 MB chunks', () => {
   assert.equal(fetches[0].range, 'bytes=0-8388607');
   assert.match(fetches[0].url, /alt=media/);
   assert.equal(fetches[0].auth, 'Bearer tok');
+  assert.equal(driveLookups.length, 0, 'size and type come from the ranged read, no extra Drive lookups per chunk');
+  assert.equal(fetches.length, 3, 'one Drive read per chunk');
 });
 
 test('files that are not logged packing videos cannot be read, and login is required', () => {

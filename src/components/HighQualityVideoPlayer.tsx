@@ -21,7 +21,11 @@ import {
   RotateCw,
   Move
 } from 'lucide-react';
-import { getOriginalVideoUrl } from '../lib/videoFetch';
+import { getOriginalVideoUrl, getDriveStreamUrl, isDriveStreamUsable, reportDriveStreamResult } from '../lib/videoFetch';
+
+// How long the direct Drive stream may take to show the first frame before the slower
+// download-through-the-backend path is used instead.
+const STREAM_START_TIMEOUT_MS = 12000;
 
 interface HighQualityVideoPlayerProps {
   fileId?: string;
@@ -55,6 +59,11 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
   const [originalError, setOriginalError] = useState<string>('');
   const [videoSize, setVideoSize] = useState<{ w: number; h: number } | null>(null);
   const [retryKey, setRetryKey] = useState(0);
+  // Original quality is first streamed straight from Google Drive (plays within a second or two,
+  // seeks instantly). If the browser cannot stream it, the whole file is downloaded through the
+  // backend as before.
+  const [streamFailed, setStreamFailed] = useState(() => !isDriveStreamUsable());
+  const [streamStarted, setStreamStarted] = useState(false);
 
   useEffect(() => {
     setPlayerMode(hasLocalBlob ? 'local_master' : fileId ? 'original' : 'drive_hd');
@@ -62,10 +71,12 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
     setOriginalError('');
     setOriginalProgress({ loaded: 0, total: 0 });
     setVideoSize(null);
+    setStreamFailed(!isDriveStreamUsable());
+    setStreamStarted(false);
   }, [fileId, localBlobUrl]);
 
   useEffect(() => {
-    if (playerMode !== 'original' || !fileId || originalUrl) return;
+    if (playerMode !== 'original' || !fileId || originalUrl || !streamFailed) return;
     let alive = true;
     setOriginalError('');
     const { url, unsubscribe } = getOriginalVideoUrl(fileId, (loaded, total) => {
@@ -78,9 +89,28 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
       alive = false;
       unsubscribe();
     };
-  }, [playerMode, fileId, originalUrl, retryKey]);
+  }, [playerMode, fileId, originalUrl, retryKey, streamFailed]);
 
-  const nativeSrc = playerMode === 'local_master' ? localBlobUrl || '' : playerMode === 'original' ? originalUrl : '';
+  const streamUrl = playerMode === 'original' && fileId && !streamFailed ? getDriveStreamUrl(fileId) : '';
+  const nativeSrc = playerMode === 'local_master' ? localBlobUrl || '' : playerMode === 'original' ? streamUrl || originalUrl : '';
+  const isStreaming = Boolean(streamUrl);
+
+  // Give up on the direct stream if it shows nothing within the time limit.
+  useEffect(() => {
+    if (!isStreaming || streamStarted) return;
+    const t = setTimeout(() => {
+      reportDriveStreamResult(false);
+      setStreamFailed(true);
+    }, STREAM_START_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [isStreaming, streamStarted, streamUrl]);
+
+  const handleVideoError = () => {
+    if (isStreaming) {
+      reportDriveStreamResult(false);
+      setStreamFailed(true);
+    }
+  };
   const isNative = playerMode !== 'drive_hd';
 
   // Native Local Video Player State
@@ -210,6 +240,8 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
     if (mode === 'original') {
       setOriginalError('');
       setRetryKey((k) => k + 1);
+      setStreamStarted(false);
+      setStreamFailed(!isDriveStreamUsable());
     }
     setPlayerMode(mode);
   };
@@ -393,12 +425,27 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
           }}
         >
           {isNative && nativeSrc ? (
+            <>
+            {isStreaming && !streamStarted && (
+              <div id="hq-player-stream-loading" className="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none z-10">
+                <Loader2 className="w-8 h-8 text-emerald-400 animate-spin" />
+                <span className="text-xs font-semibold text-white">Opening the original video…</span>
+              </div>
+            )}
             <video
               ref={videoRef}
               id="hq-player-video"
               src={nativeSrc}
-              crossOrigin="anonymous"
+              data-source={isStreaming ? 'drive-stream' : nativeSrc.startsWith('blob:') ? 'blob' : 'other'}
               playsInline
+              preload="auto"
+              onError={handleVideoError}
+              onLoadedData={() => {
+                if (isStreaming && !streamStarted) {
+                  setStreamStarted(true);
+                  reportDriveStreamResult(true);
+                }
+              }}
               autoPlay={autoPlay}
               onLoadedMetadata={handleLoadedMetadata}
               onTimeUpdate={handleTimeUpdate}
@@ -408,6 +455,7 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
               onClick={zoom === 1 ? handlePlayPause : undefined}
               className="w-full h-full object-contain pointer-events-auto"
             />
+            </>
           ) : playerMode === 'original' && fileId ? (
             <div className="p-8 text-center space-y-3 w-full max-w-md" id="hq-player-loading">
               {originalError ? (
@@ -651,7 +699,7 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
             {(fileId || nativeSrc) && (
               <a
                 href={nativeSrc || directDriveDownloadUrl}
-                target={nativeSrc ? undefined : '_blank'}
+                target={nativeSrc.startsWith('blob:') ? undefined : '_blank'}
                 rel="noreferrer"
                 download={fileName}
                 className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white text-xs font-semibold rounded-xl border border-slate-700 transition flex items-center gap-1.5 cursor-pointer"

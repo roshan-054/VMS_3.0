@@ -27,9 +27,14 @@ rt.sandbox.ScriptApp = { getOAuthToken: () => 'tok' };
 rt.sandbox.UrlFetchApp = {
   fetch: (_url, opts) => {
     ranges.push(opts.headers.Range);
-    const [a, b] = opts.headers.Range.replace('bytes=', '').split('-').map(Number);
+    const [a, b0] = opts.headers.Range.replace('bytes=', '').split('-').map(Number);
+    const b = Math.min(b0, VIDEO.length - 1);
     const part = VIDEO.subarray(a, b + 1);
-    return { getResponseCode: () => 206, getContent: () => Array.from(part, (x) => (x > 127 ? x - 256 : x)) };
+    return {
+      getResponseCode: () => 206,
+      getHeaders: () => ({ 'Content-Range': `bytes ${a}-${b}/${VIDEO.length}`, 'Content-Type': 'video/mp4' }),
+      getContent: () => Array.from(part, (x) => (x > 127 ? x - 256 : x)),
+    };
   },
 };
 
@@ -38,13 +43,15 @@ const check = (name, ok, detail) => results.push({ check: name, pass: !!ok, deta
 const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] });
 const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
 await attach(page, backend);
+// This test covers the download-through-the-backend path: direct streaming from Drive is blocked.
+await page.route(/drive\.usercontent\.google\.com/, (route) => route.abort());
 await login(page, BASE, backend);
 await page.getByRole('button', { name: /Search Videos/ }).first().click();
 await page.getByPlaceholder(/402-19283-91/).fill('ORD-HQ-1');
 await page.locator('#search-orders-submit-btn').click();
 await page.getByRole('button', { name: /Play & View Details/ }).first().click({ timeout: 20000 });
 
-const loading = await page.locator('#hq-player-loading').isVisible().catch(() => false);
+const loading = await page.locator('#hq-player-loading').waitFor({ timeout: 20000 }).then(() => true).catch(() => false);
 check('shows download progress while loading', loading, loading);
 await page.waitForFunction(() => {
   const v = document.querySelector('#hq-player-video');
@@ -59,7 +66,7 @@ const info = await page.evaluate(async () => {
 });
 check('plays the original at 1920x1080', info.w === 1920 && info.h === 1080, `${info.w}x${info.h}`);
 check('whole original file downloaded byte-exact size', info.size === VIDEO.length, `${info.size} / ${VIDEO.length}`);
-check('fetched in 4 MB ranges', ranges.length === Math.ceil(VIDEO.length / (4 * 1024 * 1024)) && ranges[0] === 'bytes=0-4194303', ranges.join(' '));
+check('fetched in 8 MB ranges', ranges.length === Math.ceil(VIDEO.length / (8 * 1024 * 1024)) && ranges[0] === 'bytes=0-8388607', ranges.join(' '));
 check('video actually plays', info.t > 0.5, info.t);
 const label = await page.locator('text=/Original file · 1920×1080/').first().isVisible();
 check('quality badge shows Original file 1920×1080', label, label);
@@ -71,7 +78,7 @@ const iframe = await page.locator('iframe[src*="/preview"]').count();
 check('Drive preview still available as a choice', iframe === 1, iframe);
 await page.locator('#player-mode-original').click();
 await page.waitForFunction(() => document.querySelector('#hq-player-video')?.videoWidth === 1920, null, { timeout: 10000 });
-check('switching back is instant (cached, no new download)', ranges.length === Math.ceil(VIDEO.length / (4 * 1024 * 1024)), ranges.length);
+check('switching back is instant (cached, no new download)', ranges.length === Math.ceil(VIDEO.length / (8 * 1024 * 1024)), ranges.length);
 
 console.table(results);
 await browser.close();

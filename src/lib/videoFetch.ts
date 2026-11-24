@@ -6,8 +6,8 @@
  */
 import { requestApi } from './api';
 
-export const VIDEO_CHUNK_BYTES = 4 * 1024 * 1024;
-const PARALLEL = 4;
+export const VIDEO_CHUNK_BYTES = 8 * 1024 * 1024; // the backend's maximum per call
+const PARALLEL = 6;
 const RETRIES = 2;
 
 interface ChunkResponse {
@@ -116,4 +116,24 @@ export function getOriginalVideoUrl(fileId: string, onProgress?: Progress): { ur
     if (entry.last[1]) onProgress(entry.last[0], entry.last[1]);
   }
   return { url: entry.url, unsubscribe: () => onProgress && entry.listeners.delete(onProgress) };
+}
+
+/**
+ * Direct stream of the original file from Google Drive. Packing videos are shared "anyone with the
+ * link can view", so the browser's own video player can read the file in ranges straight from
+ * Drive: it starts in a second or two at full quality and seeks without downloading everything.
+ * confirm=t skips Drive's "too large to scan for viruses" page for files over 100 MB.
+ */
+export function getDriveStreamUrl(fileId: string): string {
+  return `https://drive.usercontent.google.com/download?id=${encodeURIComponent(fileId)}&export=download&confirm=t`;
+}
+
+// When streaming fails twice in a row on this computer (blocked network, Drive refusing), go
+// straight to the download path for the rest of the session.
+let streamFailures = 0;
+export function isDriveStreamUsable(): boolean {
+  return streamFailures < 2;
+}
+export function reportDriveStreamResult(ok: boolean): void {
+  streamFailures = ok ? 0 : streamFailures + 1;
 }
