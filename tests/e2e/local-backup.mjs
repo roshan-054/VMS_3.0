@@ -20,7 +20,6 @@ page.on('console', (m) => { if (/error|warn|worker|Recorder|recording/i.test(m.t
 page.on('pageerror', (e) => console.log('[pageerror]', String(e).slice(0, 300)));
 await attach(page, backend);
 if (process.env.NO_POI) await page.addInitScript(() => localStorage.setItem('vms_ai_focus_calibration', JSON.stringify({ autoHardwareFocus: false })));
-if (process.env.NO_AI) await page.addInitScript(() => localStorage.setItem('vms_ai_focus_active', 'false'));
 await login(page, BASE, backend);
 await page.getByRole('button', { name: /Scan & Record/ }).first().click();
 await page.waitForSelector('#orderIdInput');
