@@ -35,6 +35,7 @@ import {
   ShoppingBag
 } from 'lucide-react';
 import { HighQualityVideoPlayer } from './HighQualityVideoPlayer';
+import { LiveStationQueues, type StationReport } from './LiveStationQueues';
 import { User, UploadLogItem, QueueItem, PlatformType, RecordingType } from '../types';
 import { CleanDuplicatesModal } from './CleanDuplicatesModal';
 import { fetchUploadLogs, deleteLogEntry, formatFileSize, fetchDriveFileSize, normalizeOrderId } from '../lib/api';
@@ -208,6 +209,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [showCleanDuplicatesModal, setShowCleanDuplicatesModal] = useState(false);
   const canDelete = currentUser ? canUserDeleteData(currentUser) : true;
+  const isAdminViewer = currentUser?.role === 'Admin' || currentUser?.role === 'Master Admin';
 
   // Lookup associated Manifest & Product Items for Selected Log
   const selectedLogManifest = useMemo(() => {
@@ -775,6 +777,36 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
     });
   }, [localQueue]);
 
+  // Admins: what every packing station reports about its own upload queue (refreshed every 5 s).
+  const [stationReports, setStationReports] = useState<StationReport[]>([]);
+  const stationAsLogs = useMemo<UploadLogItem[]>(() => {
+    const ownIds = new Set(localQueue.map((q) => q.id));
+    const statusMap: Record<string, string> = { completed: 'Completed', uploading: 'In Progress', failed: 'Failed', paused: 'Paused', pending: 'Pending' };
+    return stationReports.flatMap((st) =>
+      (st.live ? st.items : st.items.filter((it) => it.status !== 'uploading'))
+        .filter((it) => !ownIds.has(it.id))
+        .map((it) => ({
+          timestamp: new Date(it.createdAt || Date.now()).toISOString(),
+          orderId: it.orderId,
+          platform: it.platform as PlatformType,
+          packerEmail: st.email,
+          fileName: it.fileName,
+          fileSize: formatFileSize(it.fileSize),
+          uploadId: it.uploadId || it.id,
+          stage: it.stage || (it.status === 'completed' ? 'Uploaded to Google Drive' : `Waiting on ${st.name || st.email}'s computer`),
+          progress: it.progress || 0,
+          driveFileId: it.fileId || '',
+          status: statusMap[it.status] || 'Pending',
+          error: it.error || undefined,
+          recordingType: it.recordingType as RecordingType,
+          source: 'Packer Station',
+          queueJobId: it.id,
+          playbackUrl: it.fileId ? `https://drive.google.com/file/d/${it.fileId}/preview` : '',
+          downloadUrl: it.fileId ? `https://drive.google.com/uc?export=download&id=${it.fileId}` : '',
+        }) as UploadLogItem)
+    );
+  }, [stationReports, localQueue]);
+
   // Combine or select logs based on sourceView
   const mergedLogs = useMemo<UploadLogItem[]>(() => {
     if (sourceView === 'cloud') {
@@ -783,6 +815,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
     if (sourceView === 'local') {
       return localAsLogs;
     }
+    const liveAsLogs = [...localAsLogs, ...stationAsLogs];
 
     // Unified: Build index of local queue items for zero-latency overlay on cloud logs
     const norm = (s: any) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -792,7 +825,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
     const localByFileName = new Map<string, UploadLogItem>();
     const matchedLocalKeys = new Set<string>();
 
-    localAsLogs.forEach((loc) => {
+    liveAsLogs.forEach((loc) => {
       const up = norm(loc.uploadId);
       const jid = norm(loc.queueJobId);
       const oid = norm(loc.orderId);
@@ -870,6 +903,17 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
             playbackUrl: localMatch.playbackUrl || cloudLog.playbackUrl
           };
         }
+
+        // The station's own queue knows best why a video is waiting or failed.
+        if (localMatch.status === 'Failed' || localMatch.status === 'Paused' || localMatch.status === 'Pending') {
+          return {
+            ...cloudLog,
+            status: localMatch.status,
+            stage: localMatch.stage || cloudLog.stage,
+            progress: localMatch.progress,
+            error: localMatch.error || cloudLog.error,
+          };
+        }
       }
 
       // If cloudLog itself has driveFileId, ensure status is Completed and playback URL exists
@@ -915,7 +959,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
       }).filter(Boolean)
     );
 
-    const uniqueLocal = localAsLogs.filter((loc) => {
+    const uniqueLocal = liveAsLogs.filter((loc) => {
       const up = norm(loc.uploadId);
       const qj = norm(loc.queueJobId);
       const fn = norm(loc.fileName);
@@ -930,7 +974,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
     });
 
     return [...uniqueLocal, ...dedupedCloudLogs];
-  }, [sourceView, cloudLogs, localAsLogs]);
+  }, [sourceView, cloudLogs, localAsLogs, stationAsLogs]);
 
   // Scoped Logs: Filtered by platform, type, date range, and search query (before applying status tab filter)
   const scopedLogs = useMemo(() => {
@@ -1309,6 +1353,8 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
           </label>
         </div>
       </div>
+
+      {isAdminViewer && <LiveStationQueues onStations={setStationReports} />}
 
       {/* Summary KPI Metric Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">

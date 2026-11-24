@@ -86,6 +86,7 @@ function createRuntime({ users = [] } = {}) {
     get: (k) => (cache.has(k) ? cache.get(k) : null),
     put: (k, v) => { cache.set(k, String(v)); },
     remove: (k) => { cache.delete(k); },
+    getAll: (keys) => Object.fromEntries(keys.filter((k) => cache.has(k)).map((k) => [k, cache.get(k)])),
   };
 
   const sandbox = {

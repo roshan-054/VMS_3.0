@@ -39,6 +39,7 @@ import {
   BrandingConfig
 } from './lib/branding';
 import { getStoredManifests, startGlobalManifestSyncLoop } from './lib/manifestStorage';
+import { startStationReporter } from './lib/stationReporter';
 import { SESSION_EXPIRED_EVENT } from './lib/api';
 import { initUploadWorker } from './lib/uploadWorker';
 import { ScanRecord } from './components/ScanRecord';
@@ -228,6 +229,9 @@ export function App() {
     // Start 15-second real-time manifest sync loop across all workstations & tabs
     const cleanupManifestSync = startGlobalManifestSyncLoop(15000);
 
+    // Report this station's upload queue so admins see live upload / pending / failed status.
+    const stopStationReporter = startStationReporter();
+
     const handleQueueChange = () => {
       refreshQueueBadge();
     };
@@ -247,6 +251,7 @@ export function App() {
     return () => {
       cleanupWorker();
       cleanupManifestSync();
+      stopStationReporter();
       window.removeEventListener('ops_queue_updated', handleQueueChange);
       window.removeEventListener('vms_manifests_updated', handleManifestChange);
       clearInterval(timer);

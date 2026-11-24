@@ -74,7 +74,8 @@ const ADMIN_ACTIONS = [
   'deleteLogEntry', 'removeUploadLog', 'deleteOrderLog',
   'scanDuplicates', 'scanDuplicateRecords', 'cleanDuplicates', 'removeDuplicates', 'removeDuplicateRecords',
   'scanOlder', 'scanOlderVideos', 'deleteOlder', 'deleteOlderVideos',
-  'applyConditionalFormatting', 'saveBranding', 'uploadBrandingImage', 'checkDriveFolder'
+  'applyConditionalFormatting', 'saveBranding', 'uploadBrandingImage', 'checkDriveFolder',
+  'getStationQueues'
 ];
 
 function doPost(e) {
@@ -138,6 +139,8 @@ function doPost(e) {
       case 'uploadBrandingImage': return output_(uploadBrandingImage_(p));
       case 'getDriveFileSize': return output_(getDriveFileSize_(p));
       case 'getVideoChunk': return output_(getVideoChunk_(p));
+      case 'reportStationQueue': return output_(reportStationQueue_(p));
+      case 'getStationQueues': return output_(getStationQueues_(p));
       case 'saveOrderManifest': return output_(manifestWrite_(saveOrderManifest_(p)));
       case 'saveOrderManifestsBatch': return output_(manifestWrite_(saveOrderManifestsBatch_(p)));
       case 'getOrderManifests': return output_(getOrderManifests_(p));
@@ -4207,6 +4210,96 @@ function uploadBrandingImage_(p) {
 /**
  * Resolves exact Google Drive file size on-demand and writes it back to Google Sheets.
  */
+// ---------------------------------------------------------------------------
+// Live station queues: every packing station reports its own upload queue (videos waiting,
+// uploading, failed, with progress and the last error) every few seconds, so the admin sees
+// real-time status from all packers instead of only what has reached the sheet. Kept in the
+// script cache (fast, no sheet writes, no Properties quota); a station that stops reporting for
+// more than 45 s is shown as offline, and is dropped after 6 hours.
+// ---------------------------------------------------------------------------
+const STATION_INDEX_KEY_ = 'STATIONQ_INDEX';
+const STATION_TTL_S_ = 21600;
+const STATION_MAX_ITEMS_ = 60;
+
+function cleanQueueItem_(it) {
+  const str = function(v, n) { return String(v == null ? '' : v).slice(0, n || 200); };
+  return {
+    id: str(it.id, 80),
+    orderId: str(it.orderId, 80),
+    platform: str(it.platform, 40),
+    recordingType: str(it.recordingType, 20),
+    fileName: str(it.fileName, 160),
+    fileSize: Number(it.fileSize) || 0,
+    status: str(it.status, 20),
+    progress: Math.max(0, Math.min(100, Number(it.progress) || 0)),
+    stage: str(it.stage, 200),
+    error: str(it.error, 300),
+    createdAt: Number(it.createdAt) || 0,
+    uploadId: str(it.uploadId, 80),
+    fileId: str(it.fileId, 80)
+  };
+}
+
+function reportStationQueue_(p) {
+  const user = session_(p.token);
+  const email = normalize_(user.email);
+  const items = (Array.isArray(p.items) ? p.items : []).slice(0, STATION_MAX_ITEMS_).map(cleanQueueItem_);
+  const now = Date.now();
+  const rec = {
+    email: user.email,
+    name: user.name || user.email,
+    station: String(p.station || '').slice(0, 60),
+    recording: p.recording === true,
+    online: p.online !== false,
+    worker: String(p.worker || '').slice(0, 200),
+    items: items,
+    reportedAt: now
+  };
+  const cache = CacheService.getScriptCache();
+  cache.put('STATIONQ_' + email, JSON.stringify(rec), STATION_TTL_S_);
+  // Index of stations (who has reported). Only written when this station is new or every 5 min.
+  let index = {};
+  try { index = JSON.parse(cache.get(STATION_INDEX_KEY_) || '{}') || {}; } catch (_) { index = {}; }
+  if (!index[email] || now - Number(index[email]) > 300000) {
+    withScriptLock_(function() {
+      let fresh = {};
+      try { fresh = JSON.parse(cache.get(STATION_INDEX_KEY_) || '{}') || {}; } catch (_) { fresh = {}; }
+      fresh[email] = now;
+      Object.keys(fresh).forEach(function(k) { if (now - Number(fresh[k]) > STATION_TTL_S_ * 1000) delete fresh[k]; });
+      cache.put(STATION_INDEX_KEY_, JSON.stringify(fresh), STATION_TTL_S_);
+    }, 5000);
+  }
+  return { success: true, reportedAt: now };
+}
+
+function getStationQueues_(p) {
+  const cache = CacheService.getScriptCache();
+  let index = {};
+  try { index = JSON.parse(cache.get(STATION_INDEX_KEY_) || '{}') || {}; } catch (_) { index = {}; }
+  const keys = Object.keys(index).map(function(e) { return 'STATIONQ_' + e; });
+  const got = keys.length ? (cache.getAll ? cache.getAll(keys) : keys.reduce(function(m, k) { m[k] = cache.get(k); return m; }, {})) : {};
+  const now = Date.now();
+  const stations = [];
+  keys.forEach(function(k) {
+    if (!got[k]) return;
+    try {
+      const rec = JSON.parse(got[k]);
+      rec.ageMs = now - Number(rec.reportedAt || 0);
+      rec.live = rec.ageMs < 45000;
+      stations.push(rec);
+    } catch (_) {}
+  });
+  stations.sort(function(a, b) { return String(a.email).localeCompare(String(b.email)); });
+  const totals = { uploading: 0, pending: 0, failed: 0, completed: 0 };
+  stations.forEach(function(st) {
+    (st.items || []).forEach(function(it) {
+      if (totals[it.status] !== undefined) totals[it.status]++;
+      else if (it.status === 'paused') totals.failed++;
+    });
+  });
+  return { success: true, stations: stations, totals: totals, serverTime: now };
+}
+
 // ---------------------------------------------------------------------------
 // Full-quality playback: the panel's player downloads the ORIGINAL uploaded file in chunks
 // (Drive's /preview player re-encodes to a lower resolution and is often "still processing").
