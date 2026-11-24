@@ -124,7 +124,7 @@ export function setStoredAutoRefreshInterval(seconds: number): void {
   localStorage.setItem('ops_auto_refresh_sec', String(clean));
 }
 
-export type VideoQualityProfile = 'fast' | 'balanced' | 'high' | 'ultra';
+export type VideoQualityProfile = 'max' | 'fast' | 'balanced' | 'high' | 'ultra';
 
 export interface VideoQualityConfig {
   profile: VideoQualityProfile;
@@ -135,6 +135,13 @@ export interface VideoQualityConfig {
 }
 
 export const VIDEO_QUALITY_PROFILES: Record<VideoQualityProfile, VideoQualityConfig> = {
+  max: {
+    profile: 'max',
+    label: 'Highest quality [Default]',
+    bitrateBps: 0, // 0 = chosen from the recording size (about 7.5 Mbps at 1080p, up to 25 Mbps at 4K)
+    description: "Records at the camera's best resolution (up to 4K when the computer can encode it smoothly) with a bitrate matched to that size.",
+    estimatedMbPerMin: 56,
+  },
   fast: {
     profile: 'fast',
     label: 'Fast Cloud (1.5 Mbps)',
@@ -170,7 +177,7 @@ export function getStoredVideoQualityProfile(): VideoQualityProfile {
   if (stored && stored in VIDEO_QUALITY_PROFILES) {
     return stored as VideoQualityProfile;
   }
-  return 'balanced'; // 2.2 Mbps default (cuts video size by 75% while keeping crisp barcodes!)
+  return 'max'; // highest quality the camera and computer can record smoothly
 }
 
 export function setStoredVideoQualityProfile(profile: VideoQualityProfile): void {

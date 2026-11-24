@@ -27,8 +27,19 @@ const CODECS: Array<{ codec: string; container: 'mp4' | 'webm'; muxCodec: string
   { codec: 'vp8', container: 'webm', muxCodec: 'V_VP8' },
 ];
 
+/** Above 1080p the codec level must be raised (H.264 L5.1, VP9 L5.1) or the encoder refuses the size. */
+function codecForSize(codec: string, width: number, height: number): string {
+  if (width * height <= 1920 * 1088) return codec;
+  if (codec.startsWith('avc1.')) return codec.slice(0, -2) + '33';
+  if (codec.startsWith('vp09.')) return codec.replace('vp09.00.40.08', 'vp09.00.51.08');
+  return codec;
+}
+
 async function pickEncoderConfig(width: number, height: number, bitrate: number, preferWebm = false) {
-  const list = preferWebm ? [...CODECS.filter((c) => c.container === 'webm'), ...CODECS.filter((c) => c.container === 'mp4')] : CODECS;
+  const list = (preferWebm ? [...CODECS.filter((c) => c.container === 'webm'), ...CODECS.filter((c) => c.container === 'mp4')] : CODECS).map((c) => ({
+    ...c,
+    codec: codecForSize(c.codec, width, height),
+  }));
   for (const c of list) {
     for (const hw of ['prefer-hardware', 'no-preference'] as const) {
       const config = {
