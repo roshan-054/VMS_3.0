@@ -61,6 +61,8 @@ const ACTION_TIMEOUT_MS: Record<string, number> = {
   removeDuplicateRecords: 120000,
   scanOlderVideos: 120000,
   deleteOlderVideos: 300000,
+  scanSheetCleanup: 120000,
+  runSheetCleanup: 300000,
   setup: 120000,
 };
 export const DEFAULT_API_TIMEOUT_MS = 20000;
@@ -1080,3 +1082,58 @@ export async function fetchDriveFileSize(params: {
   return null;
 }
 
+
+export interface SheetCleanupScan {
+  success: boolean;
+  sheets: { name: string; rows: number; duplicates: number; unusable: number; remove: number }[];
+  reasons: Record<string, number>;
+  totalRemove: number;
+  totalDuplicates: number;
+  totalUnusable: number;
+  duplicateRecordings: number;
+  extraVideos: number;
+  topGroups: { sheet: string; orderId: string; recordingType: string; keepRow: number; removeRows: number }[];
+  message: string;
+}
+
+export interface SheetCleanupResult {
+  removedRowsCount: number;
+  archivedRowsCount: number;
+  removedBySheet: Record<string, number>;
+  videosTrashedCount: number;
+  videosFailedCount: number;
+  done: boolean;
+}
+
+export async function scanSheetCleanup(): Promise<SheetCleanupScan> {
+  const res: any = await requestApi<SheetCleanupScan>('scanSheetCleanup', {});
+  if (!res || res.success === false) throw new Error(res?.error || 'Could not scan the sheet.');
+  return res as SheetCleanupScan;
+}
+
+/** Runs the cleanup in server rounds until everything planned is removed. */
+export async function runSheetCleanup(
+  opts: { trashExtraVideos: boolean },
+  onProgress?: (removed: number, remaining: number) => void
+): Promise<SheetCleanupResult> {
+  const total: SheetCleanupResult = {
+    removedRowsCount: 0, archivedRowsCount: 0, removedBySheet: {}, videosTrashedCount: 0, videosFailedCount: 0, done: false,
+  };
+  for (let round = 1; round <= 500; round++) {
+    const res: any = await requestApi('runSheetCleanup', { trashExtraVideos: opts.trashExtraVideos && round === 1 });
+    if (!res || res.success === false) throw new Error(res?.error || 'The cleanup did not run.');
+    total.removedRowsCount += res.removedRowsCount || 0;
+    total.archivedRowsCount += res.archivedRowsCount || 0;
+    total.videosTrashedCount += res.videosTrashedCount || 0;
+    total.videosFailedCount += res.videosFailedCount || 0;
+    Object.entries(res.removedBySheet || {}).forEach(([k, v]) => {
+      total.removedBySheet[k] = (total.removedBySheet[k] || 0) + Number(v || 0);
+    });
+    onProgress?.(total.removedRowsCount, res.remainingRows || 0);
+    if (res.done !== false) {
+      total.done = true;
+      break;
+    }
+  }
+  return total;
+}

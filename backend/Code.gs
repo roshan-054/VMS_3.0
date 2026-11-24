@@ -75,7 +75,8 @@ const ADMIN_ACTIONS = [
   'scanDuplicates', 'scanDuplicateRecords', 'cleanDuplicates', 'removeDuplicates', 'removeDuplicateRecords',
   'scanOlder', 'scanOlderVideos', 'deleteOlder', 'deleteOlderVideos',
   'applyConditionalFormatting', 'saveBranding', 'uploadBrandingImage', 'checkDriveFolder',
-  'getStationQueues', 'getDriveStorage', 'applyDateFormats'
+  'getStationQueues', 'getDriveStorage', 'applyDateFormats',
+  'scanSheetCleanup', 'runSheetCleanup'
 ];
 
 function doPost(e) {
@@ -143,6 +144,8 @@ function doPost(e) {
       case 'reportStationQueue': return output_(reportStationQueue_(p));
       case 'getStationQueues': return output_(getStationQueues_(p));
       case 'getDriveStorage': return output_(getDriveStorage_(p));
+      case 'scanSheetCleanup': return output_(scanSheetCleanup_(p));
+      case 'runSheetCleanup': return output_(runSheetCleanup_(p));
       case 'applyDateFormats': return output_(applySheetDateFormats_(true));
       case 'saveOrderManifest': return output_(manifestWrite_(saveOrderManifest_(p)));
       case 'saveOrderManifestsBatch': return output_(manifestWrite_(saveOrderManifestsBatch_(p)));
@@ -5883,3 +5886,260 @@ function deleteOlderVideos_(p) {
 
 
 
+
+/* ---------- Settings: sheet cleanup (duplicate and unusable rows) ---------- */
+// Finds repeated rows for the same recording (same order ID and recording type) and rows that
+// hold no usable video, in OrderLog, ReturnLog and UploadLog. One good row is kept for every
+// recording. Removed rows are copied in full to an "<Sheet> Archive" tab before they are deleted,
+// so nothing is lost. Rows from the last few hours are never touched (uploads may still be running).
+// mode 'scan' only reports; mode 'run' archives and deletes, in time-boxed rounds (done:false = call again).
+
+const CLEANUP_RECENT_HOURS_ = 6;
+const CLEANUP_UNFINISHED_HOURS_ = 24;
+
+function cleanupCols_(sheetName, headerRow) {
+  const h = (headerRow || []).map(function(x) { return String(x || '').trim().toLowerCase(); });
+  const find = function(re, fallback) { const i = h.findIndex(function(x) { return re.test(x); }); return i >= 0 ? i : fallback; };
+  const upload = sheetName === CONFIG.UPLOAD_LOG_SHEET;
+  const c = olderSheetCols_(sheetName, headerRow);
+  c.status = find(/^status$/, upload ? 10 : 7);
+  c.progress = upload ? find(/^progress$/, 8) : -1;
+  return c;
+}
+
+function cleanupRowIsBlank_(row) {
+  for (let j = 0; j < row.length; j++) {
+    if (row[j] !== '' && row[j] !== null && row[j] !== undefined) return false;
+  }
+  return true;
+}
+
+function cleanupFinished_(status) {
+  const st = normalize_(status);
+  if (st && !/complete|success|done|uploaded|ready/.test(st)) return false;
+  return true;
+}
+
+/** Works out which rows to remove. Returns { sheets: [{ name, sh, headers, values, remove: [{row, reason, orderId, fileId}] }], groups, extraVideoIds }. */
+function planSheetCleanup_() {
+  const ss = ss_();
+  const now = Date.now();
+  const recentMs = CLEANUP_RECENT_HOURS_ * 3600000;
+  const unfinishedMs = CLEANUP_UNFINISHED_HOURS_ * 3600000;
+  const targets = [
+    { name: CONFIG.ORDER_LOG_SHEET, defaultType: 'Forward' },
+    { name: CONFIG.RETURN_LOG_SHEET, defaultType: 'Return' },
+    { name: CONFIG.UPLOAD_LOG_SHEET, defaultType: 'Forward' }
+  ];
+  const plan = { sheets: [], groups: [], extraVideoIds: [] };
+  const keeperFileByRecording = {}; // order|type -> fileId kept in OrderLog/ReturnLog
+  const keptFileIds = {};
+  const removedFileIds = {};
+
+  targets.forEach(function(t) {
+    const sh = ss.getSheetByName(t.name);
+    if (!sh) return;
+    const values = sh.getDataRange().getValues();
+    const entry = { name: t.name, sh: sh, headers: values[0] || [], values: values, remove: [], duplicates: 0, unusable: 0, rows: Math.max(0, values.length - 1) };
+    plan.sheets.push(entry);
+    if (values.length <= 1) return;
+    const c = cleanupCols_(t.name, values[0]);
+    const upload = t.name === CONFIG.UPLOAD_LOG_SHEET;
+    const groups = {};
+
+    for (let i = 1; i < values.length; i++) {
+      const r = values[i];
+      if (cleanupRowIsBlank_(r)) {
+        entry.remove.push({ row: i + 1, reason: 'Empty row', orderId: '', fileId: '' });
+        entry.unusable++;
+        continue;
+      }
+      const ts = rowDate_(r[0]);
+      const tsMs = isNaN(ts.getTime()) ? 0 : ts.getTime();
+      if (tsMs && now - tsMs < recentMs) { // still being written by a station
+        const f = String(r[c.fileId] || '').trim();
+        if (validFileId_(f)) keptFileIds[f] = true;
+        continue;
+      }
+      const rawOrder = String(r[c.order] || '').trim();
+      const order = normalizeOrderId_(rawOrder);
+      const fid = String(r[c.fileId] || '').trim();
+      const hasVideo = validFileId_(fid);
+      const finished = upload ? cleanupFinished_(r[c.status]) : true;
+      const progress = c.progress >= 0 ? Number(r[c.progress]) : 100;
+
+      if (!order) {
+        if (!hasVideo) {
+          entry.remove.push({ row: i + 1, reason: 'No order ID and no video', orderId: '', fileId: '' });
+          entry.unusable++;
+        } else {
+          keptFileIds[fid] = true;
+        }
+        continue;
+      }
+      if (upload && !hasVideo && !finished && tsMs && now - tsMs >= unfinishedMs) {
+        entry.remove.push({ row: i + 1, reason: 'Upload never finished, no video', orderId: rawOrder, fileId: '' });
+        entry.unusable++;
+        continue;
+      }
+      const rt = normalize_(c.type >= 0 ? r[c.type] : '') || normalize_(t.defaultType);
+      const key = order + '|' + (rt === 'return' || rt === 'inbound' ? 'return' : 'forward');
+      if (!groups[key]) groups[key] = [];
+      groups[key].push({
+        row: i + 1, orderId: rawOrder, fileId: hasVideo ? fid : '', tsMs: tsMs,
+        finished: finished, full: !(progress < 100), tiny: isTinyVideo_(parseSizeBytes_(r[c.size]))
+      });
+    }
+
+    Object.keys(groups).forEach(function(key) {
+      const rows = groups[key];
+      const preferFile = upload ? keeperFileByRecording[key] : '';
+      const score = function(x) {
+        return (preferFile && x.fileId === preferFile ? 16 : 0) + (x.fileId ? 8 : 0) + (x.finished ? 4 : 0) +
+          (x.full ? 2 : 0) + (x.tiny ? 0 : 1);
+      };
+      rows.sort(function(a, b) { return (score(b) - score(a)) || (b.tsMs - a.tsMs) || (b.row - a.row); });
+      const keeper = rows[0];
+      if (!upload && keeper.fileId) keeperFileByRecording[key] = keeper.fileId;
+      if (keeper.fileId) keptFileIds[keeper.fileId] = true;
+      if (rows.length < 2) return;
+      const removed = rows.slice(1);
+      removed.forEach(function(x) {
+        entry.remove.push({
+          row: x.row,
+          reason: x.fileId && x.fileId !== keeper.fileId ? 'Duplicate (extra video copy)' : 'Duplicate row',
+          orderId: x.orderId, fileId: x.fileId
+        });
+        entry.duplicates++;
+        if (x.fileId && x.fileId !== keeper.fileId) removedFileIds[x.fileId] = true;
+      });
+      plan.groups.push({ sheet: t.name, orderId: keeper.orderId, recordingType: key.split('|')[1] === 'return' ? 'Return' : 'Forward', keepRow: keeper.row, removeRows: removed.length });
+    });
+    entry.remove.sort(function(a, b) { return a.row - b.row; });
+  });
+
+  plan.extraVideoIds = Object.keys(removedFileIds).filter(function(id) { return !keptFileIds[id]; });
+  return plan;
+}
+
+function sheetCleanupSummary_(plan) {
+  const sheets = plan.sheets.map(function(s) {
+    return { name: s.name, rows: s.rows, duplicates: s.duplicates, unusable: s.unusable, remove: s.remove.length };
+  });
+  const reasons = {};
+  plan.sheets.forEach(function(s) { s.remove.forEach(function(x) { reasons[x.reason] = (reasons[x.reason] || 0) + 1; }); });
+  const groups = plan.groups.slice().sort(function(a, b) { return b.removeRows - a.removeRows; });
+  return {
+    sheets: sheets,
+    reasons: reasons,
+    totalRemove: sheets.reduce(function(n, s) { return n + s.remove; }, 0),
+    totalDuplicates: sheets.reduce(function(n, s) { return n + s.duplicates; }, 0),
+    totalUnusable: sheets.reduce(function(n, s) { return n + s.unusable; }, 0),
+    duplicateRecordings: groups.length,
+    extraVideos: plan.extraVideoIds.length,
+    topGroups: groups.slice(0, 100)
+  };
+}
+
+function scanSheetCleanup_(p) {
+  session_(p.token);
+  const out = sheetCleanupSummary_(planSheetCleanup_());
+  out.success = true;
+  out.message = out.totalRemove
+    ? out.totalRemove + ' row(s) can be removed: ' + out.totalDuplicates + ' duplicate, ' + out.totalUnusable + ' unusable.'
+    : 'No duplicate or unusable rows found.';
+  return out;
+}
+
+function cleanupArchiveSheet_(name, headers) {
+  const ss = ss_();
+  const archName = name + ' Archive';
+  let sh = ss.getSheetByName(archName);
+  if (!sh) {
+    sh = ss.insertSheet(archName);
+    sh.getRange(1, 1, 1, headers.length + 2).setValues([['Archived At', 'Reason'].concat(headers)]);
+    try { sh.setFrozenRows(1); } catch (_) {}
+  }
+  return sh;
+}
+
+function runSheetCleanup_(p) {
+  const user = session_(p.token);
+  const budgetMs = p.budgetMs !== undefined && p.budgetMs !== '' ? Math.max(0, Number(p.budgetMs) || 0) : 240000;
+  const trashVideos = p.trashExtraVideos === true;
+  return withScriptLock_(function() {
+    const started = Date.now();
+    const plan = planSheetCleanup_();
+    const before = sheetCleanupSummary_(plan);
+    const removedBySheet = {};
+    let removed = 0;
+    let archived = 0;
+    let outOfTime = false;
+    const now = new Date();
+
+    // Extra video copies first (only when asked), while their rows still exist.
+    let videosTrashed = 0;
+    let videosFailed = 0;
+    if (trashVideos && plan.extraVideoIds.length) {
+      for (let i = 0; i < plan.extraVideoIds.length; i += 50) { // 50 at a time in parallel; quick
+        const res = trashDriveFiles_(plan.extraVideoIds.slice(i, i + 50));
+        Object.keys(res).forEach(function(id) {
+          if (res[id] === 'trashed' || res[id] === 'gone') videosTrashed++; else videosFailed++;
+        });
+      }
+    }
+
+    for (let s = 0; s < plan.sheets.length && !outOfTime; s++) {
+      const entry = plan.sheets[s];
+      if (!entry.remove.length) continue;
+      // Contiguous runs, bottom first, so earlier row numbers stay valid.
+      const runs = [];
+      entry.remove.forEach(function(x) {
+        const last = runs[runs.length - 1];
+        if (last && x.row === last.start + last.items.length) last.items.push(x);
+        else runs.push({ start: x.row, items: [x] });
+      });
+      runs.reverse();
+      const arch = cleanupArchiveSheet_(entry.name, entry.headers);
+      let done = 0;
+      for (let k = 0; k < runs.length; k++) {
+        if (removed + done > 0 && Date.now() - started >= budgetMs) { outOfTime = true; break; }
+        const run = runs[k];
+        const width = entry.headers.length || entry.values[0].length;
+        const rowsOut = run.items.map(function(x) {
+          const orig = entry.values[x.row - 1].slice(0, width);
+          while (orig.length < width) orig.push('');
+          return [now, x.reason].concat(orig);
+        });
+        arch.getRange(arch.getLastRow() + 1, 1, rowsOut.length, width + 2).setValues(rowsOut);
+        archived += rowsOut.length;
+        entry.sh.deleteRows(run.start, run.items.length);
+        done += run.items.length;
+      }
+      if (done) {
+        removedBySheet[entry.name] = done;
+        removed += done;
+      }
+    }
+
+    SpreadsheetApp.flush();
+    const remaining = before.totalRemove - removed;
+    const done = !outOfTime && remaining <= 0;
+    try {
+      sheet_(CONFIG.SECURITY_LOG_SHEET).appendRow([new Date(), user.email, 'SHEET_CLEANUP', 'SUCCESS',
+        'rowsRemoved=' + removed + ' archived=' + archived + ' videosTrashed=' + videosTrashed + ' ' + JSON.stringify(removedBySheet)]);
+    } catch (_) {}
+    return {
+      success: true,
+      done: done,
+      removedRowsCount: removed,
+      archivedRowsCount: archived,
+      removedBySheet: removedBySheet,
+      remainingRows: Math.max(0, remaining),
+      videosTrashedCount: videosTrashed,
+      videosFailedCount: videosFailed,
+      message: removed + ' row(s) removed and copied to the Archive tabs' +
+        (trashVideos ? ', ' + videosTrashed + ' extra video copies moved to Drive Trash' : '') + '.'
+    };
+  });
+}
