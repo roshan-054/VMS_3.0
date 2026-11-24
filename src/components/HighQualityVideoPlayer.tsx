@@ -21,6 +21,7 @@ import {
   RotateCw,
   Move
 } from 'lucide-react';
+import { getOriginalVideoUrl } from '../lib/videoFetch';
 
 interface HighQualityVideoPlayerProps {
   fileId?: string;
@@ -44,9 +45,43 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
   showTopBar = false,
 }) => {
   const hasLocalBlob = Boolean(localBlobUrl);
-  const [playerMode, setPlayerMode] = useState<'local_master' | 'drive_hd'>(
-    hasLocalBlob ? 'local_master' : 'drive_hd'
+  // local_master: this station's own copy. original: the uploaded file itself, downloaded from
+  // Drive at full resolution. drive_hd: Google Drive's preview player (re-encoded, lower quality).
+  const [playerMode, setPlayerMode] = useState<'local_master' | 'original' | 'drive_hd'>(
+    hasLocalBlob ? 'local_master' : fileId ? 'original' : 'drive_hd'
   );
+  const [originalUrl, setOriginalUrl] = useState<string>('');
+  const [originalProgress, setOriginalProgress] = useState<{ loaded: number; total: number }>({ loaded: 0, total: 0 });
+  const [originalError, setOriginalError] = useState<string>('');
+  const [videoSize, setVideoSize] = useState<{ w: number; h: number } | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
+
+  useEffect(() => {
+    setPlayerMode(hasLocalBlob ? 'local_master' : fileId ? 'original' : 'drive_hd');
+    setOriginalUrl('');
+    setOriginalError('');
+    setOriginalProgress({ loaded: 0, total: 0 });
+    setVideoSize(null);
+  }, [fileId, localBlobUrl]);
+
+  useEffect(() => {
+    if (playerMode !== 'original' || !fileId || originalUrl) return;
+    let alive = true;
+    setOriginalError('');
+    const { url, unsubscribe } = getOriginalVideoUrl(fileId, (loaded, total) => {
+      if (alive) setOriginalProgress({ loaded, total });
+    });
+    url
+      .then((u) => alive && setOriginalUrl(u))
+      .catch((err: any) => alive && setOriginalError(err?.message || 'Could not load the full-quality video.'));
+    return () => {
+      alive = false;
+      unsubscribe();
+    };
+  }, [playerMode, fileId, originalUrl, retryKey]);
+
+  const nativeSrc = playerMode === 'local_master' ? localBlobUrl || '' : playerMode === 'original' ? originalUrl : '';
+  const isNative = playerMode !== 'drive_hd';
 
   // Native Local Video Player State
   const [isPlaying, setIsPlaying] = useState(autoPlay);
@@ -163,7 +198,20 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
   const handleLoadedMetadata = () => {
     if (videoRef.current) {
       setDuration(videoRef.current.duration);
+      setVideoSize({ w: videoRef.current.videoWidth, h: videoRef.current.videoHeight });
     }
+  };
+
+  const switchMode = (mode: 'local_master' | 'original' | 'drive_hd') => {
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
+    setVideoSize(null);
+    if (mode === 'original') {
+      setOriginalError('');
+      setRetryKey((k) => k + 1);
+    }
+    setPlayerMode(mode);
   };
 
   const handleTimeUpdate = () => {
@@ -258,7 +306,7 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
       }`}
     >
       {/* Optional Top Stream Selector Bar */}
-      {(showTopBar || hasLocalBlob) && (
+      {(showTopBar || hasLocalBlob || fileId) && (
         <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 shrink-0 z-30">
           <div className="flex items-center gap-2 min-w-0">
             <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
@@ -267,10 +315,11 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
             </span>
           </div>
 
-          {hasLocalBlob && (
-            <div className="bg-slate-950 p-0.5 rounded-xl border border-slate-800 flex items-center">
+          {(hasLocalBlob || fileId) && (
+            <div className="bg-slate-950 p-0.5 rounded-xl border border-slate-800 flex items-center" id="player-source-switch">
+              {hasLocalBlob && (
               <button
-                onClick={() => setPlayerMode('local_master')}
+                onClick={() => switchMode('local_master')}
                 className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1.5 transition cursor-pointer ${
                   playerMode === 'local_master'
                     ? 'bg-emerald-600 text-white shadow-xs'
@@ -281,10 +330,28 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
                 <Sparkles className="w-3 h-3 text-amber-300" />
                 Local HD Master
               </button>
+              )}
 
               {fileId && (
                 <button
-                  onClick={() => setPlayerMode('drive_hd')}
+                  id="player-mode-original"
+                  onClick={() => switchMode('original')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1.5 transition cursor-pointer ${
+                    playerMode === 'original'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                  title="Play the original uploaded file at its full recorded resolution"
+                >
+                  <Sparkles className="w-3 h-3 text-amber-300" />
+                  Full quality
+                </button>
+              )}
+
+              {fileId && (
+                <button
+                  id="player-mode-drive"
+                  onClick={() => switchMode('drive_hd')}
                   className={`px-2.5 py-1 rounded-lg text-[11px] font-medium flex items-center gap-1.5 transition cursor-pointer ${
                     playerMode === 'drive_hd'
                       ? 'bg-blue-600 text-white shadow-xs'
@@ -293,7 +360,7 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
                   title="Google Drive Cloud Player"
                 >
                   <Film className="w-3 h-3" />
-                  Drive Cloud
+                  Drive preview
                 </button>
               )}
             </div>
@@ -325,19 +392,55 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
             transitionDuration: isDragging ? '0ms' : '150ms',
           }}
         >
-          {playerMode === 'local_master' && hasLocalBlob ? (
+          {isNative && nativeSrc ? (
             <video
               ref={videoRef}
-              src={localBlobUrl}
+              id="hq-player-video"
+              src={nativeSrc}
               crossOrigin="anonymous"
               playsInline
               autoPlay={autoPlay}
               onLoadedMetadata={handleLoadedMetadata}
               onTimeUpdate={handleTimeUpdate}
               onEnded={() => setIsPlaying(false)}
+              onPlay={() => setIsPlaying(true)}
+              onPause={() => setIsPlaying(false)}
               onClick={zoom === 1 ? handlePlayPause : undefined}
               className="w-full h-full object-contain pointer-events-auto"
             />
+          ) : playerMode === 'original' && fileId ? (
+            <div className="p-8 text-center space-y-3 w-full max-w-md" id="hq-player-loading">
+              {originalError ? (
+                <>
+                  <AlertCircle className="w-10 h-10 text-amber-400 mx-auto" />
+                  <h4 className="text-sm font-bold text-white">Full-quality video could not be loaded</h4>
+                  <p className="text-xs text-slate-400">{originalError}</p>
+                  <div className="flex justify-center gap-2">
+                    <button onClick={() => switchMode('original')} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-xs font-bold cursor-pointer">Try again</button>
+                    <button onClick={() => switchMode('drive_hd')} className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs font-bold cursor-pointer">Use Drive preview</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <Loader2 className="w-8 h-8 text-emerald-400 mx-auto animate-spin" />
+                  <h4 className="text-sm font-bold text-white">Loading the original video at full quality…</h4>
+                  <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-emerald-500 transition-all"
+                      style={{ width: `${originalProgress.total ? Math.round((originalProgress.loaded / originalProgress.total) * 100) : 0}%` }}
+                    />
+                  </div>
+                  <p className="text-[11px] text-slate-400 font-mono">
+                    {originalProgress.total
+                      ? `${(originalProgress.loaded / 1048576).toFixed(1)} of ${(originalProgress.total / 1048576).toFixed(1)} MB`
+                      : 'Connecting to Google Drive…'}
+                  </p>
+                  <button onClick={() => switchMode('drive_hd')} className="text-[11px] text-slate-400 underline cursor-pointer">
+                    Watch the Drive preview instead (lower quality, starts faster)
+                  </button>
+                </>
+              )}
+            </div>
           ) : fileId ? (
             <div className="relative w-full h-full">
               <iframe
@@ -372,7 +475,9 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
           <div className="bg-slate-950/85 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-700/80 text-[11px] font-mono text-emerald-400 flex items-center gap-2 shadow-xl pointer-events-none">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
             <span className="font-bold">
-              {playerMode === 'local_master' ? '1080p Master Stream' : 'Drive HD Cloud Stream'}
+              {playerMode === 'drive_hd'
+                ? 'Drive preview (re-encoded by Google)'
+                : `${playerMode === 'local_master' ? 'Station copy' : 'Original file'}${videoSize?.w ? ` · ${videoSize.w}×${videoSize.h}` : ''}`}
             </span>
           </div>
 
@@ -397,7 +502,7 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
       {/* Playback & Action Toolbar */}
       <div className="bg-slate-900/95 backdrop-blur-md border-t border-slate-800 p-3 sm:p-4 space-y-3 shrink-0 z-20">
         {/* Local Master Video Timeline Scrubber */}
-        {playerMode === 'local_master' && (
+        {isNative && nativeSrc && (
           <div className="space-y-1">
             <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
               <span className="text-emerald-400 font-bold">{formatTime(currentTime, true)}</span>
@@ -418,7 +523,7 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
         {/* Primary Action Row */}
         <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
           {/* Playback Controls (when local master is active) */}
-          {playerMode === 'local_master' ? (
+          {isNative && nativeSrc ? (
             <div className="flex items-center gap-1.5">
               <button
                 onClick={handlePlayPause}
@@ -502,7 +607,7 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
             <div className="flex items-center gap-2">
               <span className="text-slate-400 text-xs flex items-center gap-1.5 font-medium">
                 <Film className="w-4 h-4 text-blue-400" />
-                <span>Google Drive Stream Active</span>
+                <span>{playerMode === 'drive_hd' ? 'Google Drive preview' : 'Loading full quality…'}</span>
               </span>
             </div>
           )}
@@ -543,17 +648,17 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
             </div>
 
             {/* Download MP4 Button */}
-            {fileId && (
+            {(fileId || nativeSrc) && (
               <a
-                href={directDriveDownloadUrl}
-                target="_blank"
+                href={nativeSrc || directDriveDownloadUrl}
+                target={nativeSrc ? undefined : '_blank'}
                 rel="noreferrer"
                 download={fileName}
                 className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white text-xs font-semibold rounded-xl border border-slate-700 transition flex items-center gap-1.5 cursor-pointer"
                 title="Download MP4 video file"
               >
                 <Download className="w-4 h-4 text-slate-400" />
-                <span className="hidden sm:inline">Download MP4</span>
+                <span className="hidden sm:inline">Download</span>
               </a>
             )}
 
