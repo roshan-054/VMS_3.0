@@ -137,11 +137,11 @@ function doPost(e) {
       case 'saveBranding': return output_(saveBrandingConfig_(p));
       case 'uploadBrandingImage': return output_(uploadBrandingImage_(p));
       case 'getDriveFileSize': return output_(getDriveFileSize_(p));
-      case 'saveOrderManifest': return output_(saveOrderManifest_(p));
-      case 'saveOrderManifestsBatch': return output_(saveOrderManifestsBatch_(p));
+      case 'saveOrderManifest': return output_(manifestWrite_(saveOrderManifest_(p)));
+      case 'saveOrderManifestsBatch': return output_(manifestWrite_(saveOrderManifestsBatch_(p)));
       case 'getOrderManifests': return output_(getOrderManifests_(p));
-      case 'updateManifestStatus': return output_(updateManifestStatus_(p));
-      case 'deleteOrderManifest': return output_(deleteOrderManifest_(p));
+      case 'updateManifestStatus': return output_(manifestWrite_(updateManifestStatus_(p)));
+      case 'deleteOrderManifest': return output_(manifestWrite_(deleteOrderManifest_(p)));
       case 'logPackVerification': return output_(logPackVerification_(p));
       case 'getPackVerificationLogs': return output_(getPackVerificationLogs_(p));
       case 'getGtinCatalog': return output_(getGtinCatalog_(p));
@@ -4392,7 +4392,39 @@ function safeIsoDate_(val) {
   }
 }
 
+/* ---------- Manifest change stamp ----------
+ * Every station polls the order list. Instead of re-reading the whole OrderManifest sheet each
+ * time, a station sends the stamp it already has; if nothing was written since, the answer is
+ * a tiny "unchanged". (Stations still do a full read every couple of minutes, which also picks
+ * up rows edited by hand in the sheet.)
+ */
+var MANIFEST_VERSION_KEY_ = 'MANIFEST_VERSION';
+
+function manifestVersion_() {
+  var v = PropertiesService.getScriptProperties().getProperty(MANIFEST_VERSION_KEY_);
+  if (!v) {
+    v = String(Date.now());
+    PropertiesService.getScriptProperties().setProperty(MANIFEST_VERSION_KEY_, v);
+  }
+  return v;
+}
+
+function bumpManifestVersion_() {
+  PropertiesService.getScriptProperties().setProperty(MANIFEST_VERSION_KEY_, String(Date.now()) + '-' + Math.floor(Math.random() * 100000));
+}
+
+function manifestWrite_(res) {
+  if (!res || res.success !== false) bumpManifestVersion_();
+  if (res && typeof res === 'object') res.version = manifestVersion_();
+  return res;
+}
+
 function getOrderManifests_(p) {
+  p = p || {};
+  var version = manifestVersion_();
+  if (p.sinceVersion && String(p.sinceVersion) === version) {
+    return { success: true, unchanged: true, version: version };
+  }
   try {
     var sh = getManifestSheet_();
     var data = sh.getDataRange().getValues();
@@ -4423,7 +4455,7 @@ function getOrderManifests_(p) {
       });
     }
 
-    return { success: true, manifests: manifests };
+    return { success: true, manifests: manifests, version: version };
   } catch (err) {
     return { success: false, error: 'Could not parse manifests: ' + err.message, manifests: [] };
   }

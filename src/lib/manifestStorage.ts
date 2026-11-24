@@ -1420,10 +1420,27 @@ let isGlobalSyncing = false;
  * Real-Time Cloud Sync: Fetch live manifest orders from Google Sheet ("Manifest_Orders" tab)
  * Allows Admin and Packers to see real-time order creation, status changes, and completion.
  */
-export async function syncManifestsWithCloud(): Promise<{ success: boolean; manifests?: OrderManifest[]; error?: string }> {
+// Change stamp of the last full manifest read (see getOrderManifests_ in Code.gs).
+let lastManifestVersion = '';
+let lastFullManifestReadAt = 0;
+const FULL_MANIFEST_READ_EVERY_MS = 120000;
+
+export async function syncManifestsWithCloud(
+  opts: { force?: boolean } = {}
+): Promise<{ success: boolean; manifests?: OrderManifest[]; error?: string; unchanged?: boolean }> {
   try {
-    const res = await requestApi<{ success: boolean; manifests?: OrderManifest[]; error?: string }>('getOrderManifests', {});
+    const askIfChanged = !opts.force && lastManifestVersion && Date.now() - lastFullManifestReadAt < FULL_MANIFEST_READ_EVERY_MS;
+    const res = await requestApi<{ success: boolean; manifests?: OrderManifest[]; error?: string; unchanged?: boolean; version?: string }>(
+      'getOrderManifests',
+      askIfChanged ? { sinceVersion: lastManifestVersion } : {}
+    );
+    if (res && res.success && res.unchanged) {
+      // Nothing changed on the server: skip the download, merge and re-render.
+      return { success: true, manifests: getStoredManifests(), unchanged: true };
+    }
     if (res && res.success && Array.isArray(res.manifests)) {
+      lastManifestVersion = res.version || '';
+      lastFullManifestReadAt = Date.now();
       const deletedSet = getDeletedManifestIds();
       
       const cloudManifests = res.manifests.filter((m) => m.orderId && !deletedSet.has(m.orderId.toLowerCase().trim()));
@@ -1487,14 +1504,16 @@ export async function syncManifestsWithCloud(): Promise<{ success: boolean; mani
 
 /**
  * Global Real-Time Background Manifest Sync Loop:
- * Polls Google Sheets every 5 seconds across all tabs & screens.
+ * Polls Google Sheets in the background; most polls are a tiny "unchanged?" check.
  */
 export function startGlobalManifestSyncLoop(intervalMs = 15000): () => void {
   if (globalSyncTimer) return () => {};
 
   const doSync = async () => {
-    // Never parse/merge the full manifest list while a packing video is being recorded.
+    // Never parse/merge the full manifest list while a packing video is being recorded,
+    // and don't poll from a hidden/minimised tab (it syncs again as soon as it is shown).
     if (isGlobalSyncing || isStationRecording()) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
     isGlobalSyncing = true;
     try {
       await syncManifestsWithCloud();
@@ -1507,7 +1526,6 @@ export function startGlobalManifestSyncLoop(intervalMs = 15000): () => void {
   // Immediate sync on load
   doSync();
 
-  // Fast periodic polling (5 seconds)
   globalSyncTimer = setInterval(doSync, intervalMs);
 
   const handleFocus = () => {
