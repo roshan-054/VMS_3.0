@@ -5,7 +5,7 @@
  * so the live Sheet, Drive and Apps Script are never touched.
  */
 // @ts-nocheck
-import codeGs from '../../backend/Code.gs?raw';
+import makeBackend from 'virtual:code-gs-factory';
 
 const STORE_KEY = 'vms_demo_backend_v1';
 
@@ -168,8 +168,7 @@ const services = {
   Logger: { log() {} },
   DriveApp: noop(), Drive: noop(), ScriptApp: noop(), UrlFetchApp: noop(),
 };
-const names = Object.keys(services);
-const backend = new Function(...names, `${codeGs}\n;return { doPost };`)(...names.map((n) => services[n]));
+const backend = makeBackend(services);
 
 // ---------- route Apps Script calls into the demo backend ----------
 const realFetch = window.fetch.bind(window);
