@@ -13,6 +13,7 @@ import {
 } from './storage';
 import { requestApi, checkDuplicate, normalizeOrderId, cleanupStuckUploads } from './api';
 import { updateManifestStatus } from './manifestStorage';
+import { setStationRecording } from './recordingState';
 
 export type WorkerToastHandler = (msg: string, type: 'info' | 'success' | 'error') => void;
 
@@ -39,6 +40,7 @@ const deletedItemIds = new Set<string>();
  */
 export function setRecordingInProgress(active: boolean): void {
   isRecordingInProgress = active;
+  setStationRecording(active);
   if (!active) {
     while (recordingResumeResolvers.length > 0) {
       const resolve = recordingResumeResolvers.shift();

@@ -3,6 +3,7 @@ import { hasStationServer } from './serverFeatures';
 import { requestApi, normalizeOrderId, checkDuplicate } from './api';
 import { dbGetAllQueue } from './storage';
 import { getDirectImageUrl } from './branding';
+import { isStationRecording } from './recordingState';
 
 const STORAGE_KEY_MANIFESTS = 'vms_order_manifests_v1';
 const STORAGE_KEY_GTIN_CATALOG = 'vms_gtin_catalog_v1';
@@ -1523,7 +1524,8 @@ export function startGlobalManifestSyncLoop(intervalMs = 15000): () => void {
   if (globalSyncTimer) return () => {};
 
   const doSync = async () => {
-    if (isGlobalSyncing) return;
+    // Never parse/merge the full manifest list while a packing video is being recorded.
+    if (isGlobalSyncing || isStationRecording()) return;
     isGlobalSyncing = true;
     try {
       await syncManifestsWithCloud();

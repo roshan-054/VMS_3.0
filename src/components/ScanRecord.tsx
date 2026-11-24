@@ -43,6 +43,8 @@ import { PlatformType, RecordingType, QueueItem, OrderManifest, ManifestItem, Us
 import { dbPutQueue, getStoredMaxVideoSizeMb, getStoredVideoBitrate } from '../lib/storage';
 import { requestApi, normalizeOrderId, checkDuplicate } from '../lib/api';
 import { triggerUploadWorker, setRecordingInProgress } from '../lib/uploadWorker';
+import { LiveClock, ElapsedTimer, RecordedSize } from './RecordingIndicators';
+import { startRecordingSession, prepareCameraFeed, releaseCameraFeed, type RecordingSession, type RecordingResult } from '../lib/recordingPipeline';
 import { sharedAiFocusEngine, FocusMode, FocusState } from '../lib/aiFocusEngine';
 import { PhoneScannerModal } from './PhoneScannerModal';
 import { sharedScannerSync } from '../lib/phoneScannerSync';
@@ -91,8 +93,8 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [cameraDevices, setCameraDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
-  const [recSeconds, setRecSeconds] = useState(0);
-  const [estimatedSizeMb, setEstimatedSizeMb] = useState(0);
+  const [recStartedAt, setRecStartedAt] = useState<number | null>(null);
+  const recordedBytesRef = useRef<number>(0);
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'info' | 'success' | 'error' } | null>(null);
   const [cameraPermissionError, setCameraPermissionError] = useState<string | null>(null);
   const [isBarcodeMode, setIsBarcodeMode] = useState(false);
@@ -110,25 +112,19 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const canvasStreamRef = useRef<MediaStream | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const recordedChunksRef = useRef<Blob[]>([]);
-  const totalRecordedBytesRef = useRef<number>(0);
-  const timerIntervalRef = useRef<number | null>(null);
+  const recordingSessionRef = useRef<RecordingSession | null>(null);
+  const releaseCameraAfterSaveRef = useRef<boolean>(false);
   const barcodeBufferRef = useRef<string>('');
   const barcodeTimeRef = useRef<number>(0);
-  const renderWorkerRef = useRef<Worker | null>(null);
-  const fallbackIntervalRef = useRef<number | null>(null);
   const wakeLockRef = useRef<any>(null);
 
-  // Live refs used inside the 30 FPS worker loop to avoid effect teardowns or 60 FPS React re-renders
+  // Live refs read from timers/callbacks without re-running effects
   const isCameraActiveRef = useRef<boolean>(false);
   const isRecordingRef = useRef<boolean>(false);
   const aiFocusEnabledRef = useRef<boolean>(aiFocusEnabled);
   aiFocusEnabledRef.current = aiFocusEnabled;
 
-  // Locked canvas dimensions & snapshotted order metadata for the active recording session
-  const recordingLockedDimsRef = useRef<{ width: number; height: number } | null>(null);
+  // Snapshotted order metadata for the active recording session
   const recordingMetaRef = useRef<{
     orderId: string;
     effectivePlatform: string;
@@ -144,15 +140,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     } | null;
   } | null>(null);
 
-  // Cached OSD timestamp text & AI preview UI throttle
-  const lastOsdSecondRef = useRef<number>(-1);
-  const lastOsdTextRef = useRef<string>('');
-  const lastOsdWidthRef = useRef<number>(0);
-  const lastOsdFontRef = useRef<string>('');
-  const lastAiUiUpdateRef = useRef<number>(0);
-  const lastVideoPlayCheckRef = useRef<number>(0);
   const bypassDuplicateRef = useRef<boolean>(false);
-  const [currentLiveTime, setCurrentLiveTime] = useState<string>('');
 
   // Live duplicate inspection per recording type
   const [duplicateStatus, setDuplicateStatus] = useState<{
@@ -443,22 +431,11 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       setRecordingInProgress(false);
       isRecordingRef.current = false;
       isCameraActiveRef.current = false;
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current);
-        timerIntervalRef.current = null;
+      if (recordingSessionRef.current) {
+        recordingSessionRef.current.stop().catch(() => {});
+        recordingSessionRef.current = null;
       }
-      if (renderWorkerRef.current) {
-        renderWorkerRef.current.terminate();
-        renderWorkerRef.current = null;
-      }
-      if (fallbackIntervalRef.current) {
-        clearInterval(fallbackIntervalRef.current);
-        fallbackIntervalRef.current = null;
-      }
-      if (canvasStreamRef.current) {
-        canvasStreamRef.current.getTracks().forEach((track) => track.stop());
-        canvasStreamRef.current = null;
-      }
+      releaseCameraFeed();
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
@@ -470,18 +447,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     };
   }, []);
 
-  // Update live clock for HUD every second
-  useEffect(() => {
-    const updateTime = () => {
-      const d = new Date();
-      const dateStr = d.toLocaleDateString('en-CA'); // YYYY-MM-DD
-      const timeStr = d.toLocaleTimeString('en-GB', { hour12: false }); // HH:MM:SS
-      setCurrentLiveTime(`${dateStr} ${timeStr}`);
-    };
-    updateTime();
-    const interval = setInterval(updateTime, 1000);
-    return () => clearInterval(interval);
-  }, []);
 
   // Continuous vision detector ticker: samples video frame during preview only (paused during active recording to guarantee 0 frame drops)
   useEffect(() => {
@@ -495,177 +460,44 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     return () => clearInterval(interval);
   }, [isCameraActive, aiFocusEnabled]);
 
-  // Helper to paint a single OSD-watermarked frame onto the recording canvas (used both by the 30 FPS worker and pre-capture init)
-  const paintCanvasFrame = () => {
-    const canvas = canvasRef.current;
-    const video = videoRef.current;
-    if (!canvas || !video || !isCameraActiveRef.current || video.readyState < 2) return;
-
-    const vWidth = video.videoWidth;
-    const vHeight = video.videoHeight;
-    if (!vWidth || !vHeight) return;
-
-    // Keep the video decoder alive if the browser tries to pause it when window loses focus
-    const nowMs = Date.now();
-    if (video.paused && !video.ended && nowMs - lastVideoPlayCheckRef.current > 1000) {
-      lastVideoPlayCheckRef.current = nowMs;
-      video.play().catch(() => {});
-    }
-
-    const ctx = canvas.getContext('2d', { alpha: false });
-    if (!ctx) return;
-
-    const lockedDims = recordingLockedDimsRef.current;
-    const targetW = lockedDims ? lockedDims.width : (Math.min(1920, vWidth) & ~1);
-    const targetH = lockedDims ? lockedDims.height : (Math.min(1080, vHeight) & ~1);
-
-    if (!lockedDims && (canvas.width !== targetW || canvas.height !== targetH)) {
-      canvas.width = targetW;
-      canvas.height = targetH;
-      lastOsdSecondRef.current = -1;
-    }
-
-    const activeRecording = isRecordingRef.current;
-
-    // 1. Draw full uncropped video frame (zero React re-renders & zero hardware lens resets while recording)
-    if (aiFocusEnabledRef.current && !activeRecording) {
-      const fState = sharedAiFocusEngine.renderFrameToCanvas(video, canvas, ctx, false);
-      if (nowMs - lastAiUiUpdateRef.current >= 350) {
-        lastAiUiUpdateRef.current = nowMs;
-        setAiFocusState((prev) => {
-          if (
-            prev &&
-            prev.detectedType === fState.detectedType &&
-            prev.label === fState.label &&
-            prev.confidence === fState.confidence &&
-            Math.abs(prev.boundingBox.x - fState.boundingBox.x) < 0.01 &&
-            Math.abs(prev.boundingBox.y - fState.boundingBox.y) < 0.01
-          ) {
-            return prev;
-          }
-          return fState;
-        });
-      }
-      if (streamRef.current) {
-        const track = streamRef.current.getVideoTracks()[0];
-        sharedAiFocusEngine.applyHardwarePoi(track, false);
-      }
-    } else {
-      const needsScaling = vWidth !== canvas.width || vHeight !== canvas.height;
-      ctx.imageSmoothingEnabled = needsScaling;
-      if (needsScaling) {
-        ctx.imageSmoothingQuality = 'medium';
-      }
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    }
-
-    // 2. Proportional scale based on locked canvas width
-    const cw = canvas.width;
-    const ch = canvas.height;
-    const scale = Math.max(0.8, cw / 1280);
-    const fontSize = Math.round(18 * scale);
-    const fontStr = `600 ${fontSize}px "SF Mono", "Consolas", "Menlo", "Courier New", monospace`;
-    ctx.font = fontStr;
-    ctx.textBaseline = 'top';
-
-    // Cache formatted timestamp & width once per second instead of every frame
-    const epochSec = Math.floor(nowMs / 1000);
-    if (epochSec !== lastOsdSecondRef.current || fontStr !== lastOsdFontRef.current) {
-      const now = new Date(nowMs);
-      const yyyy = now.getFullYear();
-      const mm = String(now.getMonth() + 1).padStart(2, '0');
-      const dd = String(now.getDate()).padStart(2, '0');
-      const hh = String(now.getHours()).padStart(2, '0');
-      const min = String(now.getMinutes()).padStart(2, '0');
-      const ss = String(now.getSeconds()).padStart(2, '0');
-      const fullDateTimeStr = `${yyyy}-${mm}-${dd}  ${hh}:${min}:${ss}`;
-
-      lastOsdSecondRef.current = epochSec;
-      lastOsdTextRef.current = fullDateTimeStr;
-      lastOsdFontRef.current = fontStr;
-      lastOsdWidthRef.current = ctx.measureText(fullDateTimeStr).width;
-    }
-
-    const paddingX = Math.round(10 * scale);
-    const paddingY = Math.round(6 * scale);
-    const margin = Math.round(16 * scale);
-
-    // --- TOP RIGHT: Real CCTV Timestamp OSD (no expensive per-frame shadowBlur) ---
-    const timeBoxWidth = lastOsdWidthRef.current + paddingX * 2;
-    const timeBoxHeight = fontSize + paddingY * 2;
-    const timeBoxX = cw - timeBoxWidth - margin;
-    const timeBoxY = margin;
-
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.62)';
-    ctx.fillRect(timeBoxX, timeBoxY, timeBoxWidth, timeBoxHeight);
-
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillText(lastOsdTextRef.current, timeBoxX + paddingX, timeBoxY + paddingY);
-
-    // --- BOTTOM RIGHT (If Recording): Clean REC indicator ---
-    if (activeRecording) {
-      const recText = '● REC';
-      const recWidth = ctx.measureText(recText).width;
-      const recBoxWidth = recWidth + paddingX * 2;
-      const recBoxHeight = fontSize + paddingY * 2;
-      const recBoxX = cw - recBoxWidth - margin;
-      const recBoxY = ch - recBoxHeight - margin;
-
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.68)';
-      ctx.fillRect(recBoxX, recBoxY, recBoxWidth, recBoxHeight);
-
-      ctx.fillStyle = '#EF4444';
-      ctx.fillText(recText, recBoxX + paddingX, recBoxY + paddingY);
-    }
-  };
-
-  // Continuous 30 FPS Web Worker Canvas Frame & Timestamp Watermark Renderer
-  // Uses a Web Worker timer instead of requestAnimationFrame so frames NEVER stall or skip when unfocused/backgrounded,
-  // and mounts once so starting/stopping recording never tears down the render pipeline.
+  // AI auto-focus preview: update the on-screen focus reticle a few times per second while idle.
+  // (The old design repainted a hidden 1080p canvas 30x/second on the main thread even when not
+  // recording; recording now happens in a worker, so the page stays light.)
   useEffect(() => {
-    let workerUrl: string | null = null;
-    try {
-      const workerCode = `
-        let timer = null;
-        self.onmessage = function(e) {
-          if (e.data === 'start') {
-            if (timer) clearInterval(timer);
-            timer = setInterval(() => self.postMessage(0), 1000 / 30);
-          } else if (e.data === 'stop') {
-            if (timer) clearInterval(timer);
-            timer = null;
-          }
-        };
-      `;
-      const blob = new Blob([workerCode], { type: 'application/javascript' });
-      workerUrl = URL.createObjectURL(blob);
-      const worker = new Worker(workerUrl);
-      renderWorkerRef.current = worker;
-      worker.onmessage = () => {
-        paintCanvasFrame();
-      };
-      worker.postMessage('start');
-    } catch {
-      fallbackIntervalRef.current = window.setInterval(() => {
-        paintCanvasFrame();
-      }, 33);
-    }
+    if (!isCameraActive || !aiFocusEnabled) return;
+    const id = window.setInterval(() => {
+      if (isRecordingRef.current) return;
+      const video = videoRef.current;
+      if (!video || video.readyState < 2) return;
+      const fState = sharedAiFocusEngine.stepPreview();
+      setAiFocusState((prev) => {
+        if (
+          prev &&
+          prev.detectedType === fState.detectedType &&
+          prev.label === fState.label &&
+          prev.confidence === fState.confidence &&
+          Math.abs(prev.boundingBox.x - fState.boundingBox.x) < 0.01 &&
+          Math.abs(prev.boundingBox.y - fState.boundingBox.y) < 0.01
+        ) {
+          return prev;
+        }
+        return fState;
+      });
+      const track = streamRef.current?.getVideoTracks()[0];
+      if (track) sharedAiFocusEngine.applyHardwarePoi(track, false);
+    }, 200);
+    return () => clearInterval(id);
+  }, [isCameraActive, aiFocusEnabled]);
 
-    return () => {
-      if (renderWorkerRef.current) {
-        renderWorkerRef.current.postMessage('stop');
-        renderWorkerRef.current.terminate();
-        renderWorkerRef.current = null;
-      }
-      if (workerUrl) {
-        URL.revokeObjectURL(workerUrl);
-      }
-      if (fallbackIntervalRef.current) {
-        clearInterval(fallbackIntervalRef.current);
-        fallbackIntervalRef.current = null;
-      }
-    };
-  }, []);
+  // Keep the preview decoder running if the browser pauses it (e.g. after the window loses focus)
+  useEffect(() => {
+    if (!isCameraActive) return;
+    const id = window.setInterval(() => {
+      const video = videoRef.current;
+      if (video && video.paused && !video.ended && video.srcObject) video.play().catch(() => {});
+    }, 1000);
+    return () => clearInterval(id);
+  }, [isCameraActive]);
 
   // Discover connected camera devices
   const loadDevices = async () => {
@@ -957,6 +789,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       }
 
       streamRef.current = newStream;
+      prepareCameraFeed(newStream.getVideoTracks()[0]);
       isCameraActiveRef.current = true;
       setIsCameraActive(true);
       setCameraPermissionError(null);
@@ -1015,10 +848,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   };
 
   const releaseCameraTracks = () => {
-    if (canvasStreamRef.current) {
-      canvasStreamRef.current.getTracks().forEach((t) => t.stop());
-      canvasStreamRef.current = null;
-    }
+    releaseCameraFeed();
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
@@ -1033,6 +863,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   const stopCamera = () => {
     if (isRecordingRef.current) {
       // Let stopRecording -> handleFinishRecording flush trailing frames cleanly before closing hardware tracks
+      releaseCameraAfterSaveRef.current = true;
       stopRecording();
       return;
     }
@@ -1040,8 +871,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     releaseWakeLock();
     setRecordingInProgress(false);
     setIsRecording(false);
-    setRecSeconds(0);
-    setEstimatedSizeMb(0);
+    setRecStartedAt(null);
     setStatusMessage(null);
   };
 
@@ -1169,38 +999,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     onShowToast(nextState ? 'Microphone enabled' : 'Microphone disabled (muted)', 'info');
   };
 
-  const chooseMimeType = (hasAudio: boolean): string => {
-    // Use H.264 Level 4.0 (avc1.4d4028 / avc1.640028 / avc1.42E028) which supports 1080p30 properly,
-    // and prefer hardware-accelerated H.264 or real-time VP8 over slow software VP9.
-    // Match codec string strictly to whether an audio track is actually attached.
-    const candidates = hasAudio
-      ? [
-          'video/mp4;codecs=avc1.4d4028,mp4a.40.2',
-          'video/mp4;codecs=avc1.640028,mp4a.40.2',
-          'video/mp4;codecs=avc1.42E028,mp4a.40.2',
-          'video/webm;codecs=h264,opus',
-          'video/webm;codecs=vp8,opus',
-          'video/mp4',
-          'video/webm',
-        ]
-      : [
-          'video/mp4;codecs=avc1.4d4028',
-          'video/mp4;codecs=avc1.640028',
-          'video/mp4;codecs=avc1.42E028',
-          'video/webm;codecs=h264',
-          'video/webm;codecs=vp8',
-          'video/mp4',
-          'video/webm',
-        ];
-
-    if (typeof MediaRecorder !== 'undefined' && typeof MediaRecorder.isTypeSupported === 'function') {
-      for (const t of candidates) {
-        if (MediaRecorder.isTypeSupported(t)) return t;
-      }
-    }
-    return '';
-  };
-
   const startRecording = async () => {
     if (isRecordingRef.current) return;
 
@@ -1266,164 +1064,113 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       // Wake Lock is optional and silently skipped if unavailable
     }
 
-    recordedChunksRef.current = [];
-    totalRecordedBytesRef.current = 0;
-
     // Determine if live enabled microphone audio tracks are actually attached
     const activeAudioTracks =
       streamRef.current && audioEnabled
         ? streamRef.current.getAudioTracks().filter((track) => track.enabled && track.readyState === 'live')
         : [];
-    const hasAudio = activeAudioTracks.length > 0;
-    const mimeType = chooseMimeType(hasAudio);
-
-    // Pre-size and lock even-numbered canvas dimensions BEFORE calling captureStream(30) so the encoder never resets mid-stream
-    let recordStream: MediaStream = streamRef.current;
-    if (canvasRef.current && typeof canvasRef.current.captureStream === 'function') {
-      try {
-        const vW = videoRef.current?.videoWidth || cameraResolution.width || 1280;
-        const vH = videoRef.current?.videoHeight || cameraResolution.height || 720;
-        // Cap at 1920x1080 and force even dimensions (required by H.264 YUV420 hardware encoders)
-        const scaleDown = Math.min(1, 1920 / vW, 1080 / vH);
-        const lockedW = Math.max(2, Math.floor(vW * scaleDown) & ~1);
-        const lockedH = Math.max(2, Math.floor(vH * scaleDown) & ~1);
-
-        canvasRef.current.width = lockedW;
-        canvasRef.current.height = lockedH;
-        recordingLockedDimsRef.current = { width: lockedW, height: lockedH };
-        lastOsdSecondRef.current = -1;
-
-        // Mark recording active and paint frame 0 immediately before stream capture starts
-        isRecordingRef.current = true;
-        paintCanvasFrame();
-
-        const canvasStream = canvasRef.current.captureStream(30);
-        canvasStreamRef.current = canvasStream;
-        activeAudioTracks.forEach((track) => {
-          canvasStream.addTrack(track);
-        });
-        recordStream = canvasStream;
-      } catch (cErr) {
-        console.warn('Canvas stream capture fallback to camera stream:', cErr);
-        recordingLockedDimsRef.current = null;
-        isRecordingRef.current = true;
-        recordStream = streamRef.current;
-      }
-    } else {
-      isRecordingRef.current = true;
+    const cameraTrack = streamRef.current?.getVideoTracks()[0];
+    if (!cameraTrack || !videoRef.current || !canvasRef.current) {
+      setRecordingInProgress(false);
+      releaseWakeLock();
+      onShowToast('Camera is not ready yet. Please try again.', 'error');
+      return;
     }
 
     // Use configured video bitrate from Admin settings (default 2.2 Mbps Balanced HD), clamped to a reliable real-time range
     const configuredBitrate = getStoredVideoBitrate();
     const targetVideoBitrate = Math.min(6000000, Math.max(1500000, configuredBitrate || 2200000));
-    const recorderOptions: MediaRecorderOptions = {
-      videoBitsPerSecond: targetVideoBitrate,
-      ...(hasAudio ? { audioBitsPerSecond: 128000 } : {}),
-      ...(mimeType ? { mimeType } : {}),
-    };
 
+    isRecordingRef.current = true;
+    let session: RecordingSession;
     try {
-      mediaRecorderRef.current = new MediaRecorder(recordStream, recorderOptions);
-    } catch {
-      try {
-        mediaRecorderRef.current = new MediaRecorder(recordStream, { videoBitsPerSecond: targetVideoBitrate });
-      } catch {
-        mediaRecorderRef.current = new MediaRecorder(recordStream);
-      }
+      session = await startRecordingSession({
+        cameraTrack,
+        video: videoRef.current,
+        canvas: canvasRef.current,
+        audioTracks: activeAudioTracks,
+        videoBitsPerSecond: targetVideoBitrate,
+        onProgress: (bytes) => {
+          recordedBytesRef.current = bytes;
+        },
+        onError: (message) => console.error('Recorder error:', message),
+      });
+    } catch (err: any) {
+      isRecordingRef.current = false;
+      setRecordingInProgress(false);
+      releaseWakeLock();
+      onShowToast(`Could not start recording: ${err?.message || err}`, 'error');
+      return;
     }
+    recordingSessionRef.current = session;
+    (window as any).__vmsRecorderMode = `${session.mode}:${session.codec}`;
 
     // Snapshot recording metadata now so handleFinishRecording is immune to stale closures or mid-save state changes
     recordingMetaRef.current = {
       orderId: orderId.trim(),
       effectivePlatform,
       recordingType,
-      mimeType: mediaRecorderRef.current.mimeType || mimeType || 'video/webm',
+      mimeType: session.mode === 'webcodecs' ? (session.codec.startsWith('avc') ? 'video/mp4' : 'video/webm') : session.codec || 'video/webm',
       verifiedOrderItems,
       bypassDuplicate: bypassDuplicateRef.current,
       duplicateStatus,
     };
 
-    mediaRecorderRef.current.ondataavailable = (e) => {
-      if (e.data && e.data.size > 0) {
-        recordedChunksRef.current.push(e.data);
-        totalRecordedBytesRef.current += e.data.size;
-        setEstimatedSizeMb(Number((totalRecordedBytesRef.current / (1024 * 1024)).toFixed(2)));
-      }
-    };
-
-    mediaRecorderRef.current.onerror = (ev: any) => {
-      console.error('MediaRecorder error:', ev?.error || ev);
-      setRecordingInProgress(false);
-      releaseWakeLock();
-    };
-
-    mediaRecorderRef.current.onstop = () => handleFinishRecording();
-    mediaRecorderRef.current.start(1000); // 1-second chunk cadence minimizes GC/IPC overhead
-
     setIsRecording(true);
     setIsPaused(false);
-    setRecSeconds(0);
-    setEstimatedSizeMb(0);
-
-    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-    timerIntervalRef.current = window.setInterval(() => {
-      setRecSeconds((prev) => prev + 1);
-    }, 1000);
+    recordedBytesRef.current = 0;
+    setRecStartedAt(Date.now());
 
     setStatusMessage({ text: 'Recording packing process…', type: 'info' });
     onShowToast('Recording started', 'info');
   };
 
   const stopRecording = () => {
-    if (timerIntervalRef.current) {
-      clearInterval(timerIntervalRef.current);
-      timerIntervalRef.current = null;
-    }
     isRecordingRef.current = false;
     setIsRecording(false);
+    setRecStartedAt(null);
 
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      // Flush final encoded GOP/keyframes BEFORE stopping camera tracks (handleFinishRecording shuts down camera cleanly in onstop)
-      try {
-        mediaRecorderRef.current.requestData();
-      } catch {
-        // Some browsers do not support requestData immediately before stop
-      }
-      mediaRecorderRef.current.stop();
+    const session = recordingSessionRef.current;
+    recordingSessionRef.current = null;
+    if (session) {
+      setStatusMessage({ text: 'Saving video…', type: 'info' });
+      session
+        .stop()
+        .then((result) => handleFinishRecording(result))
+        .catch((err) => {
+          console.error('Stopping recorder failed:', err);
+          onShowToast(`Recording could not be saved: ${err?.message || err}`, 'error');
+          recordingMetaRef.current = null;
+          releaseWakeLock();
+          setRecordingInProgress(false);
+        });
     } else {
-      // Recorder was already inactive; clean up camera and resume uploads immediately
-      recordingLockedDimsRef.current = null;
-      releaseCameraTracks();
       releaseWakeLock();
       setRecordingInProgress(false);
     }
   };
 
-  const handleFinishRecording = async () => {
+  const handleFinishRecording = async (result: RecordingResult) => {
     const meta = recordingMetaRef.current || {
       orderId: orderId.trim(),
       effectivePlatform,
       recordingType,
-      mimeType: mediaRecorderRef.current?.mimeType || 'video/webm',
+      mimeType: result.mimeType,
       verifiedOrderItems,
       bypassDuplicate: bypassDuplicateRef.current,
       duplicateStatus,
     };
 
     try {
-      const mimeType = mediaRecorderRef.current?.mimeType || meta.mimeType || 'video/webm';
+      const mimeType = result.mimeType || meta.mimeType || 'video/webm';
       const ext = mimeType.includes('mp4') ? '.mp4' : '.webm';
       const cleanOrderId = meta.orderId.replace(/[^a-zA-Z0-9_-]/g, '_');
       const cleanPlatform = meta.effectivePlatform.replace(/[^a-zA-Z0-9_-]/g, '_');
       const fileName = `${cleanOrderId}_${cleanPlatform}_${meta.recordingType}${ext}`;
 
-      const blob = new Blob(recordedChunksRef.current, { type: mimeType });
-      recordedChunksRef.current = [];
-      totalRecordedBytesRef.current = 0;
-
-      // Encoder has finished flushing — safe to release canvas stream, camera tracks, and wake lock now
-      recordingLockedDimsRef.current = null;
-      releaseCameraTracks();
+      const blob = result.blob;
+      // Encoder has finished flushing. The camera stays on so the next order can start instantly
+      // (no camera warm-up or dark first second).
       releaseWakeLock();
 
       const sizeMb = (blob.size / (1024 * 1024)).toFixed(2);
@@ -1539,9 +1286,11 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       onShowToast(`Error saving video: ${err.message}`, 'error');
     } finally {
       recordingMetaRef.current = null;
-      recordingLockedDimsRef.current = null;
       isRecordingRef.current = false;
-      releaseCameraTracks();
+      if (releaseCameraAfterSaveRef.current) {
+        releaseCameraAfterSaveRef.current = false;
+        releaseCameraTracks();
+      }
       releaseWakeLock();
       setRecordingInProgress(false);
     }
@@ -1611,11 +1360,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     };
   }, []);
 
-  const formatTimer = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-  };
 
   return (
     <div id="scan-record-container" className="space-y-6">
@@ -1693,7 +1437,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                 isRecording ? 'bg-red-600 animate-ping' : isCameraActive ? 'bg-emerald-600' : 'bg-slate-400'
               }`}
             />
-            <span>{isRecording ? `Recording (${formatTimer(recSeconds)})` : isCameraActive ? 'Camera Ready' : 'Camera Off'}</span>
+            <span>{isRecording ? <>Recording (<ElapsedTimer startedAt={recStartedAt} />)</> : isCameraActive ? 'Camera Ready' : 'Camera Off'}</span>
           </span>
         </div>
       </div>
@@ -1889,7 +1633,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                 {/* Top-Right: Timestamp, Resolution & Auto-Focus */}
                 <div className="flex flex-col items-end gap-1.5">
                   <div className="bg-black/60 backdrop-blur-xs text-white px-2.5 py-1.5 rounded shadow-sm border border-white/10 tracking-wider">
-                    {currentLiveTime || new Date().toISOString().replace('T', ' ').slice(0, 19)}
+                    <LiveClock />
                   </div>
 
                   <div className="flex items-center gap-1.5">
@@ -1918,7 +1662,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                   {isRecording && (
                     <div className="bg-black/70 backdrop-blur-xs text-red-400 px-2 py-0.5 rounded text-[11px] font-bold flex items-center gap-1.5 shadow-sm border border-red-500/30">
                       <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                      REC {formatTimer(recSeconds)}
+                      REC <ElapsedTimer startedAt={recStartedAt} />
                     </div>
                   )}
                 </div>
@@ -2035,7 +1779,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
               {isRecording && (
                 <div className="flex items-center gap-2 bg-white px-2.5 py-1.5 rounded-md border border-slate-200 shadow-xs">
                   <span>Size:</span>
-                  <b className="font-mono text-slate-800">{estimatedSizeMb} MB</b>
+                  <b className="font-mono text-slate-800"><RecordedSize bytesRef={recordedBytesRef} active={isRecording} /> MB</b>
                 </div>
               )}
 

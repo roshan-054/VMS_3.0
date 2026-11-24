@@ -389,60 +389,40 @@ export class AiFocusEngine {
    * Renders the video frame to the recording canvas without cropping, digital zoom,
    * mid-recording canvas resizing, or heavy per-frame ctx.filter shader passes.
    */
-  public renderFrameToCanvas(
-    video: HTMLVideoElement,
-    canvas: HTMLCanvasElement,
-    ctx: CanvasRenderingContext2D,
-    lockDimensions = false
-  ): FocusState {
-    const vWidth = video.videoWidth || 1280;
-    const vHeight = video.videoHeight || 720;
+  private lastStepAt = 0;
 
-    if (!lockDimensions && (canvas.width !== vWidth || canvas.height !== vHeight)) {
-      canvas.width = vWidth;
-      canvas.height = vHeight;
-    }
+  /**
+   * Advances the smoothed focus reticle and returns the current focus state without drawing anything.
+   * Time-based smoothing, so the reticle moves at the same speed whatever the call rate.
+   */
+  public stepPreview(): FocusState {
+    const now = performance.now();
+    const dt = this.lastStepAt ? Math.min(1000, now - this.lastStepAt) : 33;
+    this.lastStepAt = now;
+    const base = Math.max(0.08, Math.min(0.4, this.calibration.transitionSpeed));
+    const k = 1 - Math.pow(1 - base, dt / 33);
+    this.currentBoundingBox.x += (this.lastTargetBox.x - this.currentBoundingBox.x) * k;
+    this.currentBoundingBox.y += (this.lastTargetBox.y - this.currentBoundingBox.y) * k;
+    this.currentBoundingBox.width += (this.lastTargetBox.width - this.currentBoundingBox.width) * k;
+    this.currentBoundingBox.height += (this.lastTargetBox.height - this.currentBoundingBox.height) * k;
+    return this.describeState();
+  }
 
-    const targetW = canvas.width || vWidth;
-    const targetH = canvas.height || vHeight;
-
-    // Smooth Bounding Box transition for visual reticle
-    const speed = Math.max(0.08, Math.min(0.4, this.calibration.transitionSpeed));
-    this.currentBoundingBox.x += (this.lastTargetBox.x - this.currentBoundingBox.x) * speed;
-    this.currentBoundingBox.y += (this.lastTargetBox.y - this.currentBoundingBox.y) * speed;
-    this.currentBoundingBox.width += (this.lastTargetBox.width - this.currentBoundingBox.width) * speed;
-    this.currentBoundingBox.height += (this.lastTargetBox.height - this.currentBoundingBox.height) * speed;
-
-    // Fast direct GPU blit without full-frame ctx.filter overhead (prevents frame drops!)
-    const needsScale = targetW !== vWidth || targetH !== vHeight;
-    ctx.imageSmoothingEnabled = needsScale;
-    if (needsScale) {
-      ctx.imageSmoothingQuality = 'medium';
-    }
-    ctx.drawImage(video, 0, 0, targetW, targetH);
-
-    // Determine current descriptive label
+  private describeState(): FocusState {
     let label = 'STATION OVERVIEW';
     const effectiveType = this.mode === 'AUTO' ? this.lastDetectedType : (this.mode as any);
-    if (effectiveType === 'LABEL') {
-      label = 'SHIPPING LABEL & BARCODE';
-    } else if (effectiveType === 'INVOICE') {
-      label = 'INVOICE / BILL OF SUPPLY';
-    } else if (effectiveType === 'PRODUCT') {
-      label = 'PRODUCT PACKING';
-    }
-
-    const focusPoint = {
-      x: Number((this.currentBoundingBox.x + this.currentBoundingBox.width / 2).toFixed(3)),
-      y: Number((this.currentBoundingBox.y + this.currentBoundingBox.height / 2).toFixed(3)),
-    };
-
+    if (effectiveType === 'LABEL') label = 'SHIPPING LABEL & BARCODE';
+    else if (effectiveType === 'INVOICE') label = 'INVOICE / BILL OF SUPPLY';
+    else if (effectiveType === 'PRODUCT') label = 'PRODUCT PACKING';
     return {
       mode: this.mode,
       detectedType: effectiveType,
       confidence: this.detectionConfidence,
       label,
-      focusPoint,
+      focusPoint: {
+        x: Number((this.currentBoundingBox.x + this.currentBoundingBox.width / 2).toFixed(3)),
+        y: Number((this.currentBoundingBox.y + this.currentBoundingBox.height / 2).toFixed(3)),
+      },
       boundingBox: { ...this.currentBoundingBox },
       targetBoundingBox: { ...this.lastTargetBox },
       barcodeText: this.lastBarcodeText,
