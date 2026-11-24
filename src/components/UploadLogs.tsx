@@ -290,6 +290,13 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
 
   const [isSearchingCloud, setIsSearchingCloud] = useState(false);
 
+  const loadSeqRef = useRef(0);
+  const searchQueryRef = useRef(searchQuery);
+  searchQueryRef.current = searchQuery;
+  const dateFilterRef = useRef({ fromDate, toDate });
+  dateFilterRef.current = { fromDate, toDate };
+  const [sheetTotals, setSheetTotals] = useState<{ total: number; completed: number; failed: number } | null>(null);
+
   const loadData = async (showLoadingSpinner = false, customQuery?: string) => {
     if (showLoadingSpinner) setIsLoading(true);
 
@@ -302,16 +309,24 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
       const localItems = await dbGetAllQueue();
       setLocalQueue(localItems);
 
-      const queryToUse = customQuery !== undefined ? customQuery : searchQuery;
-      const isSearchActive = !!queryToUse.trim();
+      const queryToUse = customQuery !== undefined ? customQuery : searchQueryRef.current;
+      const { fromDate: fd, toDate: td } = dateFilterRef.current;
+      const hasDates = !queryToUse.trim() && !!(fd || td);
+      const isSearchActive = !!queryToUse.trim() || hasDates;
 
       // 2. Fetch Cloud Logs from Google Sheet
-      // If user is actively searching an Order ID, query with limit 5000 so all historical records are retrieved!
-      // Otherwise default to 500 for lightning fast startup.
+      // Searching or picking dates asks the sheet itself (up to 5000 rows), so older days are not
+      // cut off by the default "newest 500" window.
+      const requestNo = ++loadSeqRef.current;
       const res = await fetchUploadLogs({
         limit: isSearchActive ? 5000 : 500,
         searchQuery: queryToUse.trim() || undefined,
+        fromDate: hasDates && fd ? fd : undefined,
+        toDate: hasDates && td ? td : undefined,
       });
+      // A newer request (different search or dates) was sent meanwhile: its answer wins.
+      if (requestNo !== loadSeqRef.current) return;
+      if (res.success && res.stats && !isSearchActive) setSheetTotals(res.stats);
 
       if (res.success && Array.isArray(res.logs)) {
         // Filter out any logs that have been deleted locally
@@ -370,6 +385,17 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
+  // Picking a date range loads that range from the sheet, not just the newest 500 rows.
+  const datesLoadedOnce = useRef(false);
+  useEffect(() => {
+    if (!datesLoadedOnce.current) {
+      datesLoadedOnce.current = true;
+      return;
+    }
+    const timer = setTimeout(() => loadData(true), 300);
+    return () => clearTimeout(timer);
+  }, [fromDate, toDate]);
+
   useEffect(() => {
     loadData(true);
 
@@ -426,22 +452,8 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
     };
   }, [autoRefresh, searchQuery]);
 
-  const [isCleaningStuck, setIsCleaningStuck] = useState(false);
   const [isPurgingInterrupted, setIsPurgingInterrupted] = useState(false);
   const [showPurgeModal, setShowPurgeModal] = useState(false);
-
-  const handleCleanStuckUploads = async () => {
-    setIsCleaningStuck(true);
-    try {
-      const result = await fixAndCleanAllStuckUploads();
-      onShowToast(`🧹 ${result.message || 'Cleaned up stuck upload sessions.'}`, 'success');
-      await loadData(true);
-    } catch (e: any) {
-      onShowToast(`Failed to clean stuck uploads: ${e?.message || e}`, 'error');
-    } finally {
-      setIsCleaningStuck(false);
-    }
-  };
 
   const [isAutoRecovering, setIsAutoRecovering] = useState<boolean>(false);
 
@@ -1296,30 +1308,6 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
             Export CSV
           </button>
 
-          <button
-            id="fix-stuck-logs-btn"
-            onClick={handleCleanStuckUploads}
-            disabled={isCleaningStuck || isPurgingInterrupted}
-            className="px-3.5 py-2 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-900 rounded-xl text-xs font-semibold transition inline-flex items-center gap-1.5 shadow-2xs cursor-pointer"
-            title="Clean up zombie in-progress upload sessions and reset upload locks"
-          >
-            <RotateCw className={`w-3.5 h-3.5 text-amber-700 ${isCleaningStuck ? 'animate-spin' : ''}`} />
-            {isCleaningStuck ? 'Cleaning…' : 'Fix Stuck Uploads'}
-          </button>
-
-          {stats.failed > 0 && (
-            <button
-              id="purge-interrupted-btn"
-              onClick={handlePurgeInterrupted}
-              disabled={isPurgingInterrupted || isCleaningStuck}
-              className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 border border-rose-300 text-rose-800 rounded-xl text-xs font-semibold transition inline-flex items-center gap-1.5 shadow-2xs cursor-pointer"
-              title="Permanently remove all interrupted / stale log entries from Google Sheet"
-            >
-              <Trash2 className={`w-3.5 h-3.5 text-rose-600 ${isPurgingInterrupted ? 'animate-spin' : ''}`} />
-              {isPurgingInterrupted ? 'Purging…' : `Purge Interrupted (${stats.failed})`}
-            </button>
-          )}
-
           {canDelete && (
             <button
               id="clean-duplicates-btn"
@@ -1375,7 +1363,11 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
           </div>
           <div className="text-2xl font-bold mt-1 tracking-tight">{stats.total}</div>
           <div className={`text-[11px] mt-1 ${statusFilter === 'all' ? 'text-slate-300' : 'text-slate-500'}`}>
-            All recorded sessions
+            {sheetTotals && !searchQuery.trim() && !fromDate && !toDate && sheetTotals.total > stats.total ? (
+              <span id="logs-window-note">Newest {stats.total} shown of {sheetTotals.total.toLocaleString()} in the sheet. Pick dates or search to see older ones.</span>
+            ) : (
+              'All recorded sessions'
+            )}
           </div>
         </button>
 
@@ -1464,46 +1456,43 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
         </button>
       </div>
 
-      {/* Interrupted / Stale Logs Cleanup Alert Banner */}
+      {/* Failed / interrupted uploads: one place to fix them */}
       {stats.failed > 0 && (
-        <div className="bg-rose-50/80 border border-rose-200 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 text-rose-900 shadow-2xs">
+        <div id="failed-uploads-banner" className="bg-rose-50/80 border border-rose-200 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 text-rose-900 shadow-2xs">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-rose-100 rounded-xl text-rose-600 shrink-0">
               <AlertTriangle className="w-5 h-5" />
             </div>
             <div>
               <h4 className="text-xs font-bold text-rose-950">
-                {stats.failed} interrupted upload session(s) in Google Sheet logs
+                {stats.failed} upload{stats.failed === 1 ? '' : 's'} failed or were interrupted
               </h4>
               <p className="text-[11px] text-rose-700 mt-0.5">
-                These records represent previous unfinalized chunks or stopped uploads. You can purge them from the log table or filter them to inspect details.
+                Recover checks Google Drive for videos that did finish and restarts this computer's failed uploads. Remove deletes the interrupted rows from the sheet.
               </p>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <button
+              id="recover-uploads-btn"
               onClick={handleAutoRecoverStaleLogs}
-              disabled={isAutoRecovering}
+              disabled={isAutoRecovering || isPurgingInterrupted}
               className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition inline-flex items-center gap-1.5 shadow-2xs cursor-pointer"
-              title="Automatically check Google Drive for completed files & re-queue local videos for upload"
             >
               <RotateCw className={`w-3.5 h-3.5 ${isAutoRecovering ? 'animate-spin' : ''}`} />
-              {isAutoRecovering ? 'Recovering…' : '⚡ Auto-Recover & Verify Drive'}
+              {isAutoRecovering ? 'Recovering…' : 'Recover & verify'}
             </button>
-            <button
-              onClick={handlePurgeInterrupted}
-              disabled={isPurgingInterrupted}
-              className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-semibold transition inline-flex items-center gap-1.5 shadow-2xs cursor-pointer"
-            >
-              <Trash2 className={`w-3.5 h-3.5 ${isPurgingInterrupted ? 'animate-spin' : ''}`} />
-              {isPurgingInterrupted ? 'Purging…' : `Purge All Interrupted (${stats.failed})`}
-            </button>
-            <button
-              onClick={() => { setStatusFilter('failed'); setCurrentPage(1); }}
-              className="px-3 py-1.5 bg-white hover:bg-rose-50 border border-rose-300 text-rose-800 rounded-xl text-xs font-medium transition cursor-pointer"
-            >
-              View Interrupted Only
-            </button>
+            {canDelete && (
+              <button
+                id="purge-interrupted-btn"
+                onClick={handlePurgeInterrupted}
+                disabled={isPurgingInterrupted || isAutoRecovering}
+                className="px-3 py-1.5 bg-white hover:bg-rose-100 border border-rose-300 text-rose-800 disabled:opacity-50 rounded-xl text-xs font-semibold transition inline-flex items-center gap-1.5 shadow-2xs cursor-pointer"
+              >
+                <Trash2 className={`w-3.5 h-3.5 ${isPurgingInterrupted ? 'animate-spin' : ''}`} />
+                {isPurgingInterrupted ? 'Removing…' : 'Remove interrupted rows'}
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -1712,33 +1701,6 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
           )}
         </div>
       </div>
-
-      {/* Info banner if there are stuck processing items */}
-      {stats.processing > 0 && (
-        <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-blue-900 shadow-2xs">
-          <div className="flex items-start sm:items-center gap-3">
-            <div className="p-2 rounded-xl bg-blue-100 text-blue-700 shrink-0">
-              <Loader2 className="w-5 h-5 animate-spin" />
-            </div>
-            <div>
-              <div className="font-bold text-xs sm:text-sm text-blue-900">
-                {stats.processing} Upload Session{stats.processing > 1 ? 's' : ''} Under Processing
-              </div>
-              <div className="text-xs text-blue-700 mt-0.5">
-                If any of these uploads were interrupted by a closed tab or network timeout, click "Fix Stuck Uploads" to unfreeze them.
-              </div>
-            </div>
-          </div>
-          <button
-            onClick={handleCleanStuckUploads}
-            disabled={isCleaningStuck}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-xs font-semibold shadow-xs transition flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
-          >
-            <RotateCw className={`w-3.5 h-3.5 ${isCleaningStuck ? 'animate-spin' : ''}`} />
-            {isCleaningStuck ? 'Cleaning…' : 'Fix Stuck Sessions'}
-          </button>
-        </div>
-      )}
 
       {/* Upload Logs Data Table */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
@@ -2002,16 +1964,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
                               <Play className="w-3.5 h-3.5 fill-white" />
                               <span className="hidden sm:inline text-[11px]">Play</span>
                             </button>
-                          ) : isFailed ? (
-                            <button
-                              onClick={() => handleOpenDeleteModal(log)}
-                              className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 rounded-lg transition inline-flex items-center gap-1.5 text-xs font-semibold shadow-2xs cursor-pointer"
-                              title="Remove Stale Interrupted Row from Google Sheet"
-                            >
-                              <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-                              <span className="hidden sm:inline text-[11px]">Remove</span>
-                            </button>
-                          ) : (
+                          ) : isFailed ? null : (
                             <button
                               onClick={() => handleOpenPlayback(log)}
                               className="px-2.5 py-1.5 bg-slate-600 hover:bg-slate-700 text-white rounded-lg transition inline-flex items-center gap-1.5 text-xs font-semibold shadow-2xs cursor-pointer"
