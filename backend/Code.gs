@@ -4246,20 +4246,33 @@ function getVideoChunk_(p) {
   }
   const start = Math.max(0, Math.floor(Number(p.start) || 0));
   const want = Math.min(VIDEO_CHUNK_MAX_, Math.max(1, Math.floor(Number(p.length) || VIDEO_CHUNK_MAX_)));
-  const file = DriveApp.getFileById(fid);
-  const size = Number(file.getSize()) || 0;
-  const meta = { success: true, fileId: fid, size: size, start: start, mimeType: file.getMimeType(), name: file.getName() };
-  if (start >= size) { meta.length = 0; meta.data = ''; return meta; }
-  const end = Math.min(size, start + want) - 1;
+  // One ranged read from Drive per call. The size and type come from Drive's reply headers, so
+  // no extra DriveApp lookups slow every chunk down.
   const resp = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(fid) + '?alt=media&supportsAllDrives=true', {
     method: 'get',
-    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken(), Range: 'bytes=' + start + '-' + end },
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken(), Range: 'bytes=' + start + '-' + (start + want - 1) },
     muteHttpExceptions: true,
   });
   const code = resp.getResponseCode();
+  if (code === 416) {
+    return { success: true, fileId: fid, size: start, start: start, length: 0, data: '' };
+  }
   if (code !== 206 && code !== 200) throw new Error('Google Drive returned ' + code + ' while reading the video.');
+  const headers = resp.getHeaders() || {};
+  const header = function(name) {
+    const k = Object.keys(headers).filter(function(h) { return h.toLowerCase() === name; })[0];
+    return k ? String(headers[k]) : '';
+  };
   let bytes = resp.getContent();
-  if (code === 200 && bytes.length > end - start + 1) bytes = bytes.slice(start, end + 1); // server ignored Range
+  let size = 0;
+  const range = header('content-range').match(/\/(\d+)\s*$/);
+  if (range) size = Number(range[1]);
+  if (code === 200) {
+    size = bytes.length; // server ignored Range and sent the whole file
+    bytes = bytes.slice(start, Math.min(size, start + want));
+  }
+  if (!size) size = Number(DriveApp.getFileById(fid).getSize()) || start + bytes.length;
+  const meta = { success: true, fileId: fid, size: size, start: start, mimeType: header('content-type').split(';')[0] || 'video/mp4' };
   meta.length = bytes.length;
   meta.data = Utilities.base64Encode(bytes);
   return meta;
