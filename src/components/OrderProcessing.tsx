@@ -22,7 +22,6 @@ import {
   Check,
   X,
   Sparkles,
-  Layers,
   ArrowRight,
   ShieldCheck,
   Shield,
@@ -206,15 +205,6 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   const [catalogViewMode, setCatalogViewMode] = useState<'grid' | 'table'>('grid');
   const [isDeletingBulk, setIsDeletingBulk] = useState<boolean>(false);
 
-  // --- Add Product to Catalog State ---
-  const [isAddProductModalOpen, setIsAddProductModalOpen] = useState<boolean>(false);
-  const [newGtin, setNewGtin] = useState<string>('');
-  const [newSku, setNewSku] = useState<string>('');
-  const [newProdName, setNewProdName] = useState<string>('');
-  const [newShortName, setNewShortName] = useState<string>('');
-  const [newImageUrl, setNewImageUrl] = useState<string>('');
-  const [newCategory, setNewCategory] = useState<string>('General');
-
   // --- Edit Product State ---
   const [editingProduct, setEditingProduct] = useState<GtinCatalogProduct | null>(null);
 
@@ -233,29 +223,6 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   const [resolvePackedAt, setResolvePackedAt] = useState<string>('');
   const [resolveActionType, setResolveActionType] = useState<'mark_packed' | 'remove_from_manifest'>('mark_packed');
   const [isReconcilingAll, setIsReconcilingAll] = useState<boolean>(false);
-
-  // --- Multi-Product Manual Entry & Excel Paste State ---
-  const [isBulkManualModalOpen, setIsBulkManualModalOpen] = useState<boolean>(false);
-  const [bulkManualText, setBulkManualText] = useState<string>('');
-  const [manualRows, setManualRows] = useState<Array<{
-    id: string;
-    gtin: string;
-    sku: string;
-    productName: string;
-    shortName: string;
-    category: string;
-    imageUrl: string;
-  }>>([
-    {
-      id: 'row-1',
-      gtin: '',
-      sku: '',
-      productName: '',
-      shortName: '',
-      category: 'General',
-      imageUrl: ''
-    }
-  ]);
 
   // Filter registered users: ONLY user/packer role accounts (no Admin accounts in packer dropdown)
   const availablePackers = useMemo(() => {
@@ -651,36 +618,6 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     }
   };
 
-  // Add Single Product to GTIN Catalog
-  const handleAddNewProduct = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const cleanGtin = normalizeBarcode(newGtin);
-    if (!cleanGtin) {
-      onShowToast('GTIN / Barcode is required', 'error');
-      return;
-    }
-
-    const prod: GtinCatalogProduct = {
-      gtin: cleanGtin,
-      sku: newSku.trim() || cleanGtin,
-      productName: newProdName.trim() || `Product ${cleanGtin}`,
-      shortName: newShortName.trim() || newProdName.trim() || newSku.trim() || cleanGtin,
-      imageUrl: newImageUrl.trim() || undefined,
-      category: newCategory.trim() || 'General'
-    };
-
-    await addOrUpdateGtinProduct(prod);
-    setGtinCatalog(getStoredGtinCatalog());
-    onShowToast(`Product ${prod.shortName} (Barcode: ${prod.gtin}) saved to catalog & Google Sheet!`, 'success');
-
-    setIsAddProductModalOpen(false);
-    setNewGtin('');
-    setNewSku('');
-    setNewProdName('');
-    setNewShortName('');
-    setNewImageUrl('');
-  };
-
   // Save Edited Product
   const handleSaveEditedProduct = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -929,163 +866,6 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
       ...editingManifest,
       items: updatedItems
     });
-  };
-
-  // Multi-Product Manual Entry & Excel Paste handlers
-  const handleOpenBulkManualModal = () => {
-    setBulkManualText('');
-    setManualRows([
-      { id: 'row-1', gtin: '', sku: '', productName: '', shortName: '', category: 'General', imageUrl: '' },
-      { id: 'row-2', gtin: '', sku: '', productName: '', shortName: '', category: 'General', imageUrl: '' },
-      { id: 'row-3', gtin: '', sku: '', productName: '', shortName: '', category: 'General', imageUrl: '' }
-    ]);
-    setIsBulkManualModalOpen(true);
-  };
-
-  const handleAddManualRow = () => {
-    setManualRows((prev) => [
-      ...prev,
-      {
-        id: `row-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        gtin: '',
-        sku: '',
-        productName: '',
-        shortName: '',
-        category: 'General',
-        imageUrl: ''
-      }
-    ]);
-  };
-
-  const handleRemoveManualRow = (rowId: string) => {
-    if (manualRows.length <= 1) return;
-    setManualRows((prev) => prev.filter((r) => r.id !== rowId));
-  };
-
-  const handleManualRowChange = (rowId: string, field: string, val: string) => {
-    setManualRows((prev) =>
-      prev.map((r) => (r.id === rowId ? { ...r, [field]: val } : r))
-    );
-  };
-
-  const handleParsePastedText = () => {
-    if (!bulkManualText.trim()) {
-      onShowToast('Please paste product lines from Excel or Google Sheets first.', 'info');
-      return;
-    }
-
-    const lines = bulkManualText.split(/\r?\n/).filter((l) => l.trim().length > 0);
-    if (lines.length === 0) return;
-
-    // Determine delimiter: Tab or Comma
-    const firstLine = lines[0];
-    const isTab = firstLine.includes('\t');
-    const delimiter = isTab ? '\t' : ',';
-
-    // Check if first row is header
-    let startIndex = 0;
-    const firstCols = lines[0].split(delimiter).map((c) => c.trim().toLowerCase().replace(/^["']|["']$/g, ''));
-    const isHeader = firstCols.some((c) =>
-      c.includes('gtin') || c.includes('barcode') || c.includes('sku') || c.includes('product') || c.includes('ean') || c.includes('name')
-    );
-
-    let gtinIdx = 0;
-    let skuIdx = 1;
-    let nameIdx = 2;
-    let shortIdx = 3;
-    let catIdx = 4;
-    let imgIdx = 5;
-
-    if (isHeader) {
-      startIndex = 1;
-      const foundGtin = firstCols.findIndex((c) => c.includes('gtin') || c.includes('barcode') || c.includes('ean') || c.includes('upc'));
-      const foundSku = firstCols.findIndex((c) => c.includes('sku') || c.includes('code') || c.includes('item'));
-      const foundName = firstCols.findIndex((c) => c.includes('name') || c.includes('title') || c.includes('product') || c.includes('description'));
-      const foundShort = firstCols.findIndex((c) => c.includes('short'));
-      const foundCat = firstCols.findIndex((c) => c.includes('category') || c.includes('dept'));
-      const foundImg = firstCols.findIndex((c) => c.includes('image') || c.includes('photo') || c.includes('url') || c.includes('img'));
-
-      if (foundGtin !== -1) gtinIdx = foundGtin;
-      if (foundSku !== -1) skuIdx = foundSku;
-      if (foundName !== -1) nameIdx = foundName;
-      if (foundShort !== -1) shortIdx = foundShort;
-      if (foundCat !== -1) catIdx = foundCat;
-      if (foundImg !== -1) imgIdx = foundImg;
-    }
-
-    const parsedRows = [];
-    for (let i = startIndex; i < lines.length; i++) {
-      const line = lines[i];
-      const cols = line.split(delimiter).map((c) => c.trim().replace(/^["']|["']$/g, ''));
-      const rawGtin = cols[gtinIdx] || '';
-      const cleanGtin = normalizeBarcode(rawGtin);
-      if (!cleanGtin && !cols[skuIdx] && !cols[nameIdx]) continue;
-
-      const sku = (cols[skuIdx] || cleanGtin).trim();
-      const name = (cols[nameIdx] || sku || `Product ${cleanGtin}`).trim();
-      const shortName = (shortIdx < cols.length && cols[shortIdx] ? cols[shortIdx] : name).trim();
-      const cat = (catIdx < cols.length && cols[catIdx] ? cols[catIdx] : 'General').trim();
-      const img = (imgIdx < cols.length && cols[imgIdx] ? cols[imgIdx] : '').trim();
-
-      parsedRows.push({
-        id: `row-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 6)}`,
-        gtin: cleanGtin,
-        sku,
-        productName: name,
-        shortName,
-        category: cat,
-        imageUrl: img
-      });
-    }
-
-    if (parsedRows.length > 0) {
-      setManualRows(parsedRows);
-      onShowToast(`Parsed ${parsedRows.length} product rows! Review in table below and click Save.`, 'success');
-    } else {
-      onShowToast('Could not parse any product rows. Check text format.', 'error');
-    }
-  };
-
-  const handleSaveBulkManual = async () => {
-    const validProducts: GtinCatalogProduct[] = [];
-
-    for (let i = 0; i < manualRows.length; i++) {
-      const r = manualRows[i];
-      let cleanGtin = normalizeBarcode(r.gtin);
-      if (!cleanGtin && !r.sku.trim() && !r.productName.trim()) {
-        continue; // Skip empty rows
-      }
-
-      // Use provided barcode, or fallback to SKU if barcode not specified
-      if (!cleanGtin) {
-        cleanGtin = r.sku.trim().toUpperCase();
-      }
-
-      if (!cleanGtin) continue;
-
-      const sku = (r.sku.trim() || cleanGtin).toUpperCase();
-      const name = r.productName.trim() || `Product ${sku}`;
-      const shortName = r.shortName.trim() || name;
-
-      validProducts.push({
-        gtin: cleanGtin,
-        sku,
-        productName: name,
-        shortName,
-        category: r.category.trim() || 'General',
-        imageUrl: r.imageUrl.trim() || undefined
-      });
-    }
-
-    if (validProducts.length === 0) {
-      onShowToast('Please enter valid product rows with GTIN Barcode or SKU.', 'error');
-      return;
-    }
-
-    await importGtinCatalog(validProducts);
-    setGtinCatalog(getStoredGtinCatalog());
-    setIsBulkManualModalOpen(false);
-    onShowToast(`Successfully saved ${validProducts.length} products to catalog & Google Sheet!`, 'success');
   };
 
   const handleDownloadCsvTemplate = () => {
@@ -1636,24 +1416,6 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
               </div>
             )}
 
-            <button
-              type="button"
-              onClick={handleOpenBulkManualModal}
-              className="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl border border-indigo-200 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
-              title="Add multiple products manually or paste directly from Excel/Sheets"
-            >
-              <Layers className="w-3.5 h-3.5 text-indigo-600" />
-              <span>Multi-Product / Excel Paste</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setIsAddProductModalOpen(true)}
-              className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
-            >
-              <Plus className="w-3.5 h-3.5 text-slate-600" />
-              <span>Add Single Product</span>
-            </button>
           </div>
         )}
       </div>
@@ -3217,25 +2979,6 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
             {/* Admin GTIN Management Actions */}
             {isUserAdmin && (
               <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleOpenBulkManualModal}
-                  className="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl border border-indigo-200 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                  title="Paste from Excel / Google Sheets or add multiple product lines"
-                >
-                  <Layers className="w-3.5 h-3.5 text-indigo-600" />
-                  <span>Multi-Product / Excel Paste</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setIsAddProductModalOpen(true)}
-                  className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Add Product</span>
-                </button>
-
                 <label className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer shadow-2xs">
                   <Upload className="w-3.5 h-3.5 text-slate-600" />
                   <span>Upload CSV</span>
@@ -3486,22 +3229,6 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                 >
                   <Sliders className="w-3.5 h-3.5 text-indigo-600" />
                   <span>Configure Sheet &amp; Tab</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={handleOpenBulkManualModal}
-                  className="px-3.5 py-2 bg-indigo-600 text-white font-bold text-xs rounded-xl shadow-xs hover:bg-indigo-500 cursor-pointer flex items-center gap-1.5"
-                >
-                  <Layers className="w-4 h-4" />
-                  <span>Paste from Excel / Multi-Product</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsAddProductModalOpen(true)}
-                  className="px-3.5 py-2 bg-slate-100 text-slate-700 font-bold text-xs rounded-xl border border-slate-300 hover:bg-slate-200 cursor-pointer flex items-center gap-1.5"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Add Single Product</span>
                 </button>
               </div>
             </div>
@@ -3995,115 +3722,6 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         </div>
       )}
 
-      {/* MODAL 2: ADD PRODUCT TO CATALOG */}
-      {isAddProductModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in">
-          <form
-            onSubmit={handleAddNewProduct}
-            className="w-full max-w-md bg-white border border-slate-200 rounded-3xl p-6 shadow-2xl space-y-4"
-          >
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div className="flex items-center gap-2">
-                <Barcode className="w-5 h-5 text-indigo-600" />
-                <h3 className="font-bold text-slate-900 text-base">Add Product to GTIN Catalog</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsAddProductModalOpen(false)}
-                className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  GTIN / Barcode (EAN, UPC, Code 128) <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={newGtin}
-                  onChange={(e) => setNewGtin(e.target.value.trim())}
-                  placeholder="e.g. 8901234567890"
-                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Product SKU / Item Code
-                </label>
-                <input
-                  type="text"
-                  value={newSku}
-                  onChange={(e) => setNewSku(e.target.value)}
-                  placeholder="e.g. SKU-SHIRT-NAVY-L"
-                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Full Product Name
-                </label>
-                <input
-                  type="text"
-                  value={newProdName}
-                  onChange={(e) => setNewProdName(e.target.value)}
-                  placeholder="e.g. Premium Cotton Oxford Shirt - Navy Blue (Size L)"
-                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Short Name (Displayed on packing screen)
-                </label>
-                <input
-                  type="text"
-                  value={newShortName}
-                  onChange={(e) => setNewShortName(e.target.value)}
-                  placeholder="e.g. Navy Oxford Shirt (L)"
-                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Product Image URL (Optional)
-                </label>
-                <input
-                  type="url"
-                  value={newImageUrl}
-                  onChange={(e) => setNewImageUrl(e.target.value)}
-                  placeholder="https://... image link"
-                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setIsAddProductModalOpen(false)}
-                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer"
-              >
-                Cancel
-              </button>
-
-              <button
-                type="submit"
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-md cursor-pointer"
-              >
-                Save Product
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-
       {/* MODAL 3: EDIT PRODUCT */}
       {editingProduct && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in">
@@ -4217,194 +3835,6 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
               </button>
             </div>
           </form>
-        </div>
-      )}
-
-      {/* MODAL 4: MULTI-PRODUCT MANUAL ENTRY & EXCEL QUICK-PASTE */}
-      {isBulkManualModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/60 backdrop-blur-xs animate-fade-in overflow-y-auto">
-          <div className="w-full max-w-5xl bg-white border border-slate-200 rounded-3xl p-6 shadow-2xl space-y-4 my-auto max-h-[90vh] flex flex-col">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3 shrink-0">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-600 flex items-center justify-center">
-                  <Layers className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-black text-slate-900 text-base">
-                    Multi-Product Manual Entry &amp; Excel Quick-Paste
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    Paste product rows directly from Excel / Google Sheets or add multiple items in the table below.
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsBulkManualModalOpen(false)}
-                className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Quick Paste Area from Excel */}
-            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-2.5 shrink-0">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                  <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-                  <span>Paste from Excel / Google Sheets (Tab or Comma Separated)</span>
-                </label>
-                <span className="text-[11px] text-slate-400 font-mono">
-                  Columns: GTIN/Barcode, SKU, Name, ShortName, Category, ImageURL
-                </span>
-              </div>
-              <textarea
-                rows={3}
-                value={bulkManualText}
-                onChange={(e) => setBulkManualText(e.target.value)}
-                placeholder="Paste copied cells from Excel/Google Sheets here... e.g.&#10;8901234567890	SKU-SHIRT-BLUE	Premium Oxford Shirt	Oxford Shirt	Apparel	https://...&#10;8909876543210	SKU-EARBUDS	Wireless Earbuds Pro	Earbuds Pro	Electronics"
-                className="w-full px-3.5 py-2 bg-white border border-slate-300 rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:border-indigo-500"
-              />
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] text-slate-500">
-                  Leading zeros and large barcodes are preserved automatically without scientific notation.
-                </span>
-                <button
-                  type="button"
-                  onClick={handleParsePastedText}
-                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>Parse &amp; Populate Table</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Editable Product Table */}
-            <div className="flex-1 overflow-y-auto border border-slate-200 rounded-2xl">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-mono text-[11px] sticky top-0 z-10">
-                  <tr>
-                    <th className="p-2.5 w-12 text-center">#</th>
-                    <th className="p-2.5 min-w-[150px]">GTIN / Barcode *</th>
-                    <th className="p-2.5 min-w-[130px]">SKU / Code *</th>
-                    <th className="p-2.5 min-w-[200px]">Product Name *</th>
-                    <th className="p-2.5 min-w-[140px]">Short Name</th>
-                    <th className="p-2.5 min-w-[100px]">Category</th>
-                    <th className="p-2.5 min-w-[150px]">Image URL</th>
-                    <th className="p-2.5 w-12 text-center">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {manualRows.map((row, idx) => (
-                    <tr key={row.id} className="hover:bg-slate-50/80">
-                      <td className="p-2.5 text-center font-mono text-slate-400 text-[11px]">
-                        {idx + 1}
-                      </td>
-                      <td className="p-2">
-                        <div className="relative">
-                          <input
-                            type="text"
-                            value={row.gtin}
-                            onChange={(e) => handleManualRowChange(row.id, 'gtin', e.target.value)}
-                            placeholder="e.g. 8901234567890"
-                            className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-900 focus:border-indigo-500 focus:outline-none"
-                          />
-                        </div>
-                      </td>
-                      <td className="p-2">
-                        <input
-                          type="text"
-                          value={row.sku}
-                          onChange={(e) => handleManualRowChange(row.id, 'sku', e.target.value)}
-                          placeholder="e.g. SKU-SHIRT"
-                          className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800 focus:border-indigo-500 focus:outline-none"
-                        />
-                      </td>
-                      <td className="p-2">
-                        <input
-                          type="text"
-                          value={row.productName}
-                          onChange={(e) => handleManualRowChange(row.id, 'productName', e.target.value)}
-                          placeholder="Full product title..."
-                          className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-900 focus:border-indigo-500 focus:outline-none"
-                        />
-                      </td>
-                      <td className="p-2">
-                        <input
-                          type="text"
-                          value={row.shortName}
-                          onChange={(e) => handleManualRowChange(row.id, 'shortName', e.target.value)}
-                          placeholder="Short name..."
-                          className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-900 focus:border-indigo-500 focus:outline-none"
-                        />
-                      </td>
-                      <td className="p-2">
-                        <input
-                          type="text"
-                          value={row.category}
-                          onChange={(e) => handleManualRowChange(row.id, 'category', e.target.value)}
-                          placeholder="General"
-                          className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-900 focus:border-indigo-500 focus:outline-none"
-                        />
-                      </td>
-                      <td className="p-2">
-                        <input
-                          type="text"
-                          value={row.imageUrl}
-                          onChange={(e) => handleManualRowChange(row.id, 'imageUrl', e.target.value)}
-                          placeholder="https://..."
-                          className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-700 focus:border-indigo-500 focus:outline-none"
-                        />
-                      </td>
-                      <td className="p-2 text-center">
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveManualRow(row.id)}
-                          disabled={manualRows.length <= 1}
-                          className="p-1.5 text-slate-400 hover:text-red-600 rounded-md transition cursor-pointer disabled:opacity-30"
-                          title="Remove row"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Bottom Actions */}
-            <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-100 shrink-0">
-              <button
-                type="button"
-                onClick={handleAddManualRow}
-                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl border border-slate-300 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add Another Row</span>
-              </button>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsBulkManualModalOpen(false)}
-                  className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer"
-                >
-                  Cancel
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleSaveBulkManual}
-                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-md flex items-center gap-2 cursor-pointer"
-                >
-                  <Check className="w-4 h-4" />
-                  <span>Save All Products to Catalog &amp; Google Sheet</span>
-                </button>
-              </div>
-            </div>
-          </div>
         </div>
       )}
 
