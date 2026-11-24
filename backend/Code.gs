@@ -2414,6 +2414,7 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
       } catch(_) {}
     }
     updateUploadLog_(uploadId, 'Uploaded to Google Drive', 100, fid, 'Completed', '', s.queueJobId, s.order, s.type, s.createdAt);
+    if (!alreadyLogged) bumpAnalyticsVersion_();
     if(s.reservationKey) releaseReservation_(s.reservationKey);
     releaseReservation_(reservationKey_(s.order, s.platform, s.type));
     cleanupOldStartedUploads_(s.order, uploadId);
@@ -3735,8 +3736,42 @@ function getReportData_(p){
   return {success: true, fromDate: p.fromDate, toDate: p.toDate, rows};
 }
 
+/**
+ * Analytics answers are cached for 2 minutes per user scope and filter, and dropped as soon as a
+ * new video is logged, so repeat views (switching presets, reopening the tab, several admins)
+ * answer at once instead of re-reading every log sheet.
+ */
+const ANALYTICS_CACHE_SECONDS_ = 120;
+function analyticsVersion_() {
+  try { return CacheService.getScriptCache().get('ANALYTICS_VER') || '0'; } catch (_) { return '0'; }
+}
+function bumpAnalyticsVersion_() {
+  try { CacheService.getScriptCache().put('ANALYTICS_VER', String(Date.now()), 21600); } catch (_) {}
+}
 function getAnalyticsData_(p){
-  const user=session_(p.token), isAdmin=isAdminRole_(user.role), email=normalize_(user.email);
+  const user = session_(p.token);
+  const scope = isAdminRole_(user.role) ? 'admin' : normalize_(user.email);
+  const keySrc = [scope, p.fromDate, p.toDate, normalize_(p.platform), normalize_(p.recordingType), normalize_(p.packer), normalize_(p.status), analyticsVersion_()].join('|');
+  const key = 'ANALYTICS_' + Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, keySrc).map(function(b){ return ('0' + (b & 255).toString(16)).slice(-2); }).join('');
+  const cache = CacheService.getScriptCache();
+  try {
+    const hit = cache.get(key);
+    if (hit) {
+      const out = JSON.parse(hit);
+      out.cached = true;
+      return out;
+    }
+  } catch (_) {}
+  const fresh = getAnalyticsDataUncached_(p, user);
+  try {
+    const text = JSON.stringify(fresh);
+    if (text.length < 95000) cache.put(key, text, ANALYTICS_CACHE_SECONDS_);
+  } catch (_) {}
+  return fresh;
+}
+
+function getAnalyticsDataUncached_(p, sessionUser){
+  const user=sessionUser||session_(p.token), isAdmin=isAdminRole_(user.role), email=normalize_(user.email);
   const from=parseDateStart_(p.fromDate), to=parseDateEnd_(p.toDate), today=dateOnly_(new Date());
   if(isNaN(from)||isNaN(to))throw new Error('Invalid analytics dates.');
   if(from>to)throw new Error('From Date cannot be after To Date.');

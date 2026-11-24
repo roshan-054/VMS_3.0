@@ -605,7 +605,7 @@ export function App() {
 
           {activeTab === 'reports' && <Reports onShowToast={showToast} />}
 
-          {activeTab === 'analytics' && <Analytics onShowToast={showToast} />}
+          {activeTab === 'analytics' && <Analytics onShowToast={showToast} userKey={currentUser?.email} />}
 
           {activeTab === 'health' && <SystemHealth onShowToast={showToast} />}
 

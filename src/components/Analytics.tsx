@@ -35,6 +35,8 @@ import { getDirectImageUrl } from '../lib/branding';
 
 interface AnalyticsProps {
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
+  /** Signed-in user's email: cached views are kept per user. */
+  userKey?: string;
 }
 
 function getLocalDateStr(offsetDays = 0): string {
@@ -125,6 +127,30 @@ export function generateDateSequence(startDateStr: string, endDateStr: string): 
     cur.setDate(cur.getDate() + 1);
   }
   return dates;
+}
+
+// Last answers per filter set, kept on this computer so reopening Analytics shows numbers at once.
+const ANALYTICS_CACHE_KEY = 'vms_analytics_cache_v1';
+function readAnalyticsCache(key: string): AnalyticsData | null {
+  try {
+    const all = JSON.parse(localStorage.getItem(ANALYTICS_CACHE_KEY) || '{}');
+    const hit = all[key];
+    if (!hit || Date.now() - hit.at > 24 * 3600 * 1000) return null;
+    return hit.data as AnalyticsData;
+  } catch {
+    return null;
+  }
+}
+function writeAnalyticsCache(key: string, data: AnalyticsData): void {
+  try {
+    const all = JSON.parse(localStorage.getItem(ANALYTICS_CACHE_KEY) || '{}');
+    all[key] = { at: Date.now(), data };
+    const keys = Object.keys(all).sort((a, b) => all[b].at - all[a].at);
+    keys.slice(8).forEach((k) => delete all[k]);
+    localStorage.setItem(ANALYTICS_CACHE_KEY, JSON.stringify(all));
+  } catch {
+    /* storage full or blocked: just skip caching */
+  }
 }
 
 function computeDailyShiftMetrics(dailyList: DailyMetricItem[], records?: VideoRecord[]): DailyMetricItem[] {
@@ -403,7 +429,7 @@ function mergeReturnsIntoAnalyticsData(
   };
 }
 
-export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
+export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast, userKey }) => {
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -658,6 +684,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
     }
   };
 
+  const analyticsSeqRef = useRef(0);
   const fetchAnalytics = async () => {
     if (!fromDate || !toDate) {
       onShowToast('Please specify both start and end dates', 'error');
@@ -668,7 +695,12 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
       return;
     }
 
-    setLoading(true);
+    const requestNo = ++analyticsSeqRef.current;
+    const cacheKey = JSON.stringify([userKey || '', fromDate, toDate, platformFilter, typeFilter, packerFilter.trim()]);
+    // Show the last answer for these filters at once, then refresh it in the background.
+    const cachedView = readAnalyticsCache(cacheKey);
+    if (cachedView) setData(cachedView);
+    setLoading(!cachedView);
     try {
       let res: AnalyticsData;
       try {
@@ -698,7 +730,8 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
           return l === 'return' || l === 'inbound';
         })?.count || 0;
 
-      if (typeFilter !== 'forward' && returnInRes === 0) {
+      // Older backends left ReturnLog out; the current one counts returns itself (returnCount).
+      if (typeFilter !== 'forward' && returnInRes === 0 && (res as any)?.returnCount === undefined) {
         try {
           const searchRes = await requestApi<{ results?: VideoRecord[]; rows?: VideoRecord[]; total?: number }>(
             'advancedSearch',
@@ -727,8 +760,11 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
         }
       }
 
-      // Also enrich daily items with shift start/end timestamps from any available video search logs
-      try {
+      // Older backends did not send each day's first/last recording time: fill it from a search.
+      // The current backend sends it, which saves a second full read of every log sheet.
+      const hasShiftTimes = (res?.daily || []).some((d: any) => d && (d.firstTimestamp || d.firstRecordTime));
+      const hasAnyRecords = (res?.daily || []).some((d: any) => d && d.total > 0);
+      if (!hasShiftTimes && hasAnyRecords) try {
         const fullLogsRes = await requestApi<{ results?: VideoRecord[]; rows?: VideoRecord[]; total?: number }>(
           'advancedSearch',
           {
@@ -748,8 +784,11 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
         console.warn('Shift metrics log enrichment note:', logErr);
       }
 
+      if (requestNo !== analyticsSeqRef.current) return; // filters changed meanwhile
       setData(res);
+      writeAnalyticsCache(cacheKey, res);
     } catch (err: any) {
+      if (requestNo !== analyticsSeqRef.current) return;
       console.warn('Analytics fetch error, applying local metrics:', err);
       try {
         const fallback = await computeLocalAnalyticsData(
@@ -762,7 +801,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
         setData(fallback);
       } catch (_) {}
     } finally {
-      setLoading(false);
+      if (requestNo === analyticsSeqRef.current) setLoading(false);
     }
   };
 
@@ -1915,7 +1954,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast }) => {
       {/* Modern Dynamic KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
         {/* Card 1: Total Verified Recordings */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between relative overflow-hidden group hover:border-blue-300 transition">
+        <div id="analytics-total-card" className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between relative overflow-hidden group hover:border-blue-300 transition">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
               {typeFilter === 'forward'
