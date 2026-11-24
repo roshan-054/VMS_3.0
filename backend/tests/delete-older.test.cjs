@@ -81,10 +81,18 @@ test('delete trashes every old video in Drive and removes only old rows', () => 
   assert.equal(rest.trashed.size, 120);
   assert.ok(rest.calls.batches <= 3, 'files trashed in parallel batches of 50, not one by one');
   assert.equal(rest.calls.files, 120, 'each video trashed once even though UploadLog repeats it');
-  assert.equal(r.removedSheetRowsCount, 240);
-  assert.equal(rt.sheets.get('OrderLog').rows.length, 1 + 5);
-  assert.equal(rt.sheets.get('UploadLog').rows.length, 1 + 5);
-  assert.ok(rt.sheets.get('OrderLog').rows.slice(1).every((x) => x[1].startsWith('#OD-12')), 'recent rows kept');
+  assert.equal(r.removedSheetRowsCount, 0, 'no sheet row is ever deleted');
+  assert.equal(r.keptRowsCount, 240);
+  const ol = rt.sheets.get('OrderLog').rows, ul = rt.sheets.get('UploadLog').rows;
+  assert.equal(ol.length, 1 + 125);
+  assert.equal(ul.length, 1 + 125);
+  assert.match(String(ol[1][11]), /^Video moved to Drive Trash/, 'OrderLog Playback Status marks it');
+  assert.match(String(ul[1][7]), /^Video moved to Drive Trash/, 'UploadLog Stage marks it');
+  assert.equal(ol[1][4], fid(0), 'Drive ID kept for the record');
+  assert.equal(ol[125][11], 'READY', 'recent row untouched');
+  // A second run finds nothing left to do.
+  const again = rt.call('scanOlderVideos', { token: admin, days: 90 });
+  assert.equal(again.totalOlderDriveVideos, 0);
   for (let i = 120; i < 125; i++) assert.ok(!rest.trashed.has(fid(i)), 'recent videos untouched');
 });
 
@@ -95,9 +103,10 @@ test('a video that cannot be trashed keeps its rows; an already-deleted one is c
   assert.equal(r.alreadyGoneCount, 1);
   assert.equal(r.failedCount, 1);
   assert.match(r.errors[0], /sufficient permissions/);
-  const left = rt.sheets.get('OrderLog').rows.slice(1).map((x) => x[1]);
-  assert.deepEqual(left, ['#OD-2']);
-  assert.deepEqual(rt.sheets.get('UploadLog').rows.slice(1).map((x) => x[1]), ['#OD-2']);
+  const ol = rt.sheets.get('OrderLog').rows.slice(1);
+  assert.equal(ol.length, 4, 'all rows kept');
+  assert.equal(ol[2][11], 'READY', 'the video that could not be trashed is not marked');
+  assert.match(String(ol[1][11]), /Drive Trash/, 'already-deleted video is marked');
 });
 
 test('runs out of time: returns done:false, next call finishes the rest', () => {
@@ -116,14 +125,15 @@ test('runs out of time: returns done:false, next call finishes the rest', () => 
   const r2 = rt.call('deleteOlderVideos', { token: admin, days: 90 });
   assert.equal(r2.done, true);
   assert.equal(rest.trashed.size, 120);
-  assert.equal(rt.sheets.get('OrderLog').rows.length, 1);
+  assert.equal(rt.sheets.get('OrderLog').rows.length, 121, 'rows kept');
 });
 
-test('only logs, no Drive: rows go, videos stay', () => {
-  const { rt, rest, admin } = setup({ oldCount: 3, newCount: 1 });
-  const r = rt.call('deleteOlderVideos', { token: admin, days: 90, moveDriveVideosToTrash: false, removeSheetEntries: true });
-  assert.equal(r.removedSheetRowsCount, 6);
-  assert.equal(rest.trashed.size, 0);
+test('an old app asking to remove sheet rows still keeps every row', () => {
+  const { rt, admin } = setup({ oldCount: 3, newCount: 1 });
+  const r = rt.call('deleteOlderVideos', { token: admin, days: 90, removeSheetEntries: true });
+  assert.equal(r.removedSheetRowsCount, 0);
+  assert.equal(rt.sheets.get('OrderLog').rows.length, 5);
+  assert.equal(rt.sheets.get('UploadLog').rows.length, 5);
 });
 
 test('packers cannot delete', () => {

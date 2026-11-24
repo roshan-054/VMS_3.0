@@ -5622,7 +5622,9 @@ function olderSheetCols_(sheetName, headerRow) {
     playback: upload ? -1 : find(/playback url/, 5),
     size: find(/file\s*size|package\s*weight/, upload ? 5 : 6),
     type: find(/recording type/, upload ? 12 : 8),
-    fileName: upload ? find(/file\s*name/, 4) : -1
+    fileName: upload ? find(/file\s*name/, 4) : -1,
+    // Where a row records that its video went to Drive Trash (rows themselves are never deleted).
+    marker: upload ? find(/^stage$/, 7) : find(/playback status/, 11)
   };
 }
 
@@ -5653,10 +5655,11 @@ function collectOlderRows_(p) {
     const sh = ss.getSheetByName(target.name);
     if (!sh) return;
     const v = sh.getDataRange().getValues();
-    const entry = { name: target.name, sh: sh, rows: [] };
+    const entry = { name: target.name, sh: sh, rows: [], markerCol: -1 };
     out.sheets.push(entry);
     if (!v || v.length <= 1) return;
     const c = olderSheetCols_(target.name, v[0]);
+    entry.markerCol = c.marker;
     for (let i = 1; i < v.length; i++) {
       const rawTs = v[i][0];
       if (!rawTs) continue;
@@ -5668,6 +5671,7 @@ function collectOlderRows_(p) {
       if (platformFilter && normalize_(pf) !== platformFilter) continue;
       if (typeFilter && normalize_(rt) !== typeFilter) continue;
       const fid = String(v[i][c.fileId] || '').trim();
+      if (isTrashedMarker_(v[i][c.marker])) continue; // video already moved to Trash earlier
       entry.rows.push({
         row: i + 1, ts: ts, orderId: String(v[i][c.order] || '').trim(), platform: pf, recordingType: rt,
         fileId: validFileId_(fid) ? fid : '',
@@ -5778,17 +5782,23 @@ function trashDriveFiles_(ids) {
   return result;
 }
 
-/** Deletes sheet rows (1-based numbers) using as few deleteRows calls as possible. */
-function deleteRowNumbers_(sh, rowNums) {
-  const sorted = rowNums.slice().sort(function(a, b) { return b - a; });
-  let i = 0;
-  while (i < sorted.length) {
-    let end = sorted[i];
-    let start = end;
-    while (i + 1 < sorted.length && sorted[i + 1] === start - 1) { i++; start--; }
-    sh.deleteRows(start, end - start + 1);
-    i++;
-  }
+const VIDEO_TRASHED_MARK_ = 'Video moved to Drive Trash';
+function isTrashedMarker_(v) {
+  const t = String(v || '').trim().toLowerCase();
+  return t === 'trashed' || t.indexOf('video moved to drive trash') === 0;
+}
+
+/** Writes the Trash marker into rows (1-based numbers) of one column, one read and one write. */
+function markRowsTrashed_(sh, col, rowNums) {
+  if (!rowNums.length || col < 0) return 0;
+  const first = Math.min.apply(null, rowNums);
+  const last = Math.max.apply(null, rowNums);
+  const range = sh.getRange(first, col + 1, last - first + 1, 1);
+  const vals = range.getValues();
+  const stamp = VIDEO_TRASHED_MARK_ + ' ' + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd-MMM-yy');
+  rowNums.forEach(function(r) { vals[r - first][0] = stamp; });
+  range.setValues(vals);
+  return rowNums.length;
 }
 
 function deleteOlderVideos_(p) {
@@ -5798,9 +5808,8 @@ function deleteOlderVideos_(p) {
   }
   const started = Date.now();
   const budgetMs = Number(p.budgetMs) > 0 ? Number(p.budgetMs) : 240000;
-  const moveDrive = p.moveDriveVideosToTrash !== false;
-  const removeSheet = p.removeSheetEntries !== false;
-  if (!moveDrive && !removeSheet) return { success: false, error: 'Choose at least one: move videos to Trash or remove log rows.' };
+  // Sheet rows are the permanent record: this tool only moves videos to Drive Trash and never
+  // deletes rows (any removeSheetEntries flag from an older app is ignored).
 
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(20000)) return { success: false, error: 'Another cleanup is running. Try again in a minute.' };
@@ -5811,11 +5820,9 @@ function deleteOlderVideos_(p) {
     // 1. Unique Drive files across all three logs (UploadLog repeats the OrderLog file).
     const status = {};
     const order = [];
-    if (moveDrive) {
-      found.sheets.forEach(function(sht) {
-        sht.rows.forEach(function(r) { if (r.fileId && !status[r.fileId]) { status[r.fileId] = 'pending'; order.push(r.fileId); } });
-      });
-    }
+    found.sheets.forEach(function(sht) {
+      sht.rows.forEach(function(r) { if (r.fileId && !status[r.fileId]) { status[r.fileId] = 'pending'; order.push(r.fileId); } });
+    });
     let trashed = 0, gone = 0, failed = 0;
     const errors = [];
     let outOfTime = false;
@@ -5830,30 +5837,25 @@ function deleteOlderVideos_(p) {
       });
     }
 
-    // 2. Remove log rows whose video is now in Trash / already gone (or that never had one).
-    // A row whose file could not be trashed stays, so nothing is lost track of.
-    let removedRows = 0;
-    const removedBySheet = {};
-    if (removeSheet) {
-      found.sheets.forEach(function(sht) {
-        const rowNums = sht.rows.filter(function(r) {
-          if (!moveDrive || !r.fileId) return true;
-          return status[r.fileId] === 'trashed' || status[r.fileId] === 'gone';
-        }).map(function(r) { return r.row; });
-        if (!rowNums.length) return;
-        deleteRowNumbers_(sht.sh, rowNums);
-        removedRows += rowNums.length;
-        removedBySheet[sht.name] = rowNums.length;
-      });
-    }
+    // 2. Keep every row; note in it that its video is now in Drive Trash (or was already gone).
+    let markedRows = 0;
+    const markedBySheet = {};
+    found.sheets.forEach(function(sht) {
+      const rowNums = sht.rows.filter(function(r) {
+        return r.fileId && (status[r.fileId] === 'trashed' || status[r.fileId] === 'gone');
+      }).map(function(r) { return r.row; });
+      if (!rowNums.length) return;
+      markedRows += markRowsTrashed_(sht.sh, sht.markerCol, rowNums);
+      markedBySheet[sht.name] = rowNums.length;
+    });
 
     const remainingVideos = order.filter(function(id) { return status[id] === 'pending'; }).length;
-    if (trashed || removedRows) {
+    if (trashed) {
       try { bumpAnalyticsVersion_(); } catch (_) {}
       try { CacheService.getScriptCache().remove(DRIVE_STORAGE_CACHE_KEY_); } catch (_) {}
     }
     try {
-      securityLog_(user.email, 'DELETE_OLDER', 'OK', 'days=' + found.daysThreshold + ' trashed=' + trashed + ' rows=' + removedRows + ' failed=' + failed);
+      securityLog_(user.email, 'DELETE_OLDER', 'OK', 'days=' + found.daysThreshold + ' trashed=' + trashed + ' rowsKept=' + markedRows + ' failed=' + failed);
     } catch (_) {}
 
     const done = !outOfTime;
@@ -5862,15 +5864,16 @@ function deleteOlderVideos_(p) {
       done: done,
       daysThreshold: found.daysThreshold,
       cutoffDate: cutoffStr,
-      deletedOrdersCount: removedRows || (trashed + gone),
-      removedSheetRowsCount: removedRows,
+      deletedOrdersCount: trashed + gone,
+      removedSheetRowsCount: 0,
+      keptRowsCount: markedRows,
       movedDriveVideosCount: trashed,
       alreadyGoneCount: gone,
       failedCount: failed,
       remainingVideos: remainingVideos,
       errors: errors,
-      removedBySheet: removedBySheet,
-      message: (done ? 'Done. ' : 'Still working. ') + trashed + ' video(s) moved to Drive Trash, ' + removedRows + ' log row(s) removed' +
+      markedBySheet: markedBySheet,
+      message: (done ? 'Done. ' : 'Still working. ') + trashed + ' video(s) moved to Drive Trash; all sheet rows kept' +
         (gone ? ', ' + gone + ' video(s) were already deleted' : '') + (failed ? ', ' + failed + ' could not be deleted' : '') + '.'
     };
   } finally {

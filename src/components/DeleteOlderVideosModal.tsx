@@ -55,8 +55,6 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
   const [platformFilter, setPlatformFilter] = useState<string>('ALL');
   const [typeFilter, setTypeFilter] = useState<string>('ALL');
 
-  const [moveDriveVideos, setMoveDriveVideos] = useState<boolean>(true);
-  const [removeSheetRows, setRemoveSheetRows] = useState<boolean>(true);
 
   const [isScanning, setIsScanning] = useState<boolean>(false);
   const [scanResult, setScanResult] = useState<ScanOlderVideosResult | null>(null);
@@ -144,8 +142,8 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
         platform: platformFilter === 'ALL' ? '' : platformFilter,
         recordingType: typeFilter === 'ALL' ? '' : typeFilter,
         driveFolderId: getStoredDriveFolderId(),
-        moveDriveVideosToTrash: moveDriveVideos,
-        removeSheetEntries: removeSheetRows,
+        moveDriveVideosToTrash: true,
+        removeSheetEntries: false,
       }, setDeleteProgress);
 
       // Show what is left (e.g. videos that could not be trashed) instead of the old list.
@@ -153,11 +151,9 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
       setDeleteResult(res);
       setShowConfirm(false);
 
-      if (res.deletedOrdersCount > 0 || res.movedDriveVideosCount > 0 || res.removedSheetRowsCount > 0) {
+      if (res.deletedOrdersCount > 0 || res.movedDriveVideosCount > 0) {
         onShowToast(
-          `Successfully cleaned ${res.movedDriveVideosCount || res.deletedOrdersCount} video(s) and ${
-            res.removedSheetRowsCount
-          } sheet row(s) older than ${daysThreshold} days!`,
+          `${res.movedDriveVideosCount} video(s) older than ${daysThreshold} days moved to Drive Trash. Sheet rows kept.`,
           'success'
         );
         if (onDeleteSuccess) onDeleteSuccess();
@@ -208,7 +204,7 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-lg font-bold text-white tracking-tight">
-                  Delete Videos & Logs Older Than {daysThreshold} Days
+                  Move Videos Older Than {daysThreshold} Days to Trash
                 </h3>
               </div>
             </div>
@@ -231,7 +227,7 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
                 <span className="text-xs font-bold text-slate-800">Select Storage Retention Period:</span>
               </div>
               <div className="text-xs font-semibold text-slate-600 bg-white border border-slate-200 px-3 py-1 rounded-xl shadow-2xs">
-                Purge Cutoff: <span className="font-bold text-red-600">{getCutoffDateStr(daysThreshold)}</span> (Older than {daysThreshold} days)
+                Cutoff: <span className="font-bold text-red-600">{getCutoffDateStr(daysThreshold)}</span> (Older than {daysThreshold} days)
               </div>
             </div>
 
@@ -330,44 +326,10 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
             </div>
           </div>
 
-          {/* Action options */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <label className="flex items-start gap-2.5 p-3 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 transition cursor-pointer">
-              <input
-                type="checkbox"
-                checked={moveDriveVideos}
-                onChange={(e) => setMoveDriveVideos(e.target.checked)}
-                className="mt-0.5 rounded border-slate-300 text-red-600 focus:ring-red-500"
-              />
-              <div>
-                <span className="text-xs font-bold text-slate-800 block flex items-center gap-1.5">
-                  <Film className="w-3.5 h-3.5 text-rose-600" />
-                  Move Drive Video Files to Trash
-                </span>
-                <span className="text-[11px] text-slate-500">
-                  Videos go to Google Drive Trash
-                </span>
-              </div>
-            </label>
-
-            <label className="flex items-start gap-2.5 p-3 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 transition cursor-pointer">
-              <input
-                type="checkbox"
-                checked={removeSheetRows}
-                onChange={(e) => setRemoveSheetRows(e.target.checked)}
-                className="mt-0.5 rounded border-slate-300 text-red-600 focus:ring-red-500"
-              />
-              <div>
-                <span className="text-xs font-bold text-slate-800 block flex items-center gap-1.5">
-                  <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
-                  Purge Log Entries from Google Sheets
-                </span>
-                <span className="text-[11px] text-slate-500">
-                  Removes corresponding rows older than {daysThreshold} days from OrderLog, ReturnLog & UploadLog
-                </span>
-              </div>
-            </label>
-          </div>
+          <p id="delete-older-keeps-rows" className="flex items-center gap-2 text-xs text-slate-600">
+            <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+            Videos are moved to Google Drive Trash. Sheet rows are always kept as the permanent record.
+          </p>
 
           {/* Scanning / Result Metrics Summary Card */}
           {isScanning ? (
@@ -400,14 +362,14 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
                 </div>
 
                 <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-950 space-y-1">
-                  <span className="text-[11px] font-semibold text-emerald-700 block">Sheet Rows to Purge</span>
+                  <span className="text-[11px] font-semibold text-emerald-700 block">Log Rows (kept)</span>
                   <span className="text-2xl font-extrabold font-mono text-emerald-900">
                     {scanResult.totalOlderSheetRows}
                   </span>
                 </div>
 
                 <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-950 space-y-1">
-                  <span className="text-[11px] font-semibold text-amber-700 block">Purge Cutoff Date</span>
+                  <span className="text-[11px] font-semibold text-amber-700 block">Cutoff Date</span>
                   <span className="text-xs font-bold font-mono text-amber-900 block mt-1">
                     {scanResult.cutoffDate || getCutoffDateStr(daysThreshold)}
                   </span>
@@ -490,7 +452,7 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
                     Are you sure you want to delete videos & logs older than {daysThreshold} days?
                   </h4>
                   <p className="text-xs text-red-700 mt-1">
-                    This action will delete video files created before <span className="font-mono font-bold">{scanResult?.cutoffDate || getCutoffDateStr(daysThreshold)}</span> and remove their rows from Google Sheets.
+                    This action will delete video files created before <span className="font-mono font-bold">{scanResult?.cutoffDate || getCutoffDateStr(daysThreshold)}</span> to Google Drive Trash. Sheet rows are kept.
                   </p>
                 </div>
               </div>
@@ -498,7 +460,7 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
               {isDeleting && (
                 <p id="delete-older-progress" className="text-xs font-semibold text-red-800">
                   {deleteProgress
-                    ? `${deleteProgress.movedDriveVideosCount} video(s) moved to Trash, ${deleteProgress.removedSheetRowsCount} row(s) removed` +
+                    ? `${deleteProgress.movedDriveVideosCount} video(s) moved to Trash` +
                       (deleteProgress.remainingVideos ? `, ${deleteProgress.remainingVideos} left. Still working…` : '…')
                     : 'Working… large cleanups run in rounds of about 4 minutes. Keep this window open.'}
                 </p>
@@ -536,7 +498,7 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
               </div>
               <p className="text-xs text-emerald-800">
                 <span className="font-bold">{deleteResult.movedDriveVideosCount}</span> video(s) moved to Google Drive Trash and{' '}
-                <span className="font-bold">{deleteResult.removedSheetRowsCount}</span> log row(s) removed (older than {daysThreshold} days, cutoff {fmtDate(deleteResult.cutoffDate)}).
+                all sheet rows kept (older than {daysThreshold} days, cutoff {fmtDate(deleteResult.cutoffDate)}).
                 {deleteResult.alreadyGoneCount ? ` ${deleteResult.alreadyGoneCount} video(s) were already deleted.` : ''}
               </p>
               {!!deleteResult.failedCount && (
@@ -580,7 +542,7 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
                 className="px-5 py-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow-sm"
               >
                 <Trash2 className="w-4 h-4" />
-                Purge Videos & Logs Older Than {daysThreshold} Days
+                Move Videos Older Than {daysThreshold} Days to Trash
               </button>
             )}
           </div>
