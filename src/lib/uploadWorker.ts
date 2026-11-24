@@ -222,7 +222,7 @@ export async function triggerUploadWorker(): Promise<void> {
     // If auto-resume enabled and no active/pending items, check non-duplicate failed items
     if (!candidate && getStoredAutoResume()) {
       const failedItems = allItems
-        .filter((item) => item.status === 'failed' && !item.isDuplicate && item.blob)
+        .filter((item) => item.status === 'failed' && !item.isDuplicate && !item.tooLarge && item.blob)
         .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
       candidate = failedItems[0];
     }
@@ -451,6 +451,22 @@ export async function triggerUploadWorker(): Promise<void> {
         return;
       }
       const errMsg = startErr?.message || String(startErr);
+      if (startErr?.code === 'VIDEO_TOO_LARGE') {
+        // Over the admin's size limit: retrying will not help until the admin raises it.
+        currentItem.status = 'failed';
+        currentItem.progress = 0;
+        currentItem.uploadedBytes = 0;
+        currentItem.currentChunk = 0;
+        currentItem.stage = 'Blocked: above the video size limit';
+        currentItem.tooLarge = true;
+        currentItem.error = errMsg;
+        await safePutQueue(currentItem);
+        updateState({ isProcessing: false, activeItemId: null });
+        notify(`⚠️ ${errMsg}`, 'error');
+        isWorkerBusy = false;
+        setTimeout(() => triggerUploadWorker(), 300);
+        return;
+      }
       if (
         errMsg.toLowerCase().includes('duplicate') ||
         errMsg.toLowerCase().includes('already exists') ||
@@ -1346,6 +1362,7 @@ export async function resetStuckLocalQueue(): Promise<number> {
       item.stage = 'Queued for upload';
       item.error = undefined;
       item.isDuplicate = false;
+      item.tooLarge = false;
       item.bypassDuplicate = true; // allow retrying
       item.currentChunk = 0;
       item.uploadedBytes = 0;

@@ -42,6 +42,7 @@ import { User, UserRole, UserStatus, AdminPermissions } from '../types';
 import { CleanDuplicatesModal } from './CleanDuplicatesModal';
 import { DeleteOlderVideosModal } from './DeleteOlderVideosModal';
 import { DriveLocationSetting } from './DriveLocationSetting';
+import { VideoSizeLimitSetting } from './VideoSizeLimitSetting';
 import { requestApi, checkBackendHealth, uploadBrandingImage, repairSheetPlaybackUrls, runSystemSetup, migrateDriveMonthlyFolders, applySheetConditionalFormatting } from '../lib/api';
 import { getLocalUsers, deleteLocalUserByEmail, getDeletedUserEmails } from '../lib/localAuth';
 import {
@@ -211,6 +212,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
       if (updated.videoDriveFolderId) {
         setDriveFolderIdInput(updated.videoDriveFolderId);
       }
+      setMaxVideoSizeInput(getStoredMaxVideoSizeMb());
     });
     syncCloudBranding().catch(() => {});
 
@@ -1222,34 +1224,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                 </div>
 
                 <div className="pt-2 border-t border-slate-100">
-                  <label className="block text-xs font-semibold text-slate-700 mb-2">
-                    Max Allowed Video Size (Upload Limit)
-                  </label>
-                  <div className="grid grid-cols-4 gap-2">
-                    {[100, 500, 1024, 2048].map((size) => (
-                      <button
-                        key={size}
-                        type="button"
-                        disabled={disableSettings}
-                        onClick={() => {
-                          setMaxVideoSizeInput(size);
-                          setStoredMaxVideoSizeMb(size);
-                        }}
-                        className={`py-2.5 px-2 rounded-xl text-xs font-bold border transition flex flex-col items-center justify-center gap-1 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-                          maxVideoSizeInput === size
-                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
-                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                        }`}
-                      >
-                        <span>{size >= 1024 ? `${size / 1024} GB` : `${size} MB`}</span>
-                        {size === 1024 && (
-                          <span className={`text-[9px] uppercase tracking-wider ${maxVideoSizeInput === size ? 'text-indigo-100' : 'text-indigo-600'}`}>
-                            Default ★
-                          </span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
+                  <VideoSizeLimitSetting
+                    value={maxVideoSizeInput}
+                    onChange={setMaxVideoSizeInput}
+                    disabled={disableSettings}
+                    onShowToast={onShowToast}
+                  />
                 </div>
               </div>
 

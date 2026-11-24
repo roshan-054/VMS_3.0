@@ -1,5 +1,5 @@
 import { fetchCloudBranding, saveCloudBranding } from './api';
-import { getStoredDriveFolderId, setStoredDriveFolderId } from './storage';
+import { getStoredDriveFolderId, setStoredDriveFolderId, setStoredMaxVideoSizeMb } from './storage';
 
 export interface BrandingConfig {
   logoUrl: string;
@@ -109,6 +109,9 @@ export async function syncCloudBranding(): Promise<BrandingConfig> {
       };
       if (cloud.videoDriveFolderId && cloud.videoDriveFolderId.trim()) {
         setStoredDriveFolderId(cloud.videoDriveFolderId.trim());
+      }
+      if (typeof cloud.maxVideoSizeMb === 'number' && cloud.maxVideoSizeMb >= 0) {
+        setStoredMaxVideoSizeMb(cloud.maxVideoSizeMb);
       }
       localStorage.setItem(BRANDING_STORAGE_KEY, JSON.stringify(merged));
       applyFavicon(merged.faviconUrl);
