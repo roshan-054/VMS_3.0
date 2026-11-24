@@ -118,110 +118,45 @@ export function enrichManifestItems(items: ManifestItem[]): ManifestItem[] {
   });
 }
 
-export const SEED_SAMPLE_MANIFESTS: OrderManifest[] = [
-  {
-    id: 'manifest-seed-101',
-    orderId: 'OD-5035',
-    platform: 'Amazon',
-    assignedPackerName: 'Roshan K',
-    assignedPackerEmail: 'packer@example.com',
-    processedByName: 'Operations Admin',
-    processedByEmail: 'admin@vms.local',
-    processedAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-    status: 'Pending',
-    items: [
-      {
-        id: 'seed-item-1',
-        sku: 'SA-IT-SA-01',
-        productName: 'Sandalwood Itra',
-        shortName: 'Sandalwood Itra',
-        gtin: '890619169353',
-        quantity: 1,
-        scannedCount: 0,
-        imageUrl: ''
-      }
-    ],
-    notes: 'Fragile glass bottle • Double bubble wrap'
-  },
-  {
-    id: 'manifest-seed-102',
-    orderId: 'OD-6194',
-    platform: 'D2C',
-    assignedPackerName: 'Roshan K',
-    assignedPackerEmail: 'packer@example.com',
-    processedByName: 'Operations Admin',
-    processedByEmail: 'admin@vms.local',
-    processedAt: new Date(Date.now() - 3600000 * 5).toISOString(),
-    status: 'Pending',
-    items: [
-      {
-        id: 'seed-item-2',
-        sku: 'RO-IT-RA-02',
-        productName: 'Rose Attar Premium',
-        shortName: 'Rose Attar Premium',
-        gtin: '8906191690025',
-        quantity: 2,
-        scannedCount: 0,
-        imageUrl: ''
-      }
-    ],
-    notes: 'Include thank you invoice leaflet'
-  },
-  {
-    id: 'manifest-seed-103',
-    orderId: 'OD-7102',
-    platform: 'JioMart',
-    assignedPackerName: 'Packer Workstation 1',
-    assignedPackerEmail: 'packer@vms.local',
-    processedByName: 'Operations Admin',
-    processedByEmail: 'admin@vms.local',
-    processedAt: new Date(Date.now() - 3600000 * 18).toISOString(),
-    status: 'Pending',
-    items: [
-      {
-        id: 'seed-item-3',
-        sku: 'SA-IT-SA-01',
-        productName: 'Sandalwood Itra',
-        shortName: 'Sandalwood Itra',
-        gtin: '890619169353',
-        quantity: 1,
-        scannedCount: 0,
-        imageUrl: ''
-      }
-    ],
-    notes: 'JioMart express shipper box'
+
+let manifestCache: { raw: string | null; delRaw: string | null; catalog: unknown; value: OrderManifest[]; byId?: Map<string, OrderManifest> } | null = null;
+
+function cachedManifests() {
+  const raw = localStorage.getItem(STORAGE_KEY_MANIFESTS);
+  const delRaw = localStorage.getItem(STORAGE_KEY_DELETED_MANIFESTS);
+  const catalog = cachedCatalog();
+  if (!manifestCache || manifestCache.raw !== raw || manifestCache.delRaw !== delRaw || manifestCache.catalog !== catalog) {
+    manifestCache = { raw, delRaw, catalog, value: readStoredManifests() };
   }
-];
+  return manifestCache;
+}
 
 export function getStoredManifests(): OrderManifest[] {
+  return cachedManifests().value.slice();
+}
+
+function readStoredManifests(): OrderManifest[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_MANIFESTS);
-    if (!raw) {
-      localStorage.setItem(STORAGE_KEY_MANIFESTS, JSON.stringify(SEED_SAMPLE_MANIFESTS));
-      return SEED_SAMPLE_MANIFESTS;
-    }
+    // No demo orders: a new station starts empty and fills from the Google Sheet.
+    if (!raw) return [];
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed) || parsed.length === 0) {
-      localStorage.setItem(STORAGE_KEY_MANIFESTS, JSON.stringify(SEED_SAMPLE_MANIFESTS));
-      return SEED_SAMPLE_MANIFESTS;
-    }
+    if (!Array.isArray(parsed)) return [];
     const deletedSet = getDeletedManifestIds();
     const result = parsed
       .filter((m) => {
         const id = String(m.orderId || '').toLowerCase().trim();
-        return id && !deletedSet.has(id);
+        // Drop the demo orders older versions wrote on first start (OD-5035 etc.).
+        return id && !deletedSet.has(id) && !String(m.id || '').startsWith('manifest-seed-');
       })
       .map((m) => ({
         ...m,
         items: enrichManifestItems(m.items || [])
       }));
 
-    if (result.length === 0 && deletedSet.size === 0) {
-      return SEED_SAMPLE_MANIFESTS;
-    }
     return result;
   } catch (e) {
-    return SEED_SAMPLE_MANIFESTS;
+    return [];
   }
 }
 
@@ -260,8 +195,15 @@ export function getManifestByOrderId(orderId: string): OrderManifest | null {
   const deletedSet = getDeletedManifestIds();
   if (deletedSet.has(clean)) return null;
 
-  const list = getStoredManifests();
-  return list.find((m) => m.orderId.trim().toLowerCase() === clean) || null;
+  const c = cachedManifests();
+  if (!c.byId) {
+    c.byId = new Map();
+    for (const m of c.value) {
+      const id = String(m.orderId || '').trim().toLowerCase();
+      if (id && !c.byId.has(id)) c.byId.set(id, m);
+    }
+  }
+  return c.byId.get(clean) || null;
 }
 
 export async function saveOrderManifest(manifest: OrderManifest): Promise<void> {
@@ -688,7 +630,53 @@ export function fixMisalignedProduct(p: GtinCatalogProduct): GtinCatalogProduct 
   };
 }
 
+// The catalog and the order list are parsed once and kept in memory until localStorage changes.
+// Before, every keystroke in the Order ID box re-parsed the whole order list (1+ MB) and, for
+// every item of every order, re-parsed the whole catalog.
+let catalogCache: { raw: string | null; delRaw: string | null; value: GtinCatalogProduct[]; index?: CatalogIndex } | null = null;
+
+function cachedCatalog() {
+  const raw = localStorage.getItem(STORAGE_KEY_GTIN_CATALOG);
+  const delRaw = localStorage.getItem(STORAGE_KEY_DELETED_GTINS);
+  if (!catalogCache || catalogCache.raw !== raw || catalogCache.delRaw !== delRaw) {
+    catalogCache = { raw, delRaw, value: readStoredGtinCatalog() };
+  }
+  return catalogCache;
+}
+
+/** Canonical barcode key: same rules as isBarcodeEqual (case, leading zeros, separators). */
+function barcodeKey(code: any): string {
+  return normalizeBarcode(code).toUpperCase().replace(/[-_.\s/\\#]/g, '').replace(/^0+/, '');
+}
+
+interface CatalogIndex {
+  byGtin: Map<string, GtinCatalogProduct>;
+  bySku: Map<string, GtinCatalogProduct>;
+  byName: Map<string, GtinCatalogProduct>;
+  byShort: Map<string, GtinCatalogProduct>;
+}
+
+function catalogIndex(): CatalogIndex {
+  const c = cachedCatalog();
+  if (!c.index) {
+    const idx: CatalogIndex = { byGtin: new Map(), bySku: new Map(), byName: new Map(), byShort: new Map() };
+    const put = (m: Map<string, GtinCatalogProduct>, k: string, p: GtinCatalogProduct) => { if (k && !m.has(k)) m.set(k, p); };
+    for (const p of c.value) {
+      put(idx.byGtin, barcodeKey(p.gtin), p);
+      put(idx.bySku, barcodeKey(p.sku), p);
+      put(idx.byName, (p.productName || '').trim().toUpperCase(), p);
+      put(idx.byShort, (p.shortName || '').trim().toUpperCase(), p);
+    }
+    c.index = idx;
+  }
+  return c.index;
+}
+
 export function getStoredGtinCatalog(): GtinCatalogProduct[] {
+  return cachedCatalog().value.slice();
+}
+
+function readStoredGtinCatalog(): GtinCatalogProduct[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_GTIN_CATALOG);
     let parsed: GtinCatalogProduct[] = [];
@@ -793,33 +781,12 @@ export async function purgeOrderPollutionFromCatalog(): Promise<number> {
 export function findProductInCatalog(query: string): GtinCatalogProduct | null {
   if (!query || !query.trim()) return null;
   const clean = query.trim().toUpperCase();
-  const catalog = getStoredGtinCatalog();
-
-  // 1. Exact or tolerant GTIN match
-  const byGtin = catalog.find((p) => isBarcodeEqual(p.gtin, clean));
-  if (byGtin) return byGtin;
-
-  // 2. Exact or tolerant SKU match
-  const bySku = catalog.find((p) => isBarcodeEqual(p.sku, clean) || p.sku.trim().toUpperCase() === clean);
-  if (bySku) return bySku;
-
-  // 3. Exact Product Name match
-  const byName = catalog.find((p) => (p.productName || '').trim().toUpperCase() === clean);
-  if (byName) return byName;
-
-  // 4. Exact Short Name match
-  const byShortName = catalog.find((p) => (p.shortName || '').trim().toUpperCase() === clean);
-  if (byShortName) return byShortName;
-
-  // 5. Fallback: match GTIN without leading zeros
-  const noLeadingZero = clean.replace(/^0+/, '');
-  if (noLeadingZero.length >= 4) {
-    const altMatch = catalog.find((p) => p.gtin.replace(/^0+/, '') === noLeadingZero);
-    if (altMatch) return altMatch;
-  }
-
-  // Exact matching only. For prefix/partial searching in autocomplete dropdowns, use searchCatalog()
-  return null;
+  const idx = catalogIndex();
+  // Same order as before: GTIN, then SKU (both tolerant of case, leading zeros and
+  // separators, like isBarcodeEqual), then exact product name, then exact short name.
+  // Exact matching only. For prefix/partial searching in autocomplete dropdowns, use searchCatalog().
+  const key = barcodeKey(clean);
+  return (key && (idx.byGtin.get(key) || idx.bySku.get(key))) || idx.byName.get(clean) || idx.byShort.get(clean) || null;
 }
 
 export function searchCatalog(query: string, maxResults = 500, tagFilter?: string): GtinCatalogProduct[] {
