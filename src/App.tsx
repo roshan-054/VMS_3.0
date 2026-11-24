@@ -25,7 +25,8 @@ import {
   Sparkles,
   Smartphone,
   QrCode,
-  PackagePlus
+  PackagePlus,
+  Settings
 } from 'lucide-react';
 import { User, QueueItem } from './types';
 import { getStoredToken, setStoredToken, dbGetAllQueue, getStoredAutoRefreshInterval, getStoredNightMode, setStoredNightMode, clearUserCache } from './lib/storage';
@@ -56,6 +57,7 @@ const Reports = lazyNamed(() => import('./components/Reports'), 'Reports');
 const Analytics = lazyNamed(() => import('./components/Analytics'), 'Analytics');
 const SystemHealth = lazyNamed(() => import('./components/SystemHealth'), 'SystemHealth');
 const AdminPanel = lazyNamed(() => import('./components/AdminPanel'), 'AdminPanel');
+const SettingsPage = lazyNamed(() => import('./components/SettingsPage'), 'SettingsPage');
 
 const TabLoading = () => (
   <div className="flex items-center justify-center py-24 text-sm text-slate-500">Loading…</div>
@@ -98,7 +100,7 @@ export function App() {
   };
 
   const [activeTab, setActiveTab] = useState<
-    'record' | 'processing' | 'queue' | 'logs' | 'search' | 'reports' | 'analytics' | 'health' | 'admin'
+    'record' | 'processing' | 'queue' | 'logs' | 'search' | 'reports' | 'analytics' | 'health' | 'admin' | 'settings'
   >('record');
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -305,7 +307,7 @@ export function App() {
     ...(canUserAccessAnalytics(currentUser) ? [{ id: 'analytics', label: 'Analytics', icon: BarChart3 }] : []),
     ...(canUserAccessHealth(currentUser) ? [{ id: 'health', label: 'Health & Diagnostics', icon: Activity }] : []),
     ...(canUserAccessAdminPanel(currentUser)
-      ? [{ id: 'admin', label: 'Admin & Users', icon: Shield }]
+      ? [{ id: 'admin', label: 'Admin & Users', icon: Shield }, { id: 'settings', label: 'Settings', icon: Settings }]
       : []),
   ];
 
@@ -607,6 +609,8 @@ export function App() {
           {activeTab === 'admin' && (
             <AdminPanel onShowToast={showToast} currentUser={currentUser} />
           )}
+
+          {activeTab === 'settings' && <SettingsPage onShowToast={showToast} />}
           </Suspense>
         </main>
       </div>
