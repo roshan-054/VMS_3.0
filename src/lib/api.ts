@@ -3,14 +3,11 @@ import { User, VideoRecord, AnalyticsData } from '../types';
 import { computeLocalAnalyticsData, getLocalWorkstationLogs } from './localAnalytics';
 import {
   localLogin,
-  localSignup,
   getLocalUsers,
   syncLocalUserWithRemote,
   syncAllLocalUsers,
-  saveLocalUsers,
   deleteLocalUserByEmail,
-  recordDeletedUserEmail,
-  StoredLocalUser,
+  rememberOfflineCredential,
 } from './localAuth';
 
 export interface ApiResponse<T = any> {
@@ -50,12 +47,6 @@ export async function requestApi<T = any>(
 
   // Handle local fallback for authentication and user management when remote is offline
   const isAuthAction = action === 'login' || action === 'signup';
-  const isUserMgmtAction =
-    action === 'getUsers' ||
-    action === 'adminCreateUser' ||
-    action === 'adminManageUser' ||
-    action === 'adminResetPassword' ||
-    action === 'adminDeleteUser';
 
   try {
     let response: Response | null = null;
@@ -139,6 +130,9 @@ export async function requestApi<T = any>(
     // If remote action succeeded, sync local cache
     if (isAuthAction && data.user) {
       syncLocalUserWithRemote(data.user);
+      if (data.token && payload.password) {
+        await rememberOfflineCredential(data.user, String(payload.password));
+      }
     } else if (action === 'getUsers' && Array.isArray((data as any).users)) {
       syncAllLocalUsers((data as any).users);
     } else if (action === 'adminDeleteUser') {
@@ -153,82 +147,29 @@ export async function requestApi<T = any>(
       throw remoteError;
     }
 
-    // If it's an authentication action and remote is unavailable or invalid Apps Script response,
-    // seamlessly fall back to the verified local workstation store
-    if (isAuthAction) {
-      const errStr = remoteError?.message || '';
-      const isConnectionIssue =
-        errStr.includes('Invalid Apps Script') ||
-        errStr.includes('Failed to fetch') ||
-        errStr.includes('NetworkError') ||
-        errStr.includes('Version');
+    // Server unreachable: allow offline sign-in only for accounts that already signed in online
+    // on this device (cached salted hash). There are no built-in accounts and no offline sign-up.
+    const errStr = remoteError?.message || '';
+    const isConnectionIssue =
+      errStr.includes('Failed to fetch') ||
+      errStr.includes('NetworkError') ||
+      errStr.includes('Load failed') ||
+      errStr.includes('timed out') ||
+      errStr.includes('Network request failed');
 
-      if (isConnectionIssue) {
-        if (action === 'login') {
-          return (await localLogin(
-            payload.email || payload.userId || payload.identifier,
-            payload.password
-          )) as any;
-        }
-        if (action === 'signup') {
-          return (await localSignup(payload.fullName, payload.email, payload.password)) as any;
-        }
+    if (isAuthAction && isConnectionIssue) {
+      if (action === 'login') {
+        return (await localLogin(
+          payload.email || payload.userId || payload.identifier,
+          payload.password
+        )) as any;
       }
+      throw new Error('Creating an account needs a connection to the server. Please try again when you are online.');
     }
 
-    // If it's user management action and remote is unavailable or throws error, fall back to local store
-    if (isUserMgmtAction) {
-      if (action === 'getUsers') {
-        return { success: true, users: getLocalUsers() } as any;
-      }
-      if (action === 'adminCreateUser') {
-        const users = getLocalUsers();
-        const cleanEmail = (payload.email || '').trim().toLowerCase();
-        const cleanName = (payload.name || '').trim();
-        const existing = users.find((u) => u.email.toLowerCase() === cleanEmail);
-        if (existing) throw new Error('A user with this email already exists.');
-        const newUser: StoredLocalUser = {
-          name: cleanName,
-          email: cleanEmail,
-          role: payload.role || 'User',
-          status: payload.status || 'Approved',
-          created: new Date().toISOString(),
-          passwordHash: payload.password || 'Admin@123',
-        };
-        users.push(newUser);
-        saveLocalUsers(users);
-        return { success: true, user: newUser } as any;
-      }
-      if (action === 'adminManageUser') {
-        const users = getLocalUsers();
-        const cleanEmail = (payload.email || '').trim().toLowerCase();
-        const index = users.findIndex((u) => u.email.toLowerCase() === cleanEmail);
-        if (index >= 0) {
-          if (payload.name) users[index].name = payload.name;
-          if (payload.role) users[index].role = payload.role;
-          if (payload.status) users[index].status = payload.status;
-          if (payload.password) users[index].passwordHash = payload.password;
-          saveLocalUsers(users);
-        }
-        return { success: true } as any;
-      }
-      if (action === 'adminResetPassword') {
-        const users = getLocalUsers();
-        const cleanEmail = (payload.email || '').trim().toLowerCase();
-        const index = users.findIndex((u) => u.email.toLowerCase() === cleanEmail);
-        if (index >= 0) {
-          users[index].passwordHash = payload.newPassword || payload.password || 'Admin@123';
-          saveLocalUsers(users);
-        }
-        return { success: true, message: 'Password reset successfully in local store.' } as any;
-      }
-      if (action === 'adminDeleteUser') {
-        let users = getLocalUsers();
-        const cleanEmail = (payload.email || '').trim().toLowerCase();
-        users = users.filter((u) => u.email.toLowerCase() !== cleanEmail);
-        saveLocalUsers(users);
-        return { success: true } as any;
-      }
+    // User directory is read-only offline. Changes to users must go to the server.
+    if (action === 'getUsers' && isConnectionIssue) {
+      return { success: true, users: getLocalUsers(), isLocalFallback: true } as any;
     }
 
     // Analytics data local workstation fallback

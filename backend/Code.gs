@@ -61,6 +61,9 @@ function doGet(e) {
   return output_(payload, callback);
 }
 
+// Passwords that were shipped as defaults in earlier versions and must never work again.
+const BLOCKED_DEFAULT_PASSWORDS = ['Admin@123'];
+
 // Actions that may be called without signing in.
 const PUBLIC_ACTIONS = ['health', 'login', 'signup', 'logout', 'validateSession', 'getBranding'];
 
@@ -589,11 +592,8 @@ function setupSystem() {
     console.warn('Folder migration note during setup: ', mErr);
   }
 
-  // Seed default admin user if Users sheet is empty
-  const userSh = ss.getSheetByName(CONFIG.USERS_SHEET);
-  if (userSh && userSh.getLastRow() <= 1) {
-    userSh.appendRow([new Date(), 'Super Admin', 'admin@ops.local', hash_('Admin@123'), 'Admin', 'Approved']);
-  }
+  // No default admin account is seeded. The first person to sign up on an empty Users sheet
+  // becomes the administrator (see signup_).
 
   SpreadsheetApp.flush();
 
@@ -698,11 +698,8 @@ function login_(p){
   const sh = sheet_(CONFIG.USERS_SHEET);
   let values = sh.getDataRange().getValues();
 
-  // If Users sheet is empty or only has headers, auto-seed Super Admin
   if (values.length <= 1) {
-    const defaultAdminHash = hash_('Admin@123');
-    sh.appendRow([new Date(), 'Super Admin', 'admin@ops.local', defaultAdminHash, 'Admin', 'Approved']);
-    values = sh.getDataRange().getValues();
+    throw new Error('No accounts exist yet. Click "Create Account" to register the first administrator.');
   }
 
   for(let i = 1; i < values.length; i++){
@@ -723,6 +720,11 @@ function login_(p){
     const isPasswordMatch = storedIsHash
       ? storedPass.toLowerCase() === wanted
       : (storedPass !== '' && storedPass === password);
+
+    if(isPasswordMatch && BLOCKED_DEFAULT_PASSWORDS.indexOf(password) !== -1){
+      securityLog_(email, 'LOGIN', 'BLOCKED', 'Default password');
+      throw new Error('This account still uses the old default password, which is no longer allowed. Ask an administrator to reset it, or type a new password into the Password column of the Users sheet (it is hashed on next sign-in).');
+    }
 
     if(!isPasswordMatch){
       securityLog_(email, 'LOGIN', 'FAILED', 'Invalid password');
@@ -759,14 +761,27 @@ function login_(p){
 function signup_(p){
   const name=String(p.fullName||'').trim(), email=String(p.email||'').trim().toLowerCase(), password=String(p.password||'');
   if(!name||!email||!password)throw new Error('All fields are required.');
-  if(password.length<6)throw new Error('Password must contain at least 6 characters.');
-  const sh=sheet_(CONFIG.USERS_SHEET), values=sh.getDataRange().getValues();
-  for(let i=1;i<values.length;i++)if(String(values[i][2]||'').toLowerCase()===email)throw new Error('An account with this email already exists.');
-  sh.appendRow([new Date(),name,email,hash_(password),'User','Approved']);
-  securityLog_(email,'SIGNUP','SUCCESS','User registered and approved');
-  const user = { name, email, role: 'User' };
-  const token = saveSession_(user);
-  return {success:true, token, user, message:'Account created successfully! Signed in as ' + name + '.'};
+  if(password.length<8)throw new Error('Password must contain at least 8 characters.');
+  if(BLOCKED_DEFAULT_PASSWORDS.indexOf(password)!==-1)throw new Error('Please choose a different password.');
+  return withScriptLock_(function(){
+    const sh=sheet_(CONFIG.USERS_SHEET), values=sh.getDataRange().getValues();
+    let hasAdmin=false;
+    for(let i=1;i<values.length;i++){
+      if(String(values[i][2]||'').trim().toLowerCase()===email)throw new Error('An account with this email already exists.');
+      if(isAdminRole_(values[i][4]))hasAdmin=true;
+    }
+    // Bootstrap: with no administrator yet, the first account becomes an approved Admin.
+    // Afterwards new accounts are Pending until an administrator approves them.
+    const role=hasAdmin?'User':'Admin';
+    const status=hasAdmin?'Pending':'Approved';
+    sh.appendRow([new Date(),name,email,hash_(password),role,status]);
+    securityLog_(email,'SIGNUP','SUCCESS','Registered as '+role+' ('+status+')');
+    if(status!=='Approved'){
+      return {success:true, pending:true, message:'Account created. An administrator must approve it before you can sign in.'};
+    }
+    const user={name:name,email:email,role:role};
+    return {success:true, token:saveSession_(user), user:user, message:'Administrator account created. Signed in as '+name+'.'};
+  });
 }
 
 function validateSession_(p){

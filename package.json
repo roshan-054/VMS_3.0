@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "node --test backend/tests/*.test.cjs"
+    "test": "npm run test:backend && npm run test:web",
+    "test:backend": "node --test backend/tests/*.test.cjs",
+    "test:web": "node --import tsx --test tests/*.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

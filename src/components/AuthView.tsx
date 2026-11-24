@@ -58,11 +58,19 @@ export const AuthView: React.FC<AuthViewProps> = ({
 
     try {
       if (isSignup) {
-        const res = await requestApi<{ token?: string; user?: User; message?: string }>('signup', {
+        const res = await requestApi<{ token?: string; user?: User; message?: string; pending?: boolean }>('signup', {
           fullName: fullName.trim() || 'Packing Operator',
           email: cleanEmail,
           password,
         });
+
+        if (res.pending) {
+          // New accounts wait for an administrator to approve them.
+          setIsSignup(false);
+          setPassword('');
+          onShowToast(res.message || 'Account created. An administrator must approve it before you can sign in.', 'success');
+          return;
+        }
 
         if (res.token && res.user) {
           setStoredToken(res.token);
@@ -175,7 +183,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
                   autoComplete="username"
                   autoCapitalize="none"
                   spellCheck={false}
-                  placeholder="e.g. admin@ops.local, admin, or packer@vms.local"
+                  placeholder="Your email or user ID"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs font-mono focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"

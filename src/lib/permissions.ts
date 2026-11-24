@@ -57,17 +57,9 @@ export function saveUserPermissionsLocally(email: string, permissions: AdminPerm
 export function isMasterAdmin(user: User | null | undefined): boolean {
   if (!user) return false;
   const role = String(user.role || '').toLowerCase().replace(/[\s_-]/g, '');
-  const email = String(user.email || '').toLowerCase().trim();
-  return (
-    role === 'masteradmin' ||
-    role === 'superadmin' ||
-    role === 'admin' ||
-    email === 'admin@ops.local' ||
-    email === 'admin@vms.local' ||
-    email === 'master@vms.local' ||
-    email === 'askroshan.2002@gmail.com' ||
-    email === 'roshan.k@paraayan.com'
-  );
+  // Roles come from the backend Users sheet. The backend has a single admin tier, so every
+  // Admin is treated as a master admin here. No account is privileged by its email address.
+  return role === 'masteradmin' || role === 'superadmin' || role === 'admin';
 }
 
 export function isAdmin(user: User | null | undefined): boolean {
