@@ -2,7 +2,7 @@
 
 Records order-packing and return videos at a packing station, uploads them to Google Drive,
 and logs every recording in Google Sheets. It also handles order manifests with GTIN item
-verification, search, reports, analytics, user admin and a phone-as-barcode-scanner mode.
+verification, search, reports, analytics and user admin.
 
 ## How it fits together
 
@@ -10,10 +10,10 @@ verification, search, reports, analytics, user admin and a phone-as-barcode-scan
 |---|---|---|
 | React app (`src/`) | Browser. Published to GitHub Pages by `.github/workflows/deploy.yml` | UI, camera recording, offline upload queue (IndexedDB), uploads |
 | Apps Script backend (`backend/Code.gs`) | Google Apps Script web app | Sign-in, Users, Sheets logs, Drive folders, resumable uploads, search, reports |
-| Station server (`server.ts`) – optional | Your own Node host (not GitHub Pages) | WebSocket phone-scanner relay, fast Drive upload proxy, Sheet CSV proxy |
+| Station server (`server.ts`) – optional | Your own Node host (not GitHub Pages) | Fast Drive upload proxy, Sheet CSV proxy |
 
 On GitHub Pages the app detects that the station server is missing and uses the parts that work
-without it: phone pairing over PeerJS and uploads through Apps Script.
+without it: uploads go through Apps Script.
 
 ## Setting up the backend
 

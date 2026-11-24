@@ -1,7 +1,7 @@
 /**
  * Detects whether the optional VMS station server (server.ts) is serving this page.
  *
- * GitHub Pages only hosts the static app, so /api/* and /ws-scanner do not exist there.
+ * GitHub Pages only hosts the static app, so /api/* does not exist there.
  * Features that need the server (WebSocket phone relay, fast Drive upload proxy, Sheet CSV
  * proxy) check this first instead of failing on every request.
  */
@@ -23,7 +23,7 @@ async function probe(): Promise<StationServerInfo> {
     const res = await fetch('/api/health', { cache: 'no-store', signal: controller.signal });
     if (!res.ok) return none;
     const data = await res.json().catch(() => null);
-    if (!data || data.status !== 'ok' || !data.realtimeScannerWs) return none;
+    if (!data || data.status !== 'ok' || !(data.stationServer || data.realtimeScannerWs)) return none;
     return { available: true };
   } catch {
     return none;

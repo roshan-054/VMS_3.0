@@ -55,7 +55,6 @@ const Reports = lazyNamed(() => import('./components/Reports'), 'Reports');
 const Analytics = lazyNamed(() => import('./components/Analytics'), 'Analytics');
 const SystemHealth = lazyNamed(() => import('./components/SystemHealth'), 'SystemHealth');
 const AdminPanel = lazyNamed(() => import('./components/AdminPanel'), 'AdminPanel');
-const MobilePhoneScanner = lazyNamed(() => import('./components/MobilePhoneScanner'), 'MobilePhoneScanner');
 
 const TabLoading = () => (
   <div className="flex items-center justify-center py-24 text-sm text-slate-500">Loading…</div>
@@ -280,31 +279,6 @@ export function App() {
     return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired);
   }, []);
 
-  // Check if opened directly in Wireless Phone Barcode Scanner Mode (e.g. from QR code scan or URL query)
-  const isMobileScannerMode = (() => {
-    const params = new URLSearchParams(window.location.search);
-    return (
-      params.get('scanner') === 'mobile' ||
-      params.get('mode') === 'scanner' ||
-      params.get('scanner') === 'phone' ||
-      params.get('role') === 'phone'
-    );
-  })();
-
-  if (isMobileScannerMode) {
-    const params = new URLSearchParams(window.location.search);
-    return (
-      <Suspense fallback={<TabLoading />}>
-        <MobilePhoneScanner
-          initialPin={params.get('pin') || params.get('station') || ''}
-          onExit={() => {
-            window.location.href = window.location.pathname;
-          }}
-        />
-      </Suspense>
-    );
-  }
-
   if (!currentUser) {
     return (
       <AuthView
@@ -332,7 +306,7 @@ export function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col md:flex-row text-slate-800">
-      {/* Mobile Top App Bar with Hamburger & Phone Scanner Trigger */}
+      {/* Mobile Top App Bar with Hamburger */}
       <div className="md:hidden bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between sticky top-0 z-40 shadow-xs">
         <div className="flex items-center gap-2.5">
           <button

@@ -29,7 +29,6 @@ import {
   getStoredGtinCatalog
 } from '../lib/manifestStorage';
 import { getDirectImageUrl } from '../lib/branding';
-import { sharedScannerSync } from '../lib/phoneScannerSync';
 import { SmartProductImage } from './SmartProductImage';
 
 interface PackVerificationModalProps {
@@ -340,17 +339,6 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
       window.removeEventListener('focus', refocus);
     };
   }, [isFullyVerified]);
-
-  // Hardware Scanner & Wireless Phone Scanner real-time listener
-  useEffect(() => {
-    const unsubPhone = sharedScannerSync.onBarcode((code) => {
-      processGtinScan(code);
-    });
-
-    return () => {
-      unsubPhone();
-    };
-  }, [items, isFullyVerified]);
 
   const handleManualScanSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -726,7 +714,7 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
           })}
         </div>
 
-        {/* Live Barcode Scanner Input (USB scanner, phone scanner, or manual typing) */}
+        {/* Live Barcode Scanner Input (USB scanner or manual typing) */}
         {!isFullyVerified ? (
           <form onSubmit={handleManualScanSubmit} className="space-y-2 pt-1">
             <div className="flex items-center justify-between text-xs text-slate-400 font-mono">

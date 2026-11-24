@@ -27,7 +27,7 @@ test('network failure means no station server', async () => {
 });
 
 test('server.ts health response is detected', async () => {
-  mockFetch(async () => Response.json({ status: 'ok', realtimeScannerWs: true }));
+  mockFetch(async () => Response.json({ status: 'ok', stationServer: true }));
   assert.deepEqual(await getStationServerInfo(), { available: true });
 });
 
