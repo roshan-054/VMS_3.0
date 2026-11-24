@@ -12,6 +12,17 @@
 
 import { getStoredApiUrl } from './storage';
 import Peer, { type DataConnection } from 'peerjs';
+import { hasStationServer } from './serverFeatures';
+
+function randomStationPin(): string {
+  const n = new Uint32Array(1);
+  try {
+    crypto.getRandomValues(n);
+  } catch {
+    n[0] = Math.floor(Math.random() * 1e9);
+  }
+  return String(1000 + (n[0] % 9000));
+}
 
 export function cleanStationPin(pin?: string): string {
   const digits = String(pin || '').replace(/\D/g, '').slice(0, 4);
@@ -84,16 +95,28 @@ class PhoneScannerSync {
     }
     this.clientId = savedClientId;
     this.initStationCredentials();
-    this.startHttpSyncLoop();
-    this.connectWs();
+    // The WebSocket relay and HTTP fallback only exist when server.ts serves the app.
+    // On static hosting (GitHub Pages) pairing runs over PeerJS only, with no polling.
+    hasStationServer().then((ok) => {
+      this.serverAvailable = ok;
+      if (ok) {
+        this.startHttpSyncLoop();
+        this.connectWs();
+        this.pairInstant();
+      }
+    });
   }
+
+  private serverAvailable = false;
 
   private initStationCredentials() {
     let storedId = localStorage.getItem('vms_station_id');
     let storedPin = localStorage.getItem('vms_station_pin');
 
     if (!storedId || !storedPin || cleanStationPin(storedPin).length !== 4) {
-      storedPin = '5829';
+      // Each station gets its own random PIN. A shared default PIN would put every VMS
+      // station on the same public PeerJS ID, so phones could reach other people's stations.
+      storedPin = randomStationPin();
       storedId = 'station-5829';
       localStorage.setItem('vms_station_id', storedId);
       localStorage.setItem('vms_station_pin', storedPin);
@@ -391,7 +414,7 @@ class PhoneScannerSync {
    * Instant station handshake with server
    */
   public async pairInstant() {
-    if (!this.stationId) return;
+    if (!this.stationId || !this.serverAvailable) return;
 
     try {
       const res = await fetch('/api/scanner/pair', {
@@ -450,6 +473,7 @@ class PhoneScannerSync {
   }
 
   private connectWs() {
+    if (!this.serverAvailable) return;
     if (this.isConnecting || (this.ws && this.ws.readyState === WebSocket.OPEN)) return;
     this.isConnecting = true;
 
@@ -631,7 +655,7 @@ class PhoneScannerSync {
   }
 
   public async pollHttpEvents() {
-    if (!this.stationId) return;
+    if (!this.stationId || !this.serverAvailable) return;
 
     try {
       const res = await fetch(`/api/scanner/poll?stationId=${encodeURIComponent(this.stationId)}&since=${this.lastPolledTimestamp}`);
@@ -738,7 +762,7 @@ class PhoneScannerSync {
     }
 
     // 3. HTTP broadcast backup
-    try {
+    if (this.serverAvailable) try {
       const res = await fetch('/api/scanner/broadcast', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -772,13 +796,22 @@ class PhoneScannerSync {
       timestamp: Date.now(),
     };
 
+    // Direct WebRTC P2P (works on static hosting such as GitHub Pages)
+    this.peerConnections.forEach((conn) => {
+      if (conn.open) {
+        try {
+          conn.send(payload);
+        } catch (e) {}
+      }
+    });
+
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       try {
         this.ws.send(JSON.stringify(payload));
       } catch (e) {}
     }
 
-    try {
+    if (this.serverAvailable) try {
       await fetch('/api/scanner/broadcast', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

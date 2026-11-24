@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { hasStationServer } from '../lib/serverFeatures';
 import {
   Smartphone,
   QrCode,
@@ -50,8 +51,8 @@ export const PhoneScannerModal: React.FC<PhoneScannerModalProps> = ({
       }
       return;
     }
-    fetch('/api/scanner/info')
-      .then((r) => r.json())
+    hasStationServer()
+      .then((ok) => (ok ? fetch('/api/scanner/info').then((r) => r.json()) : null))
       .then((d) => {
         if (d && Array.isArray(d.lanIps) && d.lanIps.length > 0) {
           setLanIp(d.lanIps[0]);

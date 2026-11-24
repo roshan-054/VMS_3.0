@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { getStationServerInfo } from '../lib/serverFeatures';
+import { getStoredToken } from '../lib/storage';
 import {
   Sparkles,
   X,
@@ -99,10 +101,20 @@ export const AiVideoFocusModal: React.FC<AiVideoFocusModalProps> = ({
     setIsAnalyzing(true);
     setCalibrationApplied(false);
     try {
+      const server = await getStationServerInfo();
+      if (!server.available) {
+        throw new Error('AI analysis needs the VMS station server (server.ts). It is not available on this site (for example GitHub Pages).');
+      }
+      if (!server.geminiAvailable) {
+        throw new Error('AI analysis is not configured: set GEMINI_API_KEY on the VMS station server.');
+      }
       // Call backend Gemini AI video analyzer
       const response = await fetch('/api/ai/analyze-packing-video', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-vms-token': getStoredToken(),
+        },
         body: JSON.stringify({
           orderId: targetOrderId || 'Packing Video Sample',
           fileId: targetFileId || '',
