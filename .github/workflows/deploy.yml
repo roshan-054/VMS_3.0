@@ -26,6 +26,10 @@ jobs:
           node-version: 20
       - name: Install dependencies
         run: npm install
+      - name: Type check
+        run: npm run lint
+      - name: Backend tests
+        run: npm test
       - name: Build
         run: npm run build
       - name: Setup Pages

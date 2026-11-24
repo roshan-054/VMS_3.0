@@ -39,6 +39,7 @@ import {
   BrandingConfig
 } from './lib/branding';
 import { getStoredManifests, startGlobalManifestSyncLoop } from './lib/manifestStorage';
+import { SESSION_EXPIRED_EVENT } from './lib/api';
 import { initUploadWorker } from './lib/uploadWorker';
 import { ScanRecord } from './components/ScanRecord';
 import { OrderProcessing } from './components/OrderProcessing';
@@ -258,6 +259,18 @@ export function App() {
     updateCurrentUser(null);
     showToast('Logged out of workstation', 'info');
   };
+
+  // Backend rejected our session (expired, revoked or missing): return to the sign-in screen.
+  useEffect(() => {
+    const onExpired = (e: Event) => {
+      const msg = (e as CustomEvent)?.detail?.message || 'Your session has expired. Please sign in again.';
+      setStoredToken('');
+      updateCurrentUser(null);
+      showToast(msg, 'error');
+    };
+    window.addEventListener(SESSION_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired);
+  }, []);
 
   // Check if opened directly in Wireless Phone Barcode Scanner Mode (e.g. from QR code scan or URL query)
   const isMobileScannerMode = (() => {
