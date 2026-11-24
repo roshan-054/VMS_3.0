@@ -212,6 +212,9 @@ function ss_() {
 }
 
 const VIDEO_ROOT_CACHE_KEY = 'VMS_VIDEO_ROOT_FOLDER_ID';
+// A change typed straight into the Branding tab is picked up within a minute.
+const VIDEO_ROOT_CACHE_SECONDS_ = 60;
+const VIDEO_FOLDER_SETTING_HELP_ = 'Video upload folder. Paste a Google Drive folder link or ID; every station uploads here within 1 minute (Platform / Type / Month / Date folders are created inside it).';
 
 function cleanFolderId_(raw) {
   const v = String(raw || '').trim();
@@ -226,13 +229,16 @@ function videoRootFolderId_() {
   const cached = cache.get(VIDEO_ROOT_CACHE_KEY);
   if (cached) return cached;
   let id = '';
+  let hasRow = false;
+  let sh = null;
   try {
-    const sh = ss_().getSheetByName(CONFIG.BRANDING_SHEET);
+    sh = ss_().getSheetByName(CONFIG.BRANDING_SHEET);
     if (sh) {
       const data = sh.getDataRange().getValues();
       for (let i = 1; i < data.length; i++) {
         const k = String(data[i][0] || '').trim();
         if (k === 'VideoDriveFolderId' || k === 'DriveFolderId') {
+          hasRow = true;
           id = cleanFolderId_(data[i][1]);
           if (id) break;
         }
@@ -240,7 +246,11 @@ function videoRootFolderId_() {
     }
   } catch (e) {}
   if (!id) id = scriptProps_().getProperty('PARENT_FOLDER_ID') || CONFIG.HARDWIRED_PARENT_FOLDER_ID;
-  cache.put(VIDEO_ROOT_CACHE_KEY, id, 300);
+  // Always show the setting in the Branding tab, so the folder can be changed right there.
+  if (sh && !hasRow) {
+    try { sh.appendRow(['VideoDriveFolderId', id, new Date(), VIDEO_FOLDER_SETTING_HELP_]); } catch (_) {}
+  }
+  cache.put(VIDEO_ROOT_CACHE_KEY, id, VIDEO_ROOT_CACHE_SECONDS_);
   return id;
 }
 
@@ -552,7 +562,7 @@ function createBrandingTabOnly() {
   if (!existingKeys.has('FaviconUrl')) sh.appendRow(['FaviconUrl', '', now, 'Browser Favicon URL or Drive Direct Link']);
   if (!existingKeys.has('BrandingFolderId')) sh.appendRow(['BrandingFolderId', '', now, 'Google Drive Folder for Brand Assets']);
   if (!existingKeys.has('VideoDriveFolderId') && !existingKeys.has('DriveFolderId')) {
-    sh.appendRow(['VideoDriveFolderId', CONFIG.HARDWIRED_PARENT_FOLDER_ID || '', now, 'Google Drive Root Folder ID for Video Uploads']);
+    sh.appendRow(['VideoDriveFolderId', CONFIG.HARDWIRED_PARENT_FOLDER_ID || '', now, VIDEO_FOLDER_SETTING_HELP_]);
   }
   if (!existingKeys.has('LastBrandingSync')) sh.appendRow(['LastBrandingSync', now.toISOString(), now, 'Last Synchronization Timestamp']);
 
@@ -622,7 +632,7 @@ function setupSystem() {
       if (!existingKeys.has('FaviconUrl')) brandSh.appendRow(['FaviconUrl', '', now, 'Browser Favicon URL or Drive Direct Link']);
       if (!existingKeys.has('BrandingFolderId')) brandSh.appendRow(['BrandingFolderId', '', now, 'Google Drive Folder for Brand Assets']);
       if (!existingKeys.has('VideoDriveFolderId') && !existingKeys.has('DriveFolderId')) {
-        brandSh.appendRow(['VideoDriveFolderId', CONFIG.HARDWIRED_PARENT_FOLDER_ID || '', now, 'Google Drive Root Folder ID for Video Uploads']);
+        brandSh.appendRow(['VideoDriveFolderId', CONFIG.HARDWIRED_PARENT_FOLDER_ID || '', now, VIDEO_FOLDER_SETTING_HELP_]);
       }
       if (!existingKeys.has('LastBrandingSync')) brandSh.appendRow(['LastBrandingSync', now.toISOString(), now, 'Last Synchronization Timestamp']);
     } catch(bErr) {
@@ -945,6 +955,30 @@ function driveExists_(id){
   try{DriveApp.getFileById(String(id));return true}catch(_){return false}
 }
 
+/**
+ * A log row's date, read safely. Some old rows carry a year 100 too far ahead (for example
+ * 15 Oct 2126 for 15 Oct 2026), which put them above every real entry in newest-first lists.
+ * A date more than 2 days in the future is moved back by whole centuries until it is not.
+ */
+function rowDate_(value) {
+  let d = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+  if (isNaN(d.getTime())) return d;
+  const limit = Date.now() + 2 * 86400000;
+  while (d.getTime() > limit && d.getFullYear() > 2000) {
+    const back = new Date(d.getTime());
+    back.setFullYear(d.getFullYear() - 100);
+    if (back.getTime() <= 0) break;
+    d = back;
+  }
+  return d;
+}
+
+/** ISO text of a log row's date (see rowDate_), or the cell's own text when it is not a date. */
+function rowIso_(value) {
+  const d = rowDate_(value);
+  return isNaN(d.getTime()) ? String(value || '') : d.toISOString();
+}
+
 function completedDuplicate_(order,platform,type){
   const normTargetOrder = normalizeOrderId_(order);
   if (!normTargetOrder) return null;
@@ -976,7 +1010,7 @@ function completedDuplicate_(order,platform,type){
               orderId: String(rawOrder || ''),
               platform: String(v[i][2] || ''),
               recordingType: 'Forward',
-              timestamp: v[i][0] instanceof Date ? v[i][0].toISOString() : String(v[i][0] || ''),
+              timestamp: rowIso_(v[i][0]),
               packerEmail: String(v[i][3] || ''),
               fileId: fileId,
               playbackUrl: String(v[i][5] || (fileId ? 'https://drive.google.com/file/d/' + fileId + '/preview' : ''))
@@ -1014,7 +1048,7 @@ function completedDuplicate_(order,platform,type){
               orderId: String(rawOrder || ''),
               platform: String(r[i][2] || ''),
               recordingType: 'Return',
-              timestamp: r[i][0] instanceof Date ? r[i][0].toISOString() : String(r[i][0] || ''),
+              timestamp: rowIso_(r[i][0]),
               packerEmail: String(r[i][3] || ''),
               fileId: fileId,
               playbackUrl: String(r[i][5] || (fileId ? 'https://drive.google.com/file/d/' + fileId + '/preview' : ''))
@@ -1053,7 +1087,7 @@ function completedDuplicate_(order,platform,type){
             orderId: String(rawOrder || ''),
             platform: String(u[i][2] || ''),
             recordingType: rawType || (targetType === 'return' ? 'Return' : 'Forward'),
-            timestamp: u[i][0] instanceof Date ? u[i][0].toISOString() : String(u[i][0] || ''),
+            timestamp: rowIso_(u[i][0]),
             packerEmail: String(u[i][3] || ''),
             fileId: fileId,
             playbackUrl: fileId ? 'https://drive.google.com/file/d/' + fileId + '/preview' : ''
@@ -1363,7 +1397,7 @@ function findLoggedJob_(queueJobId) {
       return {
         sourceSheet: names[n], row: i + 1, orderId: String(v[i][1] || ''), platform: String(v[i][2] || ''),
         recordingType: String(v[i][8] || ''), packerEmail: String(v[i][3] || ''), fileId: fid,
-        timestamp: v[i][0] instanceof Date ? v[i][0].toISOString() : String(v[i][0] || ''),
+        timestamp: rowIso_(v[i][0]),
         playbackUrl: String(v[i][5] || (fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : '')),
         webViewLink: String(v[i][5] || (fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : ''))
       };
@@ -1414,7 +1448,7 @@ function advancedSearch_(p){
       if (!sh) return;
       const v = sh.getDataRange().getValues();
       for (let i = v.length - 1; i >= 1; i--) {
-        const ts = v[i][0] instanceof Date ? v[i][0] : new Date(v[i][0]);
+        const ts = rowDate_(v[i][0]);
         const oid = String(v[i][1] || '').trim();
         const normOid = normalizeOrderId_(oid);
         const cleanOid = cleanAlphanumeric_(oid);
@@ -1480,7 +1514,7 @@ function advancedSearch_(p){
     if (rows.length < limit) {
       const u = sheet_(CONFIG.UPLOAD_LOG_SHEET).getDataRange().getValues();
       for (let i = u.length - 1; i >= 1; i--) {
-        const ts = u[i][0] instanceof Date ? u[i][0] : new Date(u[i][0]);
+        const ts = rowDate_(u[i][0]);
         const oid = String(u[i][1] || '').trim();
         const normOid = normalizeOrderId_(oid);
         const cleanOid = cleanAlphanumeric_(oid);
@@ -2602,7 +2636,7 @@ function uploadLogs_(p){
   function matchesFilter(oid, fn, pe, upId, pf, st, rt, fid, jid, ts) {
     // 1. Date Range
     if (fromDate || toDate) {
-      const d = ts instanceof Date ? ts : new Date(ts);
+      const d = rowDate_(ts);
       if (!isNaN(d.getTime())) {
         if (fromDate && d < fromDate) return false;
         if (toDate && d > toDate) return false;
@@ -2669,7 +2703,7 @@ function uploadLogs_(p){
       const odata = sh.getDataRange().getValues();
       // Headers: [Timestamp, Order ID, Platform, Packer Email, Video Drive ID, Video Playback URL, Package Weight, Status, Recording Type, Queue Job ID, Video MIME Type, Playback Status]
       for (let i = odata.length - 1; i >= 1; i--) {
-        const ts = odata[i][0] instanceof Date ? odata[i][0] : new Date(odata[i][0]);
+        const ts = rowDate_(odata[i][0]);
         const oid = String(odata[i][1] || '').trim();
         const pf = String(odata[i][2] || '').trim();
         const pe = String(odata[i][3] || '').trim();
@@ -2729,7 +2763,7 @@ function uploadLogs_(p){
     if (uSh) {
       const v = uSh.getDataRange().getValues();
       for (let i = v.length - 1; i >= 1; i--) {
-        const ts = v[i][0] instanceof Date ? v[i][0] : new Date(v[i][0]);
+        const ts = rowDate_(v[i][0]);
         const orderId = String(v[i][1] || '').trim();
         const platform = String(v[i][2] || '').trim();
         const pe = String(v[i][3] || '').trim();
@@ -2951,7 +2985,7 @@ function deleteLogEntry_(p){
             const targetData = targetSh.getDataRange().getValues();
             // Headers: [Timestamp, Order ID, Platform, Packer Email, Video Drive ID, Video Playback URL, Package Weight, Status, Recording Type, Queue Job ID, Video MIME Type, Playback Status]
             for (let i = targetData.length - 1; i >= 1; i--) {
-              const rowTimestamp = targetData[i][0] instanceof Date ? targetData[i][0].toISOString() : String(targetData[i][0] || '').trim();
+              const rowTimestamp = rowIso_(targetData[i][0]).trim();
               const rowOrderId = String(targetData[i][1] || '').trim();
               const rowPlatform = String(targetData[i][2] || '').trim();
               const rowDriveId = String(targetData[i][4] || '').trim();
@@ -3007,7 +3041,7 @@ function deleteLogEntry_(p){
           const uploadData = uploadSh.getDataRange().getValues();
           // Headers: [Timestamp, Order ID, Platform, Packer Email, File Name, File Size, Upload ID, Stage, Progress, Drive File ID, Status, Error, Recording Type, Source, Queue Job ID]
           for (let i = uploadData.length - 1; i >= 1; i--) {
-            const rowTimestamp = uploadData[i][0] instanceof Date ? uploadData[i][0].toISOString() : String(uploadData[i][0] || '').trim();
+            const rowTimestamp = rowIso_(uploadData[i][0]).trim();
             const rowOrderId = String(uploadData[i][1] || '').trim();
             const rowPlatform = String(uploadData[i][2] || '').trim();
             const rowFileName = String(uploadData[i][4] || '').trim();
@@ -3066,7 +3100,7 @@ function deleteLogEntry_(p){
             const dlData = dlSh.getDataRange().getValues();
             for (let i = dlData.length - 1; i >= 1; i--) {
               const rowOrderId = String(dlData[i][1] || '').trim();
-              const rowTimestamp = dlData[i][0] instanceof Date ? dlData[i][0].toISOString() : String(dlData[i][0] || '').trim();
+              const rowTimestamp = rowIso_(dlData[i][0]).trim();
               let match = false;
               if (rowOrderId && normalizeOrderId_(rowOrderId) === normalizeOrderId_(orderId)) {
                 if (targetTimestampStr && rowTimestamp) {
@@ -3283,7 +3317,7 @@ function scanDuplicateRecords_(p) {
         const fid = fileIdCol >= 0 ? String(v[i][fileIdCol] || '').trim() : '';
         const playback = playbackCol >= 0 ? String(v[i][playbackCol] || '').trim() : '';
         const rawTs = timeCol >= 0 ? v[i][timeCol] : '';
-        const tsDate = rawTs instanceof Date ? rawTs : new Date(rawTs);
+        const tsDate = rowDate_(rawTs);
         const tsIso = !isNaN(tsDate.getTime()) ? tsDate.toISOString() : String(rawTs || '');
         const platformVal = platformCol >= 0 ? String(v[i][platformCol] || 'Amazon').trim() : 'Amazon';
         const emailVal = emailCol >= 0 ? String(v[i][emailCol] || '').trim() : '';
@@ -3749,7 +3783,7 @@ function removeDuplicateRecords_(p) {
 
 /* ---------- Reports & Analytics ---------- */
 function inRange_(value,from,to){
-  const d = value instanceof Date ? value : new Date(value);
+  const d = rowDate_(value);
   if(isNaN(d)) return false;
   return d >= from && d <= to;
 }
@@ -3790,7 +3824,7 @@ function getReportData_(p){
       if (!sh) return;
       const v = sh.getDataRange().getValues();
       for (let i = 1; i < v.length; i++) {
-        const ts = v[i][0] instanceof Date ? v[i][0] : new Date(v[i][0]);
+        const ts = rowDate_(v[i][0]);
         if (isNaN(ts) || !inRange_(ts, from, to)) continue;
         const oid = String(v[i][1] || '').trim();
         const pf = String(v[i][2] || '').trim();
@@ -3897,7 +3931,7 @@ function getAnalyticsDataUncached_(p, sessionUser){
       if (!sh) return;
       const v = sh.getDataRange().getValues();
       for (let i = 1; i < v.length; i++) {
-        const ts = v[i][0] instanceof Date ? v[i][0] : new Date(v[i][0]);
+        const ts = rowDate_(v[i][0]);
         if (isNaN(ts) || !inRange_(ts, from, to)) continue;
         const oid = String(v[i][1] || '').trim();
         const pf = String(v[i][2] || '').trim();
@@ -3949,7 +3983,7 @@ function getAnalyticsDataUncached_(p, sessionUser){
     if (uploadSh) {
       const uv = uploadSh.getDataRange().getValues();
       for (let i = 1; i < uv.length; i++) {
-        const ts = uv[i][0] instanceof Date ? uv[i][0] : new Date(uv[i][0]);
+        const ts = rowDate_(uv[i][0]);
         if (isNaN(ts) || !inRange_(ts, from, to)) continue;
         const oid = String(uv[i][1] || '').trim();
         const pf = String(uv[i][2] || '').trim();
@@ -4204,16 +4238,17 @@ function saveBrandingConfig_(p) {
   }
 
   const now = new Date();
-  const data = sh.getDataRange().getValues();
+  let data = sh.getDataRange().getValues();
 
   function updateOrInsert(key, value, desc) {
+    // Re-read: earlier steps (e.g. videoRootFolderId_) may have added rows.
+    data = sh.getDataRange().getValues();
     let found = false;
     for (let i = 1; i < data.length; i++) {
       if (String(data[i][0] || '').trim() === key) {
         sh.getRange(i + 1, 2).setValue(value);
         sh.getRange(i + 1, 3).setValue(now);
         found = true;
-        break;
       }
     }
     if (!found) {
@@ -4256,7 +4291,7 @@ function saveBrandingConfig_(p) {
     }
     CacheService.getScriptCache().remove(VIDEO_ROOT_CACHE_KEY);
     props.setProperty('PARENT_FOLDER_ID', cleanFolderId);
-    updateOrInsert('VideoDriveFolderId', cleanFolderId, 'Google Drive Root Folder ID for Video Uploads');
+    updateOrInsert('VideoDriveFolderId', cleanFolderId, VIDEO_FOLDER_SETTING_HELP_);
   }
 
   if (p.maxVideoSizeMb !== undefined && p.maxVideoSizeMb !== null && p.maxVideoSizeMb !== '') {
@@ -4554,7 +4589,7 @@ function getDriveFileSize_(p) {
 
 function formatDateDDMMMYYYY_(dateVal) {
   if (!dateVal) return '';
-  var d = dateVal instanceof Date ? dateVal : new Date(dateVal);
+  var d = rowDate_(dateVal);
   if (isNaN(d.getTime())) return String(dateVal);
   var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   var day = ('0' + d.getDate()).slice(-2);
@@ -4565,7 +4600,7 @@ function formatDateDDMMMYYYY_(dateVal) {
 
 function formatDateTimeDDMMMYYYY_(dateVal) {
   if (!dateVal) return '';
-  var d = dateVal instanceof Date ? dateVal : new Date(dateVal);
+  var d = rowDate_(dateVal);
   if (isNaN(d.getTime())) return String(dateVal);
   var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   var day = ('0' + d.getDate()).slice(-2);
@@ -5452,7 +5487,7 @@ function scanOlderVideos_(p) {
       for (let i = 1; i < v.length; i++) {
         const rawTs = v[i][0];
         if (!rawTs) continue;
-        const ts = rawTs instanceof Date ? rawTs : new Date(rawTs);
+        const ts = rowDate_(rawTs);
         if (isNaN(ts) || ts >= cutoff) continue;
 
         const oid = String(v[i][1] || '').trim();
@@ -5554,7 +5589,7 @@ function deleteOlderVideos_(p) {
       for (let i = v.length - 1; i >= 1; i--) {
         const rawTs = v[i][0];
         if (!rawTs) continue;
-        const ts = rawTs instanceof Date ? rawTs : new Date(rawTs);
+        const ts = rowDate_(rawTs);
         if (isNaN(ts) || ts >= cutoff) continue;
 
         const pf = String(v[i][2] || '').trim();

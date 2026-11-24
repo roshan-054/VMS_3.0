@@ -87,3 +87,26 @@ test('if the configured folder becomes inaccessible, uploads fail loudly instead
   assert.match(up.error, /Cannot open the Google Drive video folder/);
   assert.equal([...drive.folders.values()].filter((f) => f.name === '2026-11-24').length, 0);
 });
+
+test('Branding tab shows the VideoDriveFolderId row, and editing it in the sheet moves uploads there', () => {
+  const { rt, drive, packer } = setup();
+  if (!rt.sheets.get('Branding')) rt.call('createBrandingTabOnly', {});
+  rt.sandbox.videoRootFolderId_();
+  const sh = rt.sheets.get('Branding');
+  const rowIdx = sh.rows.findIndex((r) => r[0] === 'VideoDriveFolderId');
+  assert.ok(rowIdx > 0, 'setting row added to the Branding tab');
+  assert.equal(sh.rows[rowIdx][1], '1DonGlWoJtRc30fsSi7zHjE5G5xlDPiLA');
+  assert.match(String(sh.rows[rowIdx][3]), /Drive folder link or ID/);
+
+  // Admin pastes a folder link straight into column B; cache expires within a minute.
+  sh.rows[rowIdx][1] = 'https://drive.google.com/drive/folders/NEWFOLDER_abcdefghij?usp=sharing';
+  rt.cache.delete('VMS_VIDEO_ROOT_FOLDER_ID');
+  const up = rt.call('startUpload', {
+    token: packer, orderId: 'ORD-3', platform: 'Amazon', recordingType: 'Forward', fileName: 'ORD-3_Amazon_Forward.mp4',
+    fileSize: 1000, uploadId: 'u3', recordingDate: '2026-11-24', totalChunks: 1,
+  });
+  assert.equal(up.success, true, up.error);
+  const dateFolders = [...drive.folders.values()].filter((f) => f.name === '2026-11-24');
+  assert.equal(drive.pathOf(dateFolders[0]), 'Videos 2027/Amazon/Forward/Nov-2026/2026-11-24');
+  assert.equal(sh.rows.filter((r) => r[0] === 'VideoDriveFolderId').length, 1, 'row not duplicated');
+});
