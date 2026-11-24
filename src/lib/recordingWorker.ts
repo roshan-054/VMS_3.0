@@ -113,6 +113,7 @@ async function runEncode(msg: any) {
     }
     if (r.done || !r.value) break;
     const frame = r.value;
+    if (warmup === 2) post({ type: 'first-frame' });
     if (warmup > 0) {
       // The first frames arrive while the camera clone and encoder spin up; starting the
       // timeline after them avoids a visible hitch at second 0.
@@ -160,6 +161,10 @@ async function runEncode(msg: any) {
     encodeError = encodeError || String((e as Error)?.message || e);
   }
   encoder.close();
+  if (frames === 0 || bytes === 0) {
+    post({ type: 'fatal', message: 'No video frames were received from the camera.' });
+    return;
+  }
   muxer.finalize();
   const buffer: ArrayBuffer = muxer.target.buffer;
   post(

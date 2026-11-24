@@ -74,9 +74,10 @@ function cleanMime(m: string): string {
 }
 
 async function startWebCodecs(o: StartRecordingOptions, width: number, height: number): Promise<RecordingSession | null> {
-  const source = o.cameraTrack.clone(); // stopping the recorder must never stop the live preview
-  // Buffer up to ~2 s of frames so a stalled page delays frames instead of dropping them.
-  const processor = new g.MediaStreamTrackProcessor({ track: source, maxBufferSize: 60 });
+  // Read the live camera track itself (not a clone): a clone can stop receiving frames after the
+  // auto-focus code changes camera constraints. Cancelling the reader at stop releases it without
+  // stopping the preview. Buffer up to ~2 s so a stalled page delays frames instead of dropping them.
+  const processor = new g.MediaStreamTrackProcessor({ track: o.cameraTrack, maxBufferSize: 60 });
   const worker = newWorker();
 
   let resolveDone: (r: RecordingResult) => void;
@@ -85,10 +86,12 @@ async function startWebCodecs(o: StartRecordingOptions, width: number, height: n
     resolveDone = res;
     rejectDone = rej;
   });
+  let codec = '';
   const started = new Promise<{ ok: boolean; codec?: string }>((resolve) => {
     worker.onmessage = (e) => {
       const m = e.data || {};
-      if (m.type === 'started') resolve({ ok: true, codec: m.codec });
+      if (m.type === 'started') codec = m.codec;
+      else if (m.type === 'first-frame') resolve({ ok: true, codec });
       else if (m.type === 'unsupported') resolve({ ok: false });
       else if (m.type === 'progress') o.onProgress?.(m.bytes);
       else if (m.type === 'done') {
@@ -110,10 +113,12 @@ async function startWebCodecs(o: StartRecordingOptions, width: number, height: n
     { type: 'encode', readable: processor.readable, width, height, bitrate: o.videoBitsPerSecond, preferWebm: !!o.preferWebm },
     [processor.readable]
   );
-  const st = await Promise.race([started, new Promise<{ ok: boolean }>((r) => setTimeout(() => r({ ok: false }), 4000))]);
+  // Only commit to this engine once camera frames are actually flowing through it; otherwise the
+  // caller falls back to another engine, so a recording is never lost.
+  const st = await Promise.race([started, new Promise<{ ok: boolean }>((r) => setTimeout(() => r({ ok: false }), 3000))]);
   if (!st.ok) {
-    worker.terminate();
-    source.stop();
+    worker.postMessage({ type: 'stop' });
+    setTimeout(() => worker.terminate(), 200);
     return null;
   }
 
@@ -127,7 +132,6 @@ async function startWebCodecs(o: StartRecordingOptions, width: number, height: n
       try {
         return await done;
       } finally {
-        source.stop();
         worker.terminate();
       }
     },
@@ -139,8 +143,7 @@ function cleanResult(blob: Blob, mimeType: string): RecordingResult {
 }
 
 function workerCompositeStream(o: StartRecordingOptions, width: number, height: number) {
-  const source = o.cameraTrack.clone();
-  const processor = new g.MediaStreamTrackProcessor({ track: source, maxBufferSize: 30 });
+  const processor = new g.MediaStreamTrackProcessor({ track: o.cameraTrack, maxBufferSize: 30 });
   const generator = new g.MediaStreamTrackGenerator({ kind: 'video' });
   const worker = newWorker();
   worker.postMessage({ type: 'composite', readable: processor.readable, writable: generator.writable, width, height }, [
@@ -151,7 +154,6 @@ function workerCompositeStream(o: StartRecordingOptions, width: number, height: 
     stream: new MediaStream([generator]),
     stop: () => {
       worker.postMessage({ type: 'stop' });
-      source.stop();
       setTimeout(() => {
         worker.terminate();
         generator.stop();
