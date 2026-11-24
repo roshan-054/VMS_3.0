@@ -151,7 +151,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
     try {
       await Promise.allSettled([
-        syncManifestsWithCloud().then((res) => {
+        syncManifestsWithCloud({ force: true }).then((res) => {
           if (res && res.manifests && res.manifests.length > 0) setManifests(res.manifests);
         }),
         syncGtinCatalogFromSavedConfig().then(() => {
