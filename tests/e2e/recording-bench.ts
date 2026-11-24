@@ -54,7 +54,9 @@ function directRecorder(cam: MediaStream) {
 }
 
 async function main() {
-  const cam = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, frameRate: 30 }, audio: false });
+  const camW = Number(params.get('w') || 1280);
+  const camH = Number(params.get('h') || 720);
+  const cam = await navigator.mediaDevices.getUserMedia({ video: { width: camW, height: camH, frameRate: 30 }, audio: false });
   const video = document.getElementById('v') as HTMLVideoElement;
   const canvas = document.getElementById('c') as HTMLCanvasElement;
   video.srcObject = cam;
@@ -71,7 +73,8 @@ async function main() {
           cameraTrack: cam.getVideoTracks()[0],
           video,
           canvas,
-          videoBitsPerSecond: 2_500_000,
+          videoBitsPerSecond: params.has('bitrate') ? Number(params.get('bitrate')) : 2_500_000,
+          maxQuality: params.get('max') === '1',
           forceMode: mode as RecordingMode,
           preferWebm: params.get('webm') === '1',
         });
@@ -94,7 +97,7 @@ async function main() {
   const buf = new Uint8Array(await blob.arrayBuffer());
   let bin = '';
   for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
-  (window as any).__result = { mode: session.mode, codec: session.codec, wall, size: blob.size, type: blob.type, b64: btoa(bin) };
+  (window as any).__result = { mode: session.mode, codec: session.codec, width: session.width, height: session.height, wall, size: blob.size, type: blob.type, b64: btoa(bin) };
 }
 
 main().catch((e) => ((window as any).__result = { error: String(e?.message || e) }));

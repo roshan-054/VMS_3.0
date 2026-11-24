@@ -38,16 +38,55 @@ export interface StartRecordingOptions {
   onProgress?: (bytes: number) => void;
   onError?: (message: string) => void;
   forceMode?: RecordingMode;
+  /**
+   * Record at the camera's full resolution, up to 4K (only on the WebCodecs engine with a hardware
+   * encoder; otherwise 1080p, so recording never stutters). Default false = up to 1080p.
+   */
+  maxQuality?: boolean;
   /** For tests: prefer the WebM encoder even when H.264 is available. */
   preferWebm?: boolean;
 }
 
-/** Even dimensions (required by H.264 4:2:0), capped at 1920x1080, aspect ratio preserved. */
-export function lockedRecordingSize(vw: number, vh: number): { width: number; height: number } {
+/** Even dimensions (required by H.264 4:2:0), capped at maxW x maxH (default 1080p), aspect ratio preserved. */
+export function lockedRecordingSize(vw: number, vh: number, maxW = 1920, maxH = 1080): { width: number; height: number } {
   const w = vw || 1280;
   const h = vh || 720;
-  const s = Math.min(1, 1920 / w, 1080 / h);
+  // Compare on the long/short side so portrait cameras get the same pixel budget.
+  const long = Math.max(maxW, maxH);
+  const short = Math.min(maxW, maxH);
+  const s = Math.min(1, w >= h ? long / w : short / w, w >= h ? short / h : long / h);
   return { width: Math.max(2, Math.floor(w * s) & ~1), height: Math.max(2, Math.floor(h * s) & ~1) };
+}
+
+/**
+ * Bitrate for "highest quality" recording, scaled to the real recording size so text on labels
+ * stays sharp: about 0.12 bits per pixel per frame (1080p30 ≈ 7.5 Mbps, 720p ≈ 3.3 Mbps,
+ * 4K ≈ 25 Mbps cap).
+ */
+export function bitrateForSize(width: number, height: number, fps = 30): number {
+  return Math.round(Math.min(25_000_000, Math.max(2_500_000, width * height * fps * 0.12)));
+}
+
+/**
+ * True when this computer can record above 1080p smoothly (WebCodecs engine + hardware 4K encoder).
+ * The camera is only asked for 4K when this is true, so weaker computers keep the smooth 1080p path.
+ */
+export async function canRecordAbove1080p(): Promise<boolean> {
+  return hasProcessor() && hasEncoder() && hardwareEncodes(3840, 2160, bitrateForSize(3840, 2160));
+}
+
+/** True when this browser can encode this size in real time on the graphics chip (needed above 1080p). */
+async function hardwareEncodes(width: number, height: number, bitrate: number): Promise<boolean> {
+  if (!hasEncoder()) return false;
+  for (const codec of ['avc1.640033', 'avc1.4d0033', 'vp09.00.51.08']) {
+    try {
+      const r = await g.VideoEncoder.isConfigSupported({ codec, width, height, bitrate, framerate: 30, hardwareAcceleration: 'prefer-hardware' });
+      if (r?.supported) return true;
+    } catch {
+      /* next */
+    }
+  }
+  return false;
 }
 
 const g = globalThis as any;
@@ -311,12 +350,22 @@ function startMediaRecorder(
 
 export async function startRecordingSession(o: StartRecordingOptions): Promise<RecordingSession> {
   const settings = o.cameraTrack.getSettings?.() || {};
-  const { width, height } = lockedRecordingSize(o.video.videoWidth || settings.width || 1280, o.video.videoHeight || settings.height || 720);
+  const camW = o.video.videoWidth || settings.width || 1280;
+  const camH = o.video.videoHeight || settings.height || 720;
   const want = o.forceMode;
   const hasAudio = (o.audioTracks || []).length > 0;
+  let { width, height } = lockedRecordingSize(camW, camH);
+  const canUseWebCodecs = (!want || want === 'webcodecs') && !hasAudio && hasProcessor() && hasEncoder();
+  if (o.maxQuality && canUseWebCodecs && (camW > width || camH > height)) {
+    const big = lockedRecordingSize(camW, camH, 3840, 2160);
+    if (await hardwareEncodes(big.width, big.height, bitrateForSize(big.width, big.height))) ({ width, height } = big);
+  }
+  // 0 = choose the bitrate from the recording size (highest quality profile).
+  const autoBitrate = !(o.videoBitsPerSecond > 0);
+  if (autoBitrate) o = { ...o, videoBitsPerSecond: bitrateForSize(width, height) };
 
   let processorDelivered = true;
-  if ((!want || want === 'webcodecs') && !hasAudio && hasProcessor() && hasEncoder()) {
+  if (canUseWebCodecs) {
     // Two tries (the second on a freshly built camera feed). If camera frames still do not reach
     // the worker, the track-processor engines are skipped and the canvas engine is used.
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -330,6 +379,9 @@ export async function startRecordingSession(o: StartRecordingOptions): Promise<R
     processorDelivered = false;
     console.warn('Camera frames did not reach the recording worker; using the canvas recorder.');
   }
+  // The other engines composite on a canvas: keep them at up to 1080p so they never stutter.
+  ({ width, height } = lockedRecordingSize(camW, camH));
+  if (autoBitrate) o = { ...o, videoBitsPerSecond: bitrateForSize(width, height) };
   if ((!want || want === 'worker-recorder') && processorDelivered && hasProcessor() && hasGenerator()) {
     try {
       return startMediaRecorder(o, workerCompositeStream(o, width, height), 'worker-recorder', width, height);

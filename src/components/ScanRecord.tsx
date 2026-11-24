@@ -46,7 +46,7 @@ import { triggerUploadWorker, setRecordingInProgress } from '../lib/uploadWorker
 import { saveRecordingLocally, ensureBackupPermission, backupPathParts } from '../lib/localBackup';
 import { LocalBackupFolderPicker } from './LocalBackupFolderPicker';
 import { LiveClock, ElapsedTimer, RecordedSize } from './RecordingIndicators';
-import { startRecordingSession, prepareCameraFeed, releaseCameraFeed, type RecordingSession, type RecordingResult } from '../lib/recordingPipeline';
+import { startRecordingSession, canRecordAbove1080p, prepareCameraFeed, releaseCameraFeed, type RecordingSession, type RecordingResult } from '../lib/recordingPipeline';
 import { sharedAiFocusEngine, FocusMode, FocusState } from '../lib/aiFocusEngine';
 import {
   getManifestByOrderId,
@@ -733,14 +733,17 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       let lastErr: any = null;
       const targetDevId = deviceId || selectedDeviceId;
 
-      // Stage 1: Full HD 1080p @ 30 FPS cap (prevents 4K/60fps webcam modes from overloading the real-time video encoder)
+      // Stage 1: the camera's best resolution. With "Highest quality" and a computer that can encode 4K
+      // on its graphics chip, ask for up to 4K; otherwise Full HD 1080p. Always capped at 30 FPS so
+      // 60fps webcam modes cannot overload the real-time encoder (smooth video, no time gaps).
+      const allowAbove1080 = getStoredVideoBitrate() <= 0 && (await canRecordAbove1080p().catch(() => false));
       try {
         const stage1Constraints: MediaStreamConstraints = {
           video: {
             deviceId: targetDevId ? { ideal: targetDevId } : undefined,
             facingMode: targetDevId ? undefined : { ideal: 'environment' },
-            width: { ideal: 1920, max: 1920 },
-            height: { ideal: 1080, max: 1080 },
+            width: allowAbove1080 ? { ideal: 3840, max: 3840 } : { ideal: 1920, max: 1920 },
+            height: allowAbove1080 ? { ideal: 2160, max: 2160 } : { ideal: 1080, max: 1080 },
             frameRate: { ideal: 30, max: 30 },
             advanced: [
               { focusMode: 'continuous' },
@@ -1136,9 +1139,11 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       return;
     }
 
-    // Use configured video bitrate from Admin settings (default 2.2 Mbps Balanced HD), clamped to a reliable real-time range
+    // Highest quality (default): bitrate 0 lets the recorder match it to the real recording size,
+    // and the camera's full resolution is used (up to 4K where the computer encodes it smoothly).
     const configuredBitrate = getStoredVideoBitrate();
-    const targetVideoBitrate = Math.min(6000000, Math.max(1500000, configuredBitrate || 2200000));
+    const maxQuality = configuredBitrate <= 0;
+    const targetVideoBitrate = maxQuality ? 0 : Math.min(6000000, Math.max(1500000, configuredBitrate));
 
     isRecordingRef.current = true;
     let session: RecordingSession;
@@ -1149,6 +1154,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
         canvas: canvasRef.current,
         audioTracks: activeAudioTracks,
         videoBitsPerSecond: targetVideoBitrate,
+        maxQuality,
         onProgress: (bytes) => {
           recordedBytesRef.current = bytes;
         },
