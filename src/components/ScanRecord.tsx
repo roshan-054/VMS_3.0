@@ -6,7 +6,6 @@ import {
   StopCircle,
   Play,
   RotateCcw,
-  Sparkles,
   Barcode,
   UploadCloud,
   CheckCircle2,
@@ -47,7 +46,6 @@ import { saveRecordingLocally, ensureBackupPermission, backupPathParts } from '.
 import { LocalBackupFolderPicker } from './LocalBackupFolderPicker';
 import { LiveClock, ElapsedTimer, RecordedSize } from './RecordingIndicators';
 import { startRecordingSession, canRecordAbove1080p, prepareCameraFeed, releaseCameraFeed, type RecordingSession, type RecordingResult } from '../lib/recordingPipeline';
-import { sharedAiFocusEngine, FocusMode, FocusState } from '../lib/aiFocusEngine';
 import {
   getManifestByOrderId,
   getStoredManifests,
@@ -95,12 +93,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   const [isFocusing, setIsFocusing] = useState(false);
   const [cameraResolution, setCameraResolution] = useState<{ width: number; height: number }>({ width: 1920, height: 1080 });
 
-  // Real-Time Dynamic AI Auto-Focus & Smart Viewport Framing (PTZ) Engine
-  const [aiFocusEnabled, setAiFocusEnabled] = useState<boolean>(() => {
-    return localStorage.getItem('vms_ai_focus_active') !== 'false';
-  });
-  const [aiFocusMode, setAiFocusMode] = useState<FocusMode>('AUTO');
-  const [aiFocusState, setAiFocusState] = useState<FocusState | null>(null);
   const [focusClickPoint, setFocusClickPoint] = useState<{ x: number; y: number } | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -119,8 +111,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   const isCameraActiveRef = useRef<boolean>(false);
   const isRecordingRef = useRef<boolean>(false);
   orderIdRef.current = orderId;
-  const aiFocusEnabledRef = useRef<boolean>(aiFocusEnabled);
-  aiFocusEnabledRef.current = aiFocusEnabled;
 
   // Snapshotted order metadata for the active recording session
   const recordingMetaRef = useRef<{
@@ -464,47 +454,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     };
   }, []);
 
-
-  // Continuous vision detector ticker: samples video frame during preview only (paused during active recording to guarantee 0 frame drops)
-  useEffect(() => {
-    if (!isCameraActive || !aiFocusEnabled) return;
-    const interval = setInterval(() => {
-      if (isRecordingRef.current) return;
-      if (videoRef.current && videoRef.current.readyState >= 2) {
-        sharedAiFocusEngine.analyzeFrame(videoRef.current);
-      }
-    }, 350);
-    return () => clearInterval(interval);
-  }, [isCameraActive, aiFocusEnabled]);
-
-  // AI auto-focus preview: update the on-screen focus reticle a few times per second while idle.
-  // (The old design repainted a hidden 1080p canvas 30x/second on the main thread even when not
-  // recording; recording now happens in a worker, so the page stays light.)
-  useEffect(() => {
-    if (!isCameraActive || !aiFocusEnabled) return;
-    const id = window.setInterval(() => {
-      if (isRecordingRef.current) return;
-      const video = videoRef.current;
-      if (!video || video.readyState < 2) return;
-      const fState = sharedAiFocusEngine.stepPreview();
-      setAiFocusState((prev) => {
-        if (
-          prev &&
-          prev.detectedType === fState.detectedType &&
-          prev.label === fState.label &&
-          prev.confidence === fState.confidence &&
-          Math.abs(prev.boundingBox.x - fState.boundingBox.x) < 0.01 &&
-          Math.abs(prev.boundingBox.y - fState.boundingBox.y) < 0.01
-        ) {
-          return prev;
-        }
-        return fState;
-      });
-      const track = streamRef.current?.getVideoTracks()[0];
-      if (track) sharedAiFocusEngine.applyHardwarePoi(track, false);
-    }, 200);
-    return () => clearInterval(id);
-  }, [isCameraActive, aiFocusEnabled]);
 
   // Keep the preview decoder running if the browser pauses it (e.g. after the window loses focus)
   useEffect(() => {
@@ -1006,35 +955,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     } catch (err) {
       console.warn('Point of interest focus notice:', err);
     }
-  };
-
-  const handleToggleAiFocus = () => {
-    const nextState = !aiFocusEnabled;
-    setAiFocusEnabled(nextState);
-    localStorage.setItem('vms_ai_focus_active', String(nextState));
-    onShowToast(
-      nextState
-        ? 'AI Dynamic Auto-Focus activated (Auto-focusing on Label, Invoice, & Product)'
-        : 'AI Auto-Focus disabled',
-      'info'
-    );
-  };
-
-  const handleSelectFocusMode = (mode: FocusMode) => {
-    setAiFocusMode(mode);
-    sharedAiFocusEngine.setMode(mode);
-    if (!aiFocusEnabled) {
-      setAiFocusEnabled(true);
-      localStorage.setItem('vms_ai_focus_active', 'true');
-    }
-    const modeLabels: Record<FocusMode, string> = {
-      AUTO: 'AI Auto-Focus: Intelligent automatic area targeting',
-      LABEL: 'Focus Locked: Shipping Label & Barcodes',
-      INVOICE: 'Focus Locked: Invoice & Paperwork',
-      PRODUCT: 'Focus Locked: Product Packing Zone',
-      OVERVIEW: 'Focus Reset: General Packing Station',
-    };
-    onShowToast(modeLabels[mode] || `Focus set to ${mode}`, 'info');
   };
 
   const handleToggleCamera = async () => {
@@ -1542,43 +1462,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
               </div>
             )}
 
-            {/* Dynamic AI Auto-Focus Reticle (Tracks Label, Invoice, or Product) */}
-            {isCameraActive && aiFocusEnabled && aiFocusState && aiFocusState.detectedType !== 'OVERVIEW' && (
-              <div
-                className="absolute pointer-events-none transition-all duration-300 z-10"
-                style={{
-                  left: `${aiFocusState.boundingBox.x * 100}%`,
-                  top: `${aiFocusState.boundingBox.y * 100}%`,
-                  width: `${aiFocusState.boundingBox.width * 100}%`,
-                  height: `${aiFocusState.boundingBox.height * 100}%`,
-                }}
-              >
-                {/* Floating Animated Brackets */}
-                <div
-                  className={`w-full h-full relative rounded-xl border border-dashed shadow-lg transition-colors ${
-                    aiFocusState.detectedType === 'LABEL'
-                      ? 'border-emerald-400 bg-emerald-500/5 shadow-emerald-500/10'
-                      : aiFocusState.detectedType === 'INVOICE'
-                      ? 'border-cyan-400 bg-cyan-500/5 shadow-cyan-500/10'
-                      : 'border-amber-400 bg-amber-500/5 shadow-amber-500/10'
-                  }`}
-                >
-                  {/* Precision corner ticks */}
-                  <div className="absolute -top-1 -left-1 w-5 h-5 border-t-2 border-l-2 border-current rounded-tl-xs" />
-                  <div className="absolute -top-1 -right-1 w-5 h-5 border-t-2 border-r-2 border-current rounded-tr-xs" />
-                  <div className="absolute -bottom-1 -left-1 w-5 h-5 border-b-2 border-l-2 border-current rounded-bl-xs" />
-                  <div className="absolute -bottom-1 -right-1 w-5 h-5 border-b-2 border-r-2 border-current rounded-br-xs" />
-
-                  {/* Target Pill */}
-                  <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 bg-slate-950/95 px-2.5 py-0.5 rounded-full text-[9px] font-mono font-bold whitespace-nowrap shadow-md border border-white/20 flex items-center gap-1 text-white">
-                    <Sparkles className="w-2.5 h-2.5 text-emerald-400 animate-spin" />
-                    <span>{aiFocusState.label} • AUTO-FOCUSED</span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-
             {/* In-Video Recording HUD (Authentic Camera OSD) */}
             {isCameraActive && (
               <div id="camera-active-hud" className="absolute top-3 right-3 flex items-start justify-end pointer-events-none text-[11px] sm:text-xs font-mono font-medium z-20">
@@ -1589,21 +1472,9 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                   </div>
 
                   <div className="flex items-center gap-1.5">
-                    <span
-                      className={`backdrop-blur-xs text-[10px] font-mono px-2 py-0.5 rounded border flex items-center gap-1 shadow-sm transition-colors ${
-                        aiFocusEnabled && aiFocusState?.detectedType === 'LABEL'
-                          ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500/60 animate-pulse'
-                          : aiFocusEnabled && aiFocusState?.detectedType === 'INVOICE'
-                          ? 'bg-cyan-950/90 text-cyan-300 border-cyan-500/60 animate-pulse'
-                          : aiFocusEnabled && aiFocusState?.detectedType === 'PRODUCT'
-                          ? 'bg-amber-950/90 text-amber-300 border-amber-500/60'
-                          : 'bg-black/70 text-emerald-400 border-emerald-500/30'
-                      }`}
-                    >
+                    <span className="backdrop-blur-xs text-[10px] font-mono px-2 py-0.5 rounded border flex items-center gap-1 shadow-sm bg-black/70 text-emerald-400 border-emerald-500/30">
                       <Focus className="w-3 h-3 text-emerald-400" />
-                      {aiFocusEnabled && aiFocusState
-                        ? `FOCUS: ${aiFocusState.detectedType}`
-                        : 'AUTO-FOCUS'}
+                      AUTO-FOCUS
                     </span>
 
                     <span className="bg-black/70 backdrop-blur-xs text-blue-300 text-[10px] font-mono px-2 py-0.5 rounded border border-blue-500/30">
@@ -1697,21 +1568,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                   </button>
 
 
-                  <button
-                    id="toggle-ai-focus-btn"
-                    type="button"
-                    onClick={handleToggleAiFocus}
-                    className={`px-3.5 py-2.5 border text-sm rounded-lg font-semibold transition inline-flex items-center gap-1.5 shadow-xs cursor-pointer ${
-                      aiFocusEnabled
-                        ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-900'
-                        : 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700'
-                    }`}
-                    title="Automatically focuses camera lens onto Shipping Labels, Invoices, and Product Packaging"
-                  >
-                    <Sparkles className={`w-4 h-4 ${aiFocusEnabled ? 'text-emerald-600' : 'text-slate-500'}`} />
-                    {aiFocusEnabled ? 'AI Focus: Active' : 'Enable AI Focus'}
-                  </button>
-
                 </>
               )}
             </div>
@@ -1760,94 +1616,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
             </div>
           )}
 
-          {/* Real-Time AI Auto-Focus Controls & Shift Overrides */}
-          <div id="ai-focus-controls-bar" className="bg-slate-900 border-t border-slate-800 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1.5 text-slate-200 font-semibold">
-                <Sparkles className="w-4 h-4 text-emerald-400" />
-                <span>AI Auto-Focus:</span>
-              </div>
-              <span className={`text-[11px] font-mono px-2 py-0.5 rounded border ${
-                aiFocusEnabled && aiFocusState?.detectedType === 'LABEL'
-                  ? 'bg-emerald-950 text-emerald-300 border-emerald-500/50'
-                  : aiFocusEnabled && aiFocusState?.detectedType === 'INVOICE'
-                  ? 'bg-cyan-950 text-cyan-300 border-cyan-500/50'
-                  : aiFocusEnabled && aiFocusState?.detectedType === 'PRODUCT'
-                  ? 'bg-amber-950 text-amber-300 border-amber-500/50'
-                  : 'bg-slate-950 text-slate-400 border-slate-800'
-              }`}>
-                {aiFocusEnabled && aiFocusState
-                  ? `${aiFocusState.label}`
-                  : 'Disabled'}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-2 flex-wrap">
-              <div className="inline-flex rounded-lg bg-slate-950 p-1 border border-slate-800 shadow-inner">
-                <button
-                  type="button"
-                  onClick={() => handleSelectFocusMode('AUTO')}
-                  className={`px-3 py-1 text-xs rounded-md transition font-medium cursor-pointer ${
-                    aiFocusEnabled && aiFocusMode === 'AUTO'
-                      ? 'bg-emerald-500 text-slate-950 font-bold shadow-xs'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                  }`}
-                  title="Automatically identifies focusing area (Label, Invoice, Product)"
-                >
-                  Auto (Smart AI)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleSelectFocusMode('LABEL')}
-                  className={`px-3 py-1 text-xs rounded-md transition font-medium cursor-pointer ${
-                    aiFocusEnabled && aiFocusMode === 'LABEL'
-                      ? 'bg-emerald-500 text-slate-950 font-bold shadow-xs'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                  }`}
-                  title="Lock camera focus on Shipping Label / Barcode"
-                >
-                  Focus Label
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleSelectFocusMode('INVOICE')}
-                  className={`px-3 py-1 text-xs rounded-md transition font-medium cursor-pointer ${
-                    aiFocusEnabled && aiFocusMode === 'INVOICE'
-                      ? 'bg-cyan-500 text-slate-950 font-bold shadow-xs'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                  }`}
-                  title="Lock camera focus on Invoice / Bill of Supply"
-                >
-                  Focus Invoice
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleSelectFocusMode('PRODUCT')}
-                  className={`px-3 py-1 text-xs rounded-md transition font-medium cursor-pointer ${
-                    aiFocusEnabled && aiFocusMode === 'PRODUCT'
-                      ? 'bg-amber-500 text-slate-950 font-bold shadow-xs'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                  }`}
-                  title="Lock camera focus on Product Packing Zone"
-                >
-                  Focus Product
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleSelectFocusMode('OVERVIEW')}
-                  className={`px-3 py-1 text-xs rounded-md transition font-medium cursor-pointer ${
-                    aiFocusMode === 'OVERVIEW'
-                      ? 'bg-slate-700 text-white font-bold'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                  }`}
-                  title="Reset to Full Packing Station Focus"
-                >
-                  Overview
-                </button>
-              </div>
-
-            </div>
-          </div>
         </div>
 
         {/* Order Information Column (2 Cols on LG) */}
