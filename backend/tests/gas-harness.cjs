@@ -118,7 +118,7 @@ function createRuntime({ users = [] } = {}) {
     return JSON.parse(res.text);
   };
   const hash = (pw) => crypto.createHash('sha256').update(pw, 'utf8').digest('hex');
-  return { sandbox, call, sheets, props, cache, hash };
+  return { sandbox, call, sheets, props, cache, hash, addSheet };
 }
 
 module.exports = { createRuntime };

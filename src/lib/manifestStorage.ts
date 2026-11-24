@@ -4,6 +4,7 @@ import { requestApi, normalizeOrderId, checkDuplicate } from './api';
 import { dbGetAllQueue } from './storage';
 import { getDirectImageUrl } from './branding';
 import { isStationRecording } from './recordingState';
+import { detectCatalogColumns, guessTagColumn, parseTagList, productHasTag, describeTagsFound, TagCount } from './catalogTags';
 
 const STORAGE_KEY_MANIFESTS = 'vms_order_manifests_v1';
 const STORAGE_KEY_GTIN_CATALOG = 'vms_gtin_catalog_v1';
@@ -657,9 +658,10 @@ export function fixMisalignedProduct(p: GtinCatalogProduct): GtinCatalogProduct 
 
   // Repair misaligned columns if imageUrl was populated with tag name 'Active-online'
   if (!rawImgStr.startsWith('http') && !rawImgStr.startsWith('data:') && !rawImgStr.startsWith('blob:')) {
-    if (rawImgStr && rawImgStr !== 'General' && rawImgStr !== 'Packed') {
+    // Only for old rows whose tag landed in the image column: never overwrite a real tag.
+    if (rawImgStr && rawImgStr !== 'General' && rawImgStr !== 'Packed' && !cleanTag) {
       cleanTag = rawImgStr;
-      cleanCategory = rawImgStr;
+      cleanCategory = cleanCategory || rawImgStr;
     }
 
     if (rawQtyStr.startsWith('http')) {
@@ -733,7 +735,8 @@ export function getStoredGtinCatalog(): GtinCatalogProduct[] {
       }
     ];
 
-    seedCatalog.forEach((seed) => {
+    // Starter products only on a fresh install; after a sheet sync the sheet decides.
+    if (raw === null) seedCatalog.forEach((seed) => {
       const g = normalizeBarcode(seed.gtin);
       if (!cleaned.some((p) => p.sku === seed.sku || isBarcodeEqual(p.gtin, seed.gtin)) && !deletedSet.has(g.toLowerCase())) {
         cleaned.push(seed);
@@ -1002,6 +1005,68 @@ export async function importGtinCatalog(products: GtinCatalogProduct[]): Promise
  * Uses the Branding / master Google Sheet reference as the single source of truth.
  * Supports custom tab name (e.g. "UE", "Master UE", "GTINCatalog") and multi-tag filters.
  */
+interface CatalogSheetResponse {
+  success: boolean;
+  error?: string;
+  tabName?: string;
+  totalRows?: number;
+  tagsFound?: TagCount[];
+  tagColumn?: string;
+}
+
+function normalizeSyncedProduct(p: GtinCatalogProduct): GtinCatalogProduct | null {
+  const g = normalizeBarcode(p.gtin || p.sku || '');
+  if (!g) return null;
+  const cleanImg = p.imageUrl ? getDirectImageUrl(p.imageUrl) : '';
+  return {
+    ...p,
+    gtin: g,
+    sku: p.sku ? String(p.sku).trim() : g,
+    productName: p.productName ? String(p.productName).trim() : g,
+    shortName: p.shortName ? String(p.shortName).trim() : String(p.productName || g).trim(),
+    tag: p.tag ? String(p.tag).trim() : '',
+    category: p.category ? String(p.category).trim() : '',
+    imageUrl: cleanImg || p.imageUrl || '',
+    defaultQuantity: Number(p.defaultQuantity) || 1,
+  };
+}
+
+/**
+ * Makes the station's catalog exactly the products that came from the sheet (with the tag
+ * filter applied). Products from earlier syncs with other tags are dropped, so the
+ * catalog always matches the sheet and tag the admin chose.
+ */
+export function replaceCatalogFromSheet(products: GtinCatalogProduct[]): GtinCatalogProduct[] {
+  const deletedSet = getDeletedGtinCodes();
+  const map = new Map<string, GtinCatalogProduct>();
+  for (const raw of products) {
+    const p = normalizeSyncedProduct(raw);
+    if (!p) continue;
+    deletedSet.delete(p.gtin.toLowerCase());
+    map.set(p.gtin, p);
+  }
+  try {
+    localStorage.setItem(STORAGE_KEY_DELETED_GTINS, JSON.stringify(Array.from(deletedSet)));
+  } catch {}
+  const list = Array.from(map.values());
+  saveStoredGtinCatalog(list);
+  return list;
+}
+
+function syncMessage(count: number, tab: string, tags: string[], res: CatalogSheetResponse): string {
+  if (tags.length === 0) return `Synced ${count} products from tab "${tab}" (no tag filter).`;
+  const of = typeof res.totalRows === 'number' ? ` of ${res.totalRows}` : '';
+  const col = res.tagColumn ? ` (column "${res.tagColumn}")` : '';
+  if (count === 0) {
+    return `No products in tab "${tab}" have the tag ${tags.map((t) => `"${t}"`).join(' or ')}${col}. Tags in this tab: ${describeTagsFound(res.tagsFound)}.`;
+  }
+  return `Synced ${count}${of} products from tab "${tab}" with tag ${tags.join(', ')}${col}.`;
+}
+
+/**
+ * Fetch the GTIN catalog from a tab of the connected master Google Sheet (e.g. "UE"),
+ * keeping only products whose tag exactly matches the filter.
+ */
 export async function syncGtinWithMasterSheet(
   tagsFilter?: string | string[],
   tabName?: string
@@ -1014,97 +1079,35 @@ export async function syncGtinWithMasterSheet(
   try {
     const config = getGtinSheetConfig();
     const effectiveTab = tabName || config.tabName || 'GTINCatalog';
+    const appliedTags = parseTagList(tagsFilter !== undefined ? tagsFilter : config.tagsFilter);
 
-    let appliedTags: string[] = [];
-    if (tagsFilter) {
-      if (Array.isArray(tagsFilter)) {
-        appliedTags = tagsFilter.map((t) => t.trim().toLowerCase()).filter(Boolean);
-      } else if (typeof tagsFilter === 'string' && tagsFilter.trim()) {
-        appliedTags = tagsFilter.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
-      }
-    } else if (config.tagsFilter) {
-      appliedTags = config.tagsFilter.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
-    }
-
-    const res = await requestApi<{ success: boolean; catalog?: GtinCatalogProduct[]; count?: number; tabName?: string; error?: string }>(
+    const res = await requestApi<CatalogSheetResponse & { catalog?: GtinCatalogProduct[]; count?: number }>(
       'getGtinCatalog',
-      {
-        tabName: effectiveTab,
-        tags: appliedTags,
-        allowUntagged: true,
-      }
+      { tabName: effectiveTab, tags: appliedTags }
     );
 
-    if (res && res.success && Array.isArray(res.catalog)) {
-      if (res.catalog.length > 0) {
-        const deletedSet = getDeletedGtinCodes();
-
-        // Fix misaligned columns from Apps Script before tag filtering
-        let targetList = res.catalog.map(fixMisalignedProduct);
-        if (appliedTags.length > 0) {
-          targetList = targetList.filter((item) => {
-            const itemTag = (item.tag || '').toLowerCase().trim();
-            const itemCat = (item.category || '').toLowerCase().trim();
-            return appliedTags.some((at) => itemTag.includes(at) || itemCat.includes(at));
-          });
-        }
-
-        // Merge with cloud catalog, un-tombstoning items freshly fetched from master sheet
-        const catalog = getStoredGtinCatalog();
-        const map = new Map<string, GtinCatalogProduct>();
-        // Add existing local
-        catalog.forEach((p) => {
-          const code = normalizeBarcode(p.gtin || p.sku);
-          if (code) map.set(code, p);
-        });
-        // Overwrite with master cloud sheet items
-        targetList.forEach((p) => {
-          const rawCode = p.gtin || p.sku || '';
-          const g = normalizeBarcode(rawCode);
-          if (g) {
-            deletedSet.delete(g.toLowerCase());
-            const cleanImg = p.imageUrl ? getDirectImageUrl(p.imageUrl) : '';
-            map.set(g, {
-              ...p,
-              gtin: g,
-              sku: p.sku ? p.sku.trim() : g,
-              imageUrl: cleanImg || p.imageUrl,
-            });
-          }
-        });
-
-        try {
-          localStorage.setItem(STORAGE_KEY_DELETED_GTINS, JSON.stringify(Array.from(deletedSet)));
-        } catch {}
-
-        const merged = Array.from(map.values());
-        saveStoredGtinCatalog(merged);
-
-        const activeTabDisplay = res.tabName || effectiveTab;
-        const tagNotice = appliedTags.length > 0 ? ` (filtered by tags: ${appliedTags.join(', ')})` : ' (Full Data)';
-
-        return {
-          success: true,
-          count: targetList.length,
-          message: `Successfully synchronized ${targetList.length} products from Master tab "${activeTabDisplay}"${tagNotice}!`,
-          items: merged,
-        };
-      } else {
-        // Master tab is currently empty, push our local catalog to seed it!
-        const local = getStoredGtinCatalog();
-        if (local.length > 0) {
-          await requestApi('saveGtinCatalogBatch', { products: local }).catch(() => {});
-        }
-        return {
-          success: true,
-          count: local.length,
-          message: `Connected to Master Google Sheet tab "${effectiveTab}". Total: ${local.length} products.`,
-          items: local,
-        };
-      }
-    } else {
-      throw new Error(res.error || 'Could not fetch GTIN catalog from Google Sheet.');
+    if (!res || !res.success || !Array.isArray(res.catalog)) {
+      throw new Error((res && res.error) || 'Could not fetch GTIN catalog from Google Sheet.');
     }
+    const activeTab = res.tabName || effectiveTab;
+
+    if (res.catalog.length === 0 && appliedTags.length === 0 && activeTab === 'GTINCatalog') {
+      // Master tab is empty: seed it from this station's catalog instead of wiping it.
+      const local = getStoredGtinCatalog();
+      if (local.length > 0) {
+        await requestApi('saveGtinCatalogBatch', { products: local }).catch(() => {});
+      }
+      return { success: true, count: local.length, message: `Master tab "${activeTab}" was empty; uploaded ${local.length} products from this station.`, items: local };
+    }
+
+    // The server filters already; re-check here so an older backend can't let other tags through.
+    const targetList = res.catalog.map(fixMisalignedProduct).filter((p) => productHasTag(p, appliedTags));
+    if (targetList.length === 0 && appliedTags.length > 0) {
+      // Keep the current catalog rather than emptying every station because of a typo.
+      return { success: false, count: 0, message: syncMessage(0, activeTab, appliedTags, res) };
+    }
+    const items = replaceCatalogFromSheet(targetList);
+    return { success: true, count: items.length, message: syncMessage(items.length, activeTab, appliedTags, res), items };
   } catch (err: any) {
     console.warn('Master Sheet GTIN Sync notice:', err);
     return {
@@ -1113,6 +1116,17 @@ export async function syncGtinWithMasterSheet(
       message: err.message || 'Failed to sync with master Google Sheet.',
     };
   }
+}
+
+/** Sync using the saved sheet, tab and tag settings (used by Refresh and auto-sync). */
+export async function syncGtinCatalogFromSavedConfig(): Promise<{ success: boolean; count: number; message: string }> {
+  const cfg = getGtinSheetConfig();
+  const tab = cfg.tabName?.trim() || 'GTINCatalog';
+  const res = cfg.sheetIdOrUrl && cfg.sheetIdOrUrl.trim()
+    ? await syncGtinFromGoogleSheet(cfg.sheetIdOrUrl.trim(), tab, cfg.tagsFilter || '')
+    : await syncGtinWithMasterSheet(cfg.tagsFilter || '', tab);
+  if (res.success) saveGtinSheetConfig({ ...getGtinSheetConfig(), lastSyncTime: new Date().toISOString(), totalSyncedItems: res.count });
+  return res;
 }
 
 // --- Separate GTIN Google Sheet Configuration ---
@@ -1152,7 +1166,7 @@ export function extractSpreadsheetId(input: string): string {
 /**
  * Direct Google Sheet CSV parser fallback if Apps Script backend endpoint is unreachable or permissions restricted.
  */
-async function fetchAndParseDirectGoogleSheetCsv(sheetId: string, tabName: string): Promise<GtinCatalogProduct[]> {
+async function fetchAndParseDirectGoogleSheetCsv(sheetId: string, tabName: string, wantedTags: string[] = []): Promise<GtinCatalogProduct[]> {
   const encTab = encodeURIComponent(tabName || 'GTINCatalog');
   let text = '';
 
@@ -1230,64 +1244,40 @@ async function fetchAndParseDirectGoogleSheetCsv(sheetId: string, tabName: strin
 
   if (lines.length <= 1) return [];
 
-  const headers = lines[0].map((h) => (h || '').trim().toLowerCase());
-  let gtinIdx = -1, skuIdx = -1, nameIdx = -1, shortNameIdx = -1, imgIdx = -1, catIdx = -1, tagIdx = -1;
-
-  for (let c = 0; c < headers.length; c++) {
-    const h = headers[c];
-    if (gtinIdx === -1 && (h.includes('gtin') || h.includes('barcode') || h.includes('ean') || h.includes('upc') || h === 'code')) {
-      gtinIdx = c;
-    } else if (skuIdx === -1 && (h.includes('sku') || h.includes('item code') || h.includes('product code') || h.includes('style') || h.includes('model') || h === 'item')) {
-      skuIdx = c;
-    } else if (nameIdx === -1 && (h.includes('product name') || h.includes('product') || h.includes('title') || h.includes('item name') || h.includes('description'))) {
-      nameIdx = c;
-    } else if (shortNameIdx === -1 && (h.includes('short') || h.includes('display name') || h.includes('nickname'))) {
-      shortNameIdx = c;
-    } else if (imgIdx === -1 && (h.includes('image') || h.includes('photo') || h.includes('picture') || h.includes('img') || h.includes('drive') || h.includes('link') || h.includes('src') || h.includes('thumbnail'))) {
-      imgIdx = c;
-    } else if (tagIdx === -1 && (h.includes('tag') || h.includes('label') || h.includes('status'))) {
-      tagIdx = c;
-    } else if (catIdx === -1 && (h.includes('category') || h.includes('department') || h.includes('type'))) {
-      catIdx = c;
-    }
+  const col = detectCatalogColumns(lines[0]);
+  if (col.gtin === undefined && col.sku === undefined) {
+    throw new Error(`Could not find a GTIN/Barcode or SKU column. Headers found: ${lines[0].filter(Boolean).join(', ')}`);
   }
-
-  if (gtinIdx === -1 && skuIdx === -1) {
-    gtinIdx = headers.length > 1 ? 1 : 0;
-    skuIdx = headers.length > 2 ? 2 : gtinIdx;
-  } else if (gtinIdx === -1) {
-    gtinIdx = skuIdx;
-  } else if (skuIdx === -1) {
-    skuIdx = gtinIdx;
+  if (col.tag === undefined) {
+    col.tag = guessTagColumn(lines, lines[0], Object.values(col) as number[], wantedTags);
   }
-  if (nameIdx === -1) nameIdx = headers.length > 2 ? 2 : skuIdx;
-  if (imgIdx === -1 && headers.length > 6) imgIdx = 6;
+  const cell = (row: string[], key: keyof typeof col) => {
+    const i = col[key];
+    return i !== undefined && row[i] ? String(row[i]).trim() : '';
+  };
 
   const items: GtinCatalogProduct[] = [];
   for (let r = 1; r < lines.length; r++) {
     const row = lines[r];
-    const rawGtin = gtinIdx >= 0 ? (row[gtinIdx] || '').trim() : '';
-    const rawSku = skuIdx >= 0 ? (row[skuIdx] || '').trim() : '';
-
+    const rawGtin = cell(row, 'gtin');
+    const rawSku = cell(row, 'sku');
     if (!rawGtin && !rawSku) continue;
     const finalGtin = rawGtin || rawSku;
     const finalSku = rawSku || rawGtin;
-
-    const rawName = nameIdx >= 0 && row[nameIdx] ? row[nameIdx].trim() : finalSku;
-    const rawShort = shortNameIdx >= 0 && row[shortNameIdx] ? row[shortNameIdx].trim() : rawName;
-    const rawImg = imgIdx >= 0 && row[imgIdx] ? getDirectImageUrl(row[imgIdx].trim()) : '';
-    const rawTag = tagIdx >= 0 && row[tagIdx] ? row[tagIdx].trim() : '';
-    const rawCat = catIdx >= 0 && row[catIdx] ? row[catIdx].trim() : (rawTag || '');
-
+    const rawName = cell(row, 'name') || finalSku;
+    const rawTag = col.tag !== undefined ? cell(row, 'tag') : cell(row, 'category');
+    const img = cell(row, 'image');
     items.push({
       gtin: finalGtin,
       sku: finalSku,
       productName: rawName,
-      shortName: rawShort,
-      category: rawCat,
+      shortName: cell(row, 'shortName') || rawName,
+      category: cell(row, 'category') || rawTag,
       tag: rawTag,
-      imageUrl: rawImg,
-      defaultQuantity: 1,
+      imageUrl: img ? getDirectImageUrl(img) : '',
+      cogs: cell(row, 'cogs'),
+      defaultQuantity: Number(cell(row, 'qty')) || 1,
+      notes: cell(row, 'notes'),
     });
   }
 
@@ -1316,95 +1306,74 @@ export async function syncGtinFromGoogleSheet(
     };
   }
 
-  // Parse tags
-  let tagString = '';
-  let tagList: string[] = [];
-  if (tagsFilter) {
-    if (Array.isArray(tagsFilter)) {
-      tagList = tagsFilter.map((t) => t.trim()).filter(Boolean);
-      tagString = tagList.join(', ');
-    } else if (typeof tagsFilter === 'string') {
-      tagString = tagsFilter.trim();
-      tagList = tagString.split(',').map((t) => t.trim()).filter(Boolean);
-    }
-  } else if (config.tagsFilter) {
-    tagString = config.tagsFilter.trim();
-    tagList = tagString.split(',').map((t) => t.trim()).filter(Boolean);
-  }
+  const tagList = parseTagList(tagsFilter !== undefined ? tagsFilter : config.tagsFilter);
+  const tagString = tagList.join(', ');
 
   let items: GtinCatalogProduct[] = [];
+  let info: CatalogSheetResponse = { success: true };
+  let reachedServer = false;
 
   try {
-    // 1. First attempt: Request Apps Script backend to read the user's Google Sheet
-    const res = await requestApi<{
-      success: boolean;
-      items: GtinCatalogProduct[];
-      count: number;
-      error?: string;
-    }>('syncExternalGtinSheet', {
+    const res = await requestApi<CatalogSheetResponse & { items: GtinCatalogProduct[]; count: number }>('syncExternalGtinSheet', {
       gtinSheetId: targetId,
       tabName: targetTab,
       tags: tagList,
       tag: tagString,
     });
-
-    if (res && res.success && Array.isArray(res.items)) {
-      items = res.items;
+    reachedServer = true;
+    if (!res || !res.success) {
+      // A real answer (wrong tab, no access, no tag column): show it, don't guess from another source.
+      return { success: false, count: 0, message: (res && res.error) || 'Google Sheet sync failed.' };
     }
+    info = res;
+    items = Array.isArray(res.items) ? res.items : [];
   } catch (err: any) {
-    console.warn('Apps Script syncExternalGtinSheet notice, attempting direct CSV fallback:', err);
+    if (err?.serverError || err?.code === 'AUTH_REQUIRED') {
+      return { success: false, count: 0, message: err.message || 'Google Sheet sync failed.' };
+    }
+    console.warn('Apps Script syncExternalGtinSheet not reachable, trying the public CSV export:', err);
   }
 
-  // 2. Fallback: If Apps Script returned empty or failed, fetch Google Sheet CSV directly
-  if (!items || items.length === 0) {
+  // Fallback only when Apps Script could not be reached: read the public CSV export directly.
+  if (!reachedServer) {
     try {
-      const csvItems = await fetchAndParseDirectGoogleSheetCsv(targetId, targetTab);
-      if (csvItems.length > 0) {
-        items = csvItems;
-      }
+      items = await fetchAndParseDirectGoogleSheetCsv(targetId, targetTab, tagList);
+      info = { success: true, totalRows: items.length };
     } catch (csvErr: any) {
-      console.warn('Direct Google Sheet CSV fetch fallback error:', csvErr);
+      return { success: false, count: 0, message: csvErr?.message || 'Could not read the Google Sheet.' };
     }
   }
 
-  if (items && items.length > 0) {
-    items = items.map(fixMisalignedProduct);
-    // Apply tag condition if user configured tags
-    if (tagList.length > 0) {
-      const tagLower = tagList.map((t) => t.toLowerCase().trim());
-      items = items.filter((it) => {
-        const itemTag = (it.tag || '').toLowerCase().trim();
-        const itemCat = (it.category || '').toLowerCase().trim();
-        return tagLower.some((t) => itemTag.includes(t) || itemCat.includes(t));
-      });
-    }
-
-    // Import items into local storage and mirror to Master GTIN catalog
-    await importGtinCatalog(items);
-    const updatedConfig: GtinSheetConfig = {
-      sheetIdOrUrl: targetId,
-      tabName: targetTab,
-      autoSync: config.autoSync,
-      tagsFilter: tagString,
-      lastSyncTime: new Date().toISOString(),
-      totalSyncedItems: items.length,
-    };
-    saveGtinSheetConfig(updatedConfig);
-
-    const tagNotice = tagList.length > 0 ? ` with tag filter [${tagList.join(', ')}]` : ' (Full catalog)';
-
+  items = items.map(fixMisalignedProduct).filter((it) => productHasTag(it, tagList));
+  if (items.length === 0) {
     return {
-      success: true,
-      count: items.length,
-      message: `Successfully synchronized ${items.length} products from tab "${targetTab}"${tagNotice}!`,
-      items,
+      success: false,
+      count: 0,
+      message: tagList.length > 0
+        ? syncMessage(0, info.tabName || targetTab, tagList, info)
+        : `No products found in tab "${info.tabName || targetTab}". Check that it has a GTIN/Barcode or SKU column.`,
     };
   }
+
+  const synced = replaceCatalogFromSheet(items);
+  if (!reachedServer) {
+    // The server mirrors into the master GTINCatalog itself; do it here only for the CSV path.
+    requestApi('saveGtinCatalogBatch', { products: synced }).catch(() => {});
+  }
+  saveGtinSheetConfig({
+    sheetIdOrUrl: targetId,
+    tabName: targetTab,
+    autoSync: config.autoSync,
+    tagsFilter: tagString,
+    lastSyncTime: new Date().toISOString(),
+    totalSyncedItems: synced.length,
+  });
 
   return {
-    success: false,
-    count: 0,
-    message: `No products found in tab "${targetTab}". Ensure the tab contains columns for SKU, Product Name, and Image, and that Google Sheet sharing allows view access.`,
+    success: true,
+    count: synced.length,
+    message: syncMessage(synced.length, info.tabName || targetTab, tagList, info),
+    items: synced,
   };
 }
 

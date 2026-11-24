@@ -586,7 +586,7 @@ function setupSystem() {
     [CONFIG.TRASH_LOG_SHEET,['Timestamp','Order ID','Platform','Recording Type','Action','Original Sheet','Drive File ID','Playback URL','Cleaned By','Details']],
     [CONFIG.ORDER_MANIFEST_SHEET,['Timestamp','Order ID','Platform','Assigned Packer Name','Assigned Packer Email','Processed By Name','Processed By Email','Total Items Count','Items List','Status','Notes','Packed At','Packed By Name','Video Drive Link']],
     [CONFIG.PACK_VERIFICATION_LOG_SHEET,['Timestamp','Order ID','Platform','Assigned Packer','Verified By Packer','Packer Email','Processed By','Status','Total Required Items','Total Scanned Items','Items Summary','Scanned GTINs Log','Duration Seconds','Drive Video URL']],
-    [CONFIG.GTIN_CATALOG_SHEET,['Timestamp','GTIN','SKU','Product Name','Short Name','Category','Image URL','Default Quantity','Notes']]
+    [CONFIG.GTIN_CATALOG_SHEET,['Timestamp','GTIN','SKU','Product Name','Short Name','Category','Image URL','Default Quantity','Notes','Tag']]
   ];
   specs.forEach(([name,headers])=>{
     let sh=ss.getSheetByName(name);
@@ -4727,153 +4727,245 @@ function convertDriveImageUrl_(rawUrl) {
   return str;
 }
 
+/* ---------- Catalog tab reader (shared by master-sheet and external-sheet sync) ---------- */
+// Column detection runs in tiers: exact header names claim columns first, then whole-word
+// matches, then weak guesses. A column is never used for two fields.
+var CATALOG_COLUMNS_ = [
+  { key: 'gtin', exact: ['gtin', 'ean', 'barcode', 'upc', 'gtin number', 'gtin no', 'ean code', 'ean number', 'barcode number', 'gtin code'], words: ['gtin', 'barcode', 'ean', 'upc'], weak: ['code'] },
+  { key: 'sku', exact: ['sku', 'seller sku', 'product sku', 'sku code', 'sku id', 'item code', 'product code', 'style code', 'article code'], words: ['sku'], phrases: ['item code', 'product code', 'style code', 'article code'], weak: ['style', 'model', 'item'] },
+  { key: 'tag', exact: ['tag', 'tags', 'product tag', 'product tags', 'sku tag', 'listing tag', 'tag name'], words: ['tag', 'tags'], weak: ['label', 'status'] },
+  { key: 'image', exact: ['image', 'image url', 'image link', 'images', 'photo', 'product image', 'image 1', 'main image'], words: ['image', 'images', 'img', 'photo', 'picture', 'thumbnail'], weak: ['link', 'url', 'drive'] },
+  { key: 'shortName', exact: ['short name', 'display name', 'nickname'], words: ['short', 'nickname'], phrases: ['display name'] },
+  { key: 'name', exact: ['product name', 'name', 'title', 'item name', 'product title', 'product', 'product description', 'description'], words: ['name', 'title'], weak: ['description', 'product'] },
+  { key: 'category', exact: ['category', 'product category', 'department'], words: ['category', 'department'], weak: ['type'] },
+  { key: 'cogs', exact: ['cogs', 'cost', 'price', 'mrp'], words: ['cogs', 'cost', 'price', 'mrp', 'rate'] },
+  { key: 'qty', exact: ['quantity', 'qty', 'default quantity', 'pack qty', 'pack size'], words: ['quantity', 'qty'] },
+  { key: 'notes', exact: ['notes', 'note', 'remarks', 'remark'], words: ['note', 'notes', 'remark', 'remarks'] }
+];
+
+function normHeader_(h) {
+  return String(h || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function detectCatalogColumns_(headerRow) {
+  var heads = headerRow.map(normHeader_);
+  var idx = {};
+  var taken = {};
+  var tiers = ['exact', 'words', 'weak'];
+  for (var t = 0; t < tiers.length; t++) {
+    for (var f = 0; f < CATALOG_COLUMNS_.length; f++) {
+      var def = CATALOG_COLUMNS_[f];
+      if (idx[def.key] !== undefined) continue;
+      for (var c = 0; c < heads.length; c++) {
+        if (taken[c] || !heads[c]) continue;
+        var h = heads[c];
+        var words = h.split(' ');
+        var hit = false;
+        if (tiers[t] === 'exact') {
+          hit = def.exact.indexOf(h) !== -1;
+        } else if (tiers[t] === 'words') {
+          hit = (def.words || []).some(function(w) { return words.indexOf(w) !== -1; }) ||
+                (def.phrases || []).some(function(ph) { return h.indexOf(ph) !== -1; });
+        } else {
+          hit = (def.weak || []).some(function(w) { return words.indexOf(w) !== -1; });
+        }
+        if (hit) { idx[def.key] = c; taken[c] = true; break; }
+      }
+    }
+  }
+  return idx;
+}
+
+// "Active-online", "active online" and "ACTIVE_ONLINE" are the same tag; "inactive-online" is not.
+function normTag_(t) {
+  return String(t || '').toLowerCase().replace(/[\s_\-.]+/g, '');
+}
+
+function splitTags_(cell) {
+  return String(cell || '').split(/[,;|\n]+/).map(function(x) { return x.trim(); }).filter(Boolean);
+}
+
+function requestedCatalogTags_(p) {
+  var list = [];
+  if (p.tags && Array.isArray(p.tags)) list = p.tags;
+  else if (p.tag && typeof p.tag === 'string') list = String(p.tag).split(',');
+  return list.map(function(t) { return String(t || '').trim(); }).filter(Boolean);
+}
+
+/**
+ * Some sheets have no "Tag" header: the tag column is headed with a tag value itself
+ * (e.g. a column titled "Active-online" holding Active-online / Offline). Find it from
+ * the data: a column whose header equals one of its own common values or a requested tag,
+ * otherwise the column of short, repeated text values that contains the requested tags.
+ */
+function guessTagColumn_(data, headerRow, col, requestedTags) {
+  var taken = {};
+  Object.keys(col).forEach(function(k) { taken[col[k]] = true; });
+  var wanted = {};
+  requestedTags.forEach(function(t) { wanted[normTag_(t)] = true; });
+  var best = -1, bestScore = 0;
+  var rows = Math.min(data.length, 2001);
+  for (var c = 0; c < headerRow.length; c++) {
+    if (taken[c]) continue;
+    var values = {}, textRows = 0, filled = 0, hits = 0;
+    for (var i = 1; i < rows; i++) {
+      var v = data[i][c];
+      if (v === '' || v === null || v === undefined) continue;
+      filled++;
+      if (v instanceof Date || typeof v === 'number') continue;
+      var str = String(v).trim();
+      if (!str || str.length > 40 || /^https?:/i.test(str) || /^[\d.,\s-]+$/.test(str)) continue;
+      textRows++;
+      splitTags_(str).forEach(function(tk) {
+        var k = normTag_(tk);
+        values[k] = (values[k] || 0) + 1;
+        if (wanted[k]) hits++;
+      });
+    }
+    if (filled === 0 || textRows / filled < 0.6) continue;
+    var distinct = Object.keys(values).length;
+    var head = normTag_(headerRow[c]);
+    var score = 0;
+    if (head && (wanted[head] || values[head] >= Math.max(1, textRows * 0.2))) score = 3;
+    else if (distinct <= Math.max(12, textRows * 0.2)) score = hits > 0 ? 2 : 1;
+    if (requestedTags.length > 0 && hits === 0 && score < 3) score = 0;
+    if (score > bestScore) { bestScore = score; best = c; }
+  }
+  return best >= 0 ? best : undefined;
+}
+
+/**
+ * Turns a catalog tab (first row = headers) into products, keeping only rows whose tag
+ * exactly matches one of the requested tags. Also reports which column was used for each
+ * field and which tags exist in the tab, so a wrong tag or header is easy to spot.
+ */
+function readCatalogRows_(data, requestedTags, opts) {
+  opts = opts || {};
+  var headerRow = data[0] || [];
+  var col = detectCatalogColumns_(headerRow);
+  if (col.gtin === undefined && col.sku === undefined) {
+    return { error: 'Could not find a GTIN/Barcode or SKU column. Headers found: ' + headerRow.filter(String).join(', ') };
+  }
+  if (col.tag === undefined) {
+    var guessed = guessTagColumn_(data, headerRow, col, requestedTags);
+    if (guessed !== undefined) col.tag = guessed;
+  }
+  var tagCol = col.tag !== undefined ? col.tag : col.category;
+  var wanted = {};
+  requestedTags.forEach(function(t) { wanted[normTag_(t)] = true; });
+  var filtering = requestedTags.length > 0;
+  if (filtering && tagCol === undefined) {
+    return { error: 'This tab has no Tag column, so it cannot be filtered by tag. Headers found: ' + headerRow.filter(String).join(', ') };
+  }
+
+  var cell = function(r, key) { return col[key] !== undefined ? r[col[key]] : ''; };
+  var str = function(v) { return String(v === null || v === undefined ? '' : v).trim(); };
+  var tagCounts = {};
+  var items = [];
+  var rowsWithCode = 0;
+
+  for (var i = 1; i < data.length; i++) {
+    var r = data[i];
+    var gtin = str(cell(r, 'gtin'));
+    var sku = str(cell(r, 'sku'));
+    if (!gtin && !sku) continue;
+    if (!gtin) gtin = sku;
+    if (!sku) sku = gtin;
+    var name = str(cell(r, 'name')) || sku;
+    if (isOrderRecord_(gtin, sku, name)) continue;
+    rowsWithCode++;
+
+    var rawTag = str(cell(r, 'tag'));
+    var tagSource = tagCol !== undefined ? str(r[tagCol]) : '';
+    // Older GTINCatalog rows kept the tag in Category (the Tag column came later).
+    if (!tagSource && opts.categoryHoldsTag && col.category !== undefined) tagSource = str(r[col.category]);
+    var tokens = splitTags_(tagSource);
+    tokens.forEach(function(tk) {
+      var k = normTag_(tk);
+      if (!tagCounts[k]) tagCounts[k] = { tag: tk, count: 0 };
+      tagCounts[k].count++;
+    });
+    if (filtering && !tokens.some(function(tk) { return wanted[normTag_(tk)]; })) continue;
+
+    var category = str(cell(r, 'category')) || rawTag;
+    items.push({
+      gtin: gtin,
+      sku: sku,
+      productName: name,
+      shortName: str(cell(r, 'shortName')) || name,
+      category: category,
+      tag: rawTag || (col.tag === undefined || opts.categoryHoldsTag ? tagSource : ''),
+      imageUrl: col.image !== undefined ? convertDriveImageUrl_(r[col.image]) : '',
+      cogs: col.cogs !== undefined ? r[col.cogs] : '',
+      defaultQuantity: col.qty !== undefined ? (Number(r[col.qty]) || 1) : 1,
+      notes: str(cell(r, 'notes'))
+    });
+  }
+
+  var columns = {};
+  Object.keys(col).forEach(function(k) { columns[k] = str(headerRow[col[k]]); });
+  var tagsFound = Object.keys(tagCounts).map(function(k) { return tagCounts[k]; })
+    .sort(function(a, b) { return b.count - a.count; }).slice(0, 40);
+
+  return {
+    items: items,
+    columns: columns,
+    tagColumn: tagCol !== undefined ? str(headerRow[tagCol]) : '',
+    tagsFound: tagsFound,
+    totalRows: rowsWithCode,
+    appliedTags: requestedTags
+  };
+}
+
+function findTab_(spreadsheet, name) {
+  var target = String(name || '').trim();
+  if (!target) return null;
+  var exact = spreadsheet.getSheetByName(target);
+  if (exact) return exact;
+  var want = target.toLowerCase().replace(/\s+/g, ' ');
+  var sheets = spreadsheet.getSheets();
+  for (var s = 0; s < sheets.length; s++) {
+    if (sheets[s].getName().trim().toLowerCase().replace(/\s+/g, ' ') === want) return sheets[s];
+  }
+  return null;
+}
+
+function tabNotFound_(spreadsheet, name) {
+  var names = spreadsheet.getSheets().map(function(s) { return s.getName(); });
+  return { success: false, error: 'Tab "' + name + '" was not found. Tabs in this sheet: ' + names.join(', '), tabs: names };
+}
+
 function getGtinCatalog_(p) {
   p = p || {};
   var ss = ss_();
   var targetTabName = String(p.tabName || '').trim();
-  var sh = null;
-
-  if (targetTabName) {
-    sh = ss.getSheetByName(targetTabName);
-    if (!sh) {
-      // Case-insensitive search across sheets
-      var sheets = ss.getSheets();
-      for (var s = 0; s < sheets.length; s++) {
-        if (sheets[s].getName().trim().toLowerCase() === targetTabName.toLowerCase()) {
-          sh = sheets[s];
-          break;
-        }
-      }
-    }
-  }
-
-  if (!sh) {
-    sh = ss.getSheetByName(CONFIG.GTIN_CATALOG_SHEET);
-  }
-
-  // If GTINCatalog has <= 1 row or not found, automatically search for tabs like "UE", "Master UE", "Master", "Products", "Catalog"
-  if (!sh || sh.getLastRow() <= 1) {
-    var allSheets = ss.getSheets();
-    for (var k = 0; k < allSheets.length; k++) {
-      var sName = allSheets[k].getName().trim();
-      var sNameLower = sName.toLowerCase();
-      if (sNameLower === 'ue' || sNameLower.indexOf('master ue') !== -1 || sNameLower.indexOf('master') !== -1 || sNameLower.indexOf('catalog') !== -1 || sNameLower.indexOf('product') !== -1) {
-        if (allSheets[k].getLastRow() > 1) {
-          sh = allSheets[k];
-          break;
-        }
-      }
-    }
-  }
-
-  if (!sh) {
+  var sh;
+  if (targetTabName && targetTabName.toLowerCase() !== CONFIG.GTIN_CATALOG_SHEET.toLowerCase()) {
+    // An explicitly named tab (e.g. "UE") must exist: never silently read a different tab.
+    sh = findTab_(ss, targetTabName);
+    if (!sh) return tabNotFound_(ss, targetTabName);
+  } else {
     sh = getGtinCatalogSheet_();
   }
 
   var data = sh.getDataRange().getValues();
   if (data.length <= 1) {
-    return { success: true, catalog: [], count: 0, tabName: sh.getName() };
+    return { success: true, catalog: [], count: 0, totalRows: 0, tagsFound: [], tabName: sh.getName() };
   }
-
-  var headers = data[0].map(function(h) { return String(h || '').trim().toLowerCase(); });
-
-  // Intelligent column detection
-  var gtinIdx = -1, skuIdx = -1, nameIdx = -1, shortNameIdx = -1, imgIdx = -1, catIdx = -1, tagIdx = -1, cogsIdx = -1, qtyIdx = -1, notesIdx = -1;
-
-  for (var c = 0; c < headers.length; c++) {
-    var h = headers[c];
-    if (gtinIdx === -1 && (h.indexOf('gtin') !== -1 || h.indexOf('barcode') !== -1 || h.indexOf('ean') !== -1 || h.indexOf('upc') !== -1 || h === 'code')) {
-      gtinIdx = c;
-    } else if (skuIdx === -1 && (h.indexOf('sku') !== -1 || h.indexOf('item code') !== -1 || h.indexOf('product code') !== -1 || h.indexOf('style') !== -1 || h.indexOf('model') !== -1 || h === 'item')) {
-      skuIdx = c;
-    } else if (nameIdx === -1 && (h.indexOf('product name') !== -1 || h.indexOf('product') !== -1 || h.indexOf('title') !== -1 || h.indexOf('item name') !== -1 || h.indexOf('description') !== -1)) {
-      nameIdx = c;
-    } else if (shortNameIdx === -1 && (h.indexOf('short') !== -1 || h.indexOf('display name') !== -1 || h.indexOf('nickname') !== -1)) {
-      shortNameIdx = c;
-    } else if (imgIdx === -1 && (h.indexOf('image') !== -1 || h.indexOf('photo') !== -1 || h.indexOf('picture') !== -1 || h.indexOf('img') !== -1 || h.indexOf('drive') !== -1 || h.indexOf('link') !== -1 || h.indexOf('src') !== -1 || h.indexOf('thumbnail') !== -1)) {
-      imgIdx = c;
-    } else if (tagIdx === -1 && (h.indexOf('tag') !== -1 || h.indexOf('label') !== -1 || h.indexOf('status') !== -1)) {
-      tagIdx = c;
-    } else if (catIdx === -1 && (h.indexOf('category') !== -1 || h.indexOf('department') !== -1 || h.indexOf('type') !== -1)) {
-      catIdx = c;
-    } else if (cogsIdx === -1 && (h.indexOf('cogs') !== -1 || h.indexOf('cost') !== -1 || h.indexOf('price') !== -1 || h.indexOf('rate') !== -1)) {
-      cogsIdx = c;
-    } else if (qtyIdx === -1 && (h.indexOf('quantity') !== -1 || h.indexOf('qty') !== -1 || h.indexOf('pack') !== -1)) {
-      qtyIdx = c;
-    } else if (notesIdx === -1 && (h.indexOf('note') !== -1 || h.indexOf('remark') !== -1)) {
-      notesIdx = c;
-    }
-  }
-
-  // Fallbacks if not explicitly found by keywords
-  if (gtinIdx === -1 && skuIdx === -1) {
-    gtinIdx = 1 < headers.length ? 1 : 0;
-    skuIdx = 2 < headers.length ? 2 : gtinIdx;
-  } else if (gtinIdx === -1) {
-    gtinIdx = skuIdx;
-  } else if (skuIdx === -1) {
-    skuIdx = gtinIdx;
-  }
-  if (nameIdx === -1) nameIdx = 2 < headers.length ? 2 : skuIdx;
-  if (imgIdx === -1 && 6 < headers.length) imgIdx = 6;
-
-  // Multi-tag filter list (if provided e.g. ["Active-online", "offline"])
-  var requestedTags = [];
-  if (p.tags && Array.isArray(p.tags)) {
-    requestedTags = p.tags.map(function(t) { return String(t || '').trim().toLowerCase(); }).filter(Boolean);
-  } else if (p.tag && typeof p.tag === 'string') {
-    requestedTags = String(p.tag).split(',').map(function(t) { return t.trim().toLowerCase(); }).filter(Boolean);
-  }
-
-  var catalog = [];
-
-  for (var i = 1; i < data.length; i++) {
-    var r = data[i];
-    var rawGtin = gtinIdx >= 0 ? String(r[gtinIdx] || '').trim() : '';
-    var rawSku = skuIdx >= 0 ? String(r[skuIdx] || '').trim() : '';
-
-    // If one is missing, fallback to the other (critical for SKUs without dedicated GTIN)
-    if (!rawGtin && !rawSku) continue;
-    if (!rawGtin) rawGtin = rawSku;
-    if (!rawSku) rawSku = rawGtin;
-
-    var rawName = nameIdx >= 0 && r[nameIdx] ? String(r[nameIdx]).trim() : rawSku || rawGtin;
-    if (isOrderRecord_(rawGtin, rawSku, rawName)) continue;
-    var rawShort = shortNameIdx >= 0 && r[shortNameIdx] ? String(r[shortNameIdx]).trim() : rawName;
-    var rawImg = imgIdx >= 0 ? convertDriveImageUrl_(r[imgIdx]) : '';
-    var rawTag = tagIdx >= 0 ? String(r[tagIdx] || '').trim() : '';
-    var rawCat = catIdx >= 0 ? String(r[catIdx] || '').trim() : (rawTag || '');
-    var rawCogs = cogsIdx >= 0 ? r[cogsIdx] : '';
-    var rawQty = qtyIdx >= 0 ? (Number(r[qtyIdx]) || 1) : 1;
-    var rawNotes = notesIdx >= 0 ? String(r[notesIdx] || '').trim() : '';
-
-    // Apply tag condition if user specified tags
-    if (requestedTags.length > 0) {
-      var tagLower = (rawTag || '').toLowerCase();
-      var catLower = (rawCat || '').toLowerCase();
-      var matchedTag = requestedTags.some(function(rt) {
-        return tagLower.indexOf(rt) !== -1 || catLower.indexOf(rt) !== -1;
-      });
-      // Allow newly added items that have a SKU and Image if untagged
-      var isNewlyAddedUntagged = !rawTag && (rawSku || rawImg);
-      if (!matchedTag && !isNewlyAddedUntagged) continue;
-    }
-
-    catalog.push({
-      gtin: rawGtin,
-      sku: rawSku,
-      productName: rawName,
-      shortName: rawShort,
-      category: rawCat,
-      tag: rawTag,
-      imageUrl: rawImg,
-      cogs: rawCogs,
-      defaultQuantity: rawQty,
-      notes: rawNotes
-    });
-  }
-
-  return { success: true, catalog: catalog, count: catalog.length, tabName: sh.getName() };
+  var isInternal = sh.getName() === CONFIG.GTIN_CATALOG_SHEET;
+  var res = readCatalogRows_(data, requestedCatalogTags_(p), { categoryHoldsTag: isInternal });
+  if (res.error) return { success: false, error: res.error, tabName: sh.getName() };
+  return {
+    success: true,
+    catalog: res.items,
+    count: res.items.length,
+    totalRows: res.totalRows,
+    columns: res.columns,
+    tagColumn: res.tagColumn,
+    tagsFound: res.tagsFound,
+    appliedTags: res.appliedTags,
+    tabName: sh.getName()
+  };
 }
 
 function saveGtinProduct_(p) {
@@ -4990,15 +5082,21 @@ function saveGtinCatalogBatch_(p) {
 
   var sh = getGtinCatalogSheet_();
   var data = sh.getDataRange().getValues();
+  // Column J holds the product tag so a tag-filtered sync of this tab stays exact.
+  if (data.length > 0 && !String(data[0][9] || '').trim()) {
+    sh.getRange(1, 10).setValue('Tag');
+  }
   var existingMap = {};
-
   for (var i = 1; i < data.length; i++) {
     var g = String(data[i][1] || '').trim();
-    if (g) existingMap[g] = i + 1;
+    if (g) existingMap[g] = i;
   }
 
   var now = new Date();
   var batchAdded = 0;
+  var updates = {};
+  var appended = [];
+  var appendedMap = {};
   for (var j = 0; j < products.length; j++) {
     var prod = products[j];
     var gtin = String(prod.gtin || '').trim();
@@ -5013,16 +5111,34 @@ function saveGtinCatalogBatch_(p) {
       prod.category || '',
       prod.imageUrl || '',
       prod.defaultQuantity || 1,
-      prod.notes || ''
+      prod.notes || '',
+      prod.tag || ''
     ];
 
-    if (existingMap[gtin]) {
-      sh.getRange(existingMap[gtin], 1, 1, rowValues.length).setValues([rowValues]);
+    if (existingMap[gtin] !== undefined) {
+      updates[existingMap[gtin]] = rowValues;
+    } else if (appendedMap[gtin] !== undefined) {
+      appended[appendedMap[gtin]] = rowValues;
     } else {
-      sh.appendRow(rowValues);
-      existingMap[gtin] = sh.getLastRow();
+      appendedMap[gtin] = appended.length;
+      appended.push(rowValues);
     }
     batchAdded++;
+  }
+
+  // Write changed rows in contiguous blocks and new rows in one call (row-by-row writes
+  // time out on catalogs with hundreds of products).
+  var rows = Object.keys(updates).map(Number).sort(function(x, y) { return x - y; });
+  var k = 0;
+  while (k < rows.length) {
+    var start = rows[k];
+    var block = [updates[start]];
+    while (k + 1 < rows.length && rows[k + 1] === rows[k] + 1) { k++; block.push(updates[rows[k]]); }
+    sh.getRange(start + 1, 1, block.length, 10).setValues(block);
+    k++;
+  }
+  if (appended.length > 0) {
+    sh.getRange(Math.max(sh.getLastRow(), 1) + 1, 1, appended.length, 10).setValues(appended);
   }
 
   return { success: true, count: batchAdded };
@@ -5050,125 +5166,45 @@ function syncExternalGtinSheet_(p) {
   }
 
   var targetTabName = String(p.tabName || '').trim();
-  var extSheet = targetTabName ? extSpreadsheet.getSheetByName(targetTabName) : null;
-  if (!extSheet) {
+  var extSheet;
+  if (targetTabName) {
+    extSheet = findTab_(extSpreadsheet, targetTabName);
+    if (!extSheet) return tabNotFound_(extSpreadsheet, targetTabName);
+  } else {
     extSheet = extSpreadsheet.getSheets()[0];
   }
-
   if (!extSheet) {
     return { success: false, error: 'No sheet tabs found in spreadsheet' };
   }
 
   var data = extSheet.getDataRange().getValues();
   if (data.length <= 1) {
-    return { success: true, items: [], count: 0, message: 'Google Sheet tab is empty' };
+    return { success: true, items: [], count: 0, totalRows: 0, tagsFound: [], tabName: extSheet.getName(), sheetTitle: extSpreadsheet.getName(), message: 'Google Sheet tab is empty' };
   }
 
-  var headers = data[0].map(function(h) { return String(h || '').trim().toLowerCase(); });
+  var res = readCatalogRows_(data, requestedCatalogTags_(p));
+  if (res.error) return { success: false, error: res.error, tabName: extSheet.getName() };
 
-  // Intelligent column detection (matches "Product SKU", "GTIN Number", "Product Name", "Quantity", "COGS", "Tag", "Image")
-  var gtinIdx = -1, skuIdx = -1, nameIdx = -1, shortNameIdx = -1, imgIdx = -1, catIdx = -1, tagIdx = -1, cogsIdx = -1, qtyIdx = -1;
-
-  for (var c = 0; c < headers.length; c++) {
-    var h = headers[c];
-    if (gtinIdx === -1 && (h.indexOf('gtin') !== -1 || h.indexOf('barcode') !== -1 || h.indexOf('ean') !== -1 || h.indexOf('upc') !== -1 || h === 'code')) {
-      gtinIdx = c;
-    } else if (skuIdx === -1 && (h.indexOf('sku') !== -1 || h.indexOf('item code') !== -1 || h.indexOf('product code') !== -1 || h.indexOf('style') !== -1 || h.indexOf('model') !== -1 || h === 'item')) {
-      skuIdx = c;
-    } else if (nameIdx === -1 && (h.indexOf('product name') !== -1 || h.indexOf('product') !== -1 || h.indexOf('title') !== -1 || h.indexOf('item name') !== -1 || h.indexOf('description') !== -1)) {
-      nameIdx = c;
-    } else if (shortNameIdx === -1 && (h.indexOf('short') !== -1 || h.indexOf('display name') !== -1 || h.indexOf('nickname') !== -1)) {
-      shortNameIdx = c;
-    } else if (imgIdx === -1 && (h.indexOf('image') !== -1 || h.indexOf('photo') !== -1 || h.indexOf('picture') !== -1 || h.indexOf('img') !== -1 || h.indexOf('drive') !== -1 || h.indexOf('link') !== -1 || h.indexOf('src') !== -1 || h.indexOf('thumbnail') !== -1)) {
-      imgIdx = c;
-    } else if (tagIdx === -1 && (h.indexOf('tag') !== -1 || h.indexOf('label') !== -1 || h.indexOf('status') !== -1)) {
-      tagIdx = c;
-    } else if (catIdx === -1 && (h.indexOf('category') !== -1 || h.indexOf('department') !== -1 || h.indexOf('type') !== -1)) {
-      catIdx = c;
-    } else if (cogsIdx === -1 && (h.indexOf('cogs') !== -1 || h.indexOf('cost') !== -1 || h.indexOf('price') !== -1 || h.indexOf('rate') !== -1)) {
-      cogsIdx = c;
-    } else if (qtyIdx === -1 && (h.indexOf('quantity') !== -1 || h.indexOf('qty') !== -1 || h.indexOf('pack') !== -1)) {
-      qtyIdx = c;
+  // Mirror into the master GTINCatalog tab so every station sees the same catalog.
+  if (res.items.length > 0) {
+    try {
+      saveGtinCatalogBatch_({ products: res.items });
+    } catch (syncErr) {
+      console.warn('Could not mirror to internal GTIN catalog: ' + syncErr.message);
     }
-  }
-
-  // Fallbacks if not explicitly found by keywords
-  if (gtinIdx === -1 && skuIdx === -1) {
-    gtinIdx = 1 < headers.length ? 1 : 0;
-    skuIdx = 2 < headers.length ? 2 : gtinIdx;
-  } else if (gtinIdx === -1) {
-    gtinIdx = skuIdx;
-  } else if (skuIdx === -1) {
-    skuIdx = gtinIdx;
-  }
-  if (nameIdx === -1) nameIdx = 2 < headers.length ? 2 : skuIdx;
-  if (imgIdx === -1 && 6 < headers.length) imgIdx = 6;
-
-  // Multi-tag filter list (if provided e.g. ["Active-online", "offline"])
-  var requestedTags = [];
-  if (p.tags && Array.isArray(p.tags)) {
-    requestedTags = p.tags.map(function(t) { return String(t || '').trim().toLowerCase(); }).filter(Boolean);
-  } else if (p.tag && typeof p.tag === 'string') {
-    requestedTags = String(p.tag).split(',').map(function(t) { return t.trim().toLowerCase(); }).filter(Boolean);
-  }
-
-  var items = [];
-  for (var r = 1; r < data.length; r++) {
-    var row = data[r];
-    var rawGtin = gtinIdx >= 0 ? String(row[gtinIdx] || '').trim() : '';
-    var rawSku = skuIdx >= 0 ? String(row[skuIdx] || '').trim() : '';
-
-    // If one is missing, fallback to the other (handles SKUs with blank GTIN or vice versa)
-    if (!rawGtin && !rawSku) continue;
-    if (!rawGtin) rawGtin = rawSku;
-    if (!rawSku) rawSku = rawGtin;
-
-    var rawName = nameIdx >= 0 ? String(row[nameIdx] || '').trim() : rawSku || rawGtin;
-    if (isOrderRecord_(rawGtin, rawSku, rawName)) continue;
-    var rawShort = shortNameIdx >= 0 && row[shortNameIdx] ? String(row[shortNameIdx]).trim() : rawName;
-    var rawImg = imgIdx >= 0 ? convertDriveImageUrl_(row[imgIdx]) : '';
-    var rawTag = tagIdx >= 0 ? String(row[tagIdx] || '').trim() : '';
-    var rawCat = catIdx >= 0 ? String(row[catIdx] || '').trim() : (rawTag || '');
-    var rawCogs = cogsIdx >= 0 ? row[cogsIdx] : '';
-    var rawQty = qtyIdx >= 0 ? Number(row[qtyIdx]) || 1 : 1;
-
-    // Apply tag pre-filter if user specified tags (e.g. Active-online)
-    if (requestedTags.length > 0) {
-      var tagLower = (rawTag || '').toLowerCase().trim();
-      var catLower = (rawCat || '').toLowerCase().trim();
-      var matchedTag = requestedTags.some(function(rt) {
-        return tagLower.indexOf(rt) !== -1 || catLower.indexOf(rt) !== -1;
-      });
-      if (!matchedTag) continue; // Pre-filter: discard non-matching items before pushing to AV_VMS_System
-    }
-
-    items.push({
-      gtin: rawGtin,
-      sku: rawSku || rawGtin,
-      productName: rawName || rawSku,
-      shortName: rawShort || rawName,
-      imageUrl: rawImg,
-      category: rawCat,
-      tag: rawTag,
-      cogs: rawCogs,
-      defaultQuantity: rawQty
-    });
-  }
-
-  // Also sync these items into the master spreadsheet GTINCatalog tab for unified offline/online access
-  try {
-    saveGtinCatalogBatch_({ products: items });
-  } catch (syncErr) {
-    console.warn('Could not mirror to internal GTIN catalog: ' + syncErr.message);
   }
 
   return {
     success: true,
-    items: items,
-    count: items.length,
+    items: res.items,
+    count: res.items.length,
+    totalRows: res.totalRows,
+    columns: res.columns,
+    tagColumn: res.tagColumn,
+    tagsFound: res.tagsFound,
+    appliedTags: res.appliedTags,
     sheetTitle: extSpreadsheet.getName(),
-    tabName: extSheet.getName(),
-    appliedTags: requestedTags
+    tabName: extSheet.getName()
   };
 }
 
