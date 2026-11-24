@@ -10,7 +10,7 @@ verification, search, reports, analytics, user admin and a phone-as-barcode-scan
 |---|---|---|
 | React app (`src/`) | Browser. Published to GitHub Pages by `.github/workflows/deploy.yml` | UI, camera recording, offline upload queue (IndexedDB), uploads |
 | Apps Script backend (`backend/Code.gs`) | Google Apps Script web app | Sign-in, Users, Sheets logs, Drive folders, resumable uploads, search, reports |
-| Station server (`server.ts`) – optional | Your own Node host (not GitHub Pages) | WebSocket phone-scanner relay, fast Drive upload proxy, Gemini video analysis |
+| Station server (`server.ts`) – optional | Your own Node host (not GitHub Pages) | WebSocket phone-scanner relay, fast Drive upload proxy, Sheet CSV proxy |
 
 On GitHub Pages the app detects that the station server is missing and uses the parts that work
 without it: phone pairing over PeerJS and uploads through Apps Script.
@@ -40,10 +40,3 @@ npm run build      # static app in dist/ and dist/server.cjs
 
 `backend/tests/gas-harness.cjs` runs the real `Code.gs` under Node with in-memory Sheets,
 Properties and Cache, so backend behaviour can be tested without Google.
-
-### Station server settings (optional)
-
-| Variable | Purpose |
-|---|---|
-| `GEMINI_API_KEY` | Enables AI video analysis |
-| `VMS_APPS_SCRIPT_URL` | Your Apps Script `/exec` URL, used to verify sign-in tokens for AI requests |

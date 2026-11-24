@@ -5,52 +5,11 @@ import fs from 'fs';
 import os from 'os';
 import dotenv from 'dotenv';
 import { WebSocketServer, WebSocket } from 'ws';
-import { GoogleGenAI, Type } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import { isDriveUploadUrl } from './serverSecurity';
 
 dotenv.config();
 
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    },
-  },
-});
-
-// Apps Script backend used to verify VMS login tokens for server features that cost money
-// (Gemini). Set VMS_APPS_SCRIPT_URL to your own /exec deployment.
-const APPS_SCRIPT_URL =
-  process.env.VMS_APPS_SCRIPT_URL ||
-  'https://script.google.com/macros/s/AKfycbwZFm2t3o2vLFC7blM1AOzmgDMxB0UiZ_scWkLYasPGn7iB9XPoCCIi3mggjObpaMP_/exec';
-
-const verifiedTokens = new Map<string, { email: string; until: number }>();
-
-async function verifyVmsToken(token: string): Promise<{ email: string } | null> {
-  token = String(token || '').trim();
-  if (!token || token.length > 200) return null;
-  const hit = verifiedTokens.get(token);
-  if (hit && hit.until > Date.now()) return { email: hit.email };
-  try {
-    const resp = await fetch(APPS_SCRIPT_URL, {
-      method: 'POST',
-      redirect: 'follow',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'validateSession', token }),
-    });
-    const data: any = await resp.json().catch(() => null);
-    if (data && data.success && data.user && data.user.email) {
-      verifiedTokens.set(token, { email: String(data.user.email), until: Date.now() + 5 * 60 * 1000 });
-      if (verifiedTokens.size > 1000) verifiedTokens.delete(verifiedTokens.keys().next().value as string);
-      return { email: String(data.user.email) };
-    }
-  } catch (err) {
-    console.warn('VMS token verification failed:', err);
-  }
-  return null;
-}
 
 interface ScannerClientSocket extends WebSocket {
   stationId?: string;
@@ -397,9 +356,8 @@ async function startServer() {
     }
   });
 
-  // Allow larger payload for keyframe snapshots sent for AI video inspection
-  app.use(express.json({ limit: '50mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+  app.use(express.json({ limit: '1mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
   // REST API: Instant Barcode Broadcast (Works as zero-friction fallback if WebSockets are blocked)
   app.post('/api/scanner/broadcast', (req, res) => {
@@ -549,7 +507,6 @@ async function startServer() {
     res.json({
       status: 'ok',
       service: 'Order Packing Video System (VMS 3.0)',
-      geminiAvailable: Boolean(process.env.GEMINI_API_KEY),
       realtimeScannerWs: true,
       activeStations: stationRooms.size,
       time: Date.now(),
@@ -595,176 +552,6 @@ async function startServer() {
       return res.send(text);
     } catch (err: any) {
       return res.status(500).json({ error: err.message || 'Failed to fetch Google Sheet CSV' });
-    }
-  });
-
-  // AI Packing Video Focus & Area Identification Endpoint
-  app.post('/api/ai/analyze-packing-video', async (req, res) => {
-    try {
-      const {
-        orderId = 'Unknown Order',
-        fileId = '',
-        driveLink = '',
-        videoFrames = [], // Array of { timestampSec: number, base64: string }
-        metadata = {},
-      } = req.body;
-
-      const caller = await verifyVmsToken(String(req.headers['x-vms-token'] || ''));
-      if (!caller) {
-        return res.status(401).json({ success: false, code: 'AUTH_REQUIRED', error: 'Sign in to VMS to use AI analysis.' });
-      }
-
-      if (!process.env.GEMINI_API_KEY) {
-        return res.status(500).json({
-          success: false,
-          error: 'GEMINI_API_KEY is not configured in server environment.',
-        });
-      }
-
-      // Prepare parts for Gemini 3.8 Flash
-      const parts: any[] = [];
-
-      parts.push({
-        text: `You are an expert E-Commerce Logistics Computer Vision Specialist for an Order Packing Video Management System (VMS 3.0).
-Analyze this packing recording session (Order ID: "${orderId}", Drive File ID: "${fileId}").
-
-Objective:
-1. Identify all focusing areas automatically throughout the packing session (without any camera zooming - 1.0x full packing station view):
-   - When the operator is showing the SHIPPING LABEL / AWB / BARCODE: evaluate clarity, barcode scanability, address visibility, and exact coordinates.
-   - When the operator is showing the INVOICE / BILL OF SUPPLY: evaluate document framing, legibility of line items, tax numbers, and pricing.
-   - When the operator is packing the PRODUCT: evaluate product verification, packaging condition, void filling, and security sealing.
-2. Determine if the camera auto-focused appropriately to make each detail crystal clear.
-3. Suggest calibrated auto-focus optical parameters and clarity enhancements to tune the live camera engine.
-
-Provide your response in strictly structured JSON format matching the schema.`,
-      });
-
-      // Attach sampled video frames if provided
-      if (Array.isArray(videoFrames) && videoFrames.length > 0) {
-        // Limit to max 12 frames to remain snappy
-        const framesToInclude = videoFrames.slice(0, 12);
-        for (let i = 0; i < framesToInclude.length; i++) {
-          const f = framesToInclude[i];
-          const cleanB64 = String(f.base64 || '').replace(/^data:image\/\w+;base64,/, '');
-          if (cleanB64) {
-            parts.push({
-              inlineData: {
-                mimeType: 'image/jpeg',
-                data: cleanB64,
-              },
-            });
-            parts.push({
-              text: `[Video Frame at ${f.timestampSec ? f.timestampSec.toFixed(1) : (i * 2).toFixed(1)}s - Frame #${i + 1}]`,
-            });
-          }
-        }
-      } else {
-        parts.push({
-          text: `No direct raw image frames provided. Analyze based on available metadata: Order ID: ${orderId}, Drive Link: ${driveLink}, File ID: ${fileId}. Provide simulated baseline calibration profiles for this packing workflow.`,
-        });
-      }
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: { parts },
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              overallClarityRating: {
-                type: Type.STRING,
-                description: 'Overall video clarity: Excellent, Good, Fair, or Needs Improvement',
-              },
-              executiveSummary: {
-                type: Type.STRING,
-                description: 'Concise summary of video quality and focus shifts',
-              },
-              focusShifts: {
-                type: Type.ARRAY,
-                description: 'Chronological timeline of detected focus zones',
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    timestampSec: { type: Type.NUMBER },
-                    focusTarget: { type: Type.STRING, description: 'LABEL, INVOICE, PRODUCT, or OVERVIEW' },
-                    description: { type: Type.STRING },
-                    clarityScore: { type: Type.NUMBER, description: '0 to 100 score' },
-                    isOptimalFocus: { type: Type.BOOLEAN },
-                    recommendation: { type: Type.STRING },
-                  },
-                  required: ['timestampSec', 'focusTarget', 'description', 'clarityScore'],
-                },
-              },
-              labelAnalysis: {
-                type: Type.OBJECT,
-                properties: {
-                  detected: { type: Type.BOOLEAN },
-                  timestampSec: { type: Type.NUMBER },
-                  barcodeReadable: { type: Type.BOOLEAN },
-                  clarityScore: { type: Type.NUMBER },
-                  notes: { type: Type.STRING },
-                },
-                required: ['detected', 'barcodeReadable', 'clarityScore', 'notes'],
-              },
-              invoiceAnalysis: {
-                type: Type.OBJECT,
-                properties: {
-                  detected: { type: Type.BOOLEAN },
-                  timestampSec: { type: Type.NUMBER },
-                  legibilityScore: { type: Type.NUMBER },
-                  notes: { type: Type.STRING },
-                },
-                required: ['detected', 'legibilityScore', 'notes'],
-              },
-              productPackingAnalysis: {
-                type: Type.OBJECT,
-                properties: {
-                  detected: { type: Type.BOOLEAN },
-                  timestampSec: { type: Type.NUMBER },
-                  productIdentifiable: { type: Type.BOOLEAN },
-                  packagingQualityScore: { type: Type.NUMBER },
-                  notes: { type: Type.STRING },
-                },
-                required: ['detected', 'productIdentifiable', 'packagingQualityScore', 'notes'],
-              },
-              suggestedCalibration: {
-                type: Type.OBJECT,
-                properties: {
-                  autoHardwareFocus: { type: Type.BOOLEAN, description: 'Whether hardware optical focus should lock on target' },
-                  enableClarityEnhance: { type: Type.BOOLEAN, description: 'Whether edge clarity boost should be active' },
-                  focusHoldTime: { type: Type.NUMBER, description: 'Focus hold time in ms, e.g. 1400' },
-                  focusSensitivity: { type: Type.STRING, description: 'e.g. High, Medium, or Balanced' },
-                },
-                required: ['autoHardwareFocus', 'enableClarityEnhance'],
-              },
-            },
-            required: [
-              'overallClarityRating',
-              'executiveSummary',
-              'focusShifts',
-              'labelAnalysis',
-              'invoiceAnalysis',
-              'productPackingAnalysis',
-              'suggestedCalibration',
-            ],
-          },
-        },
-      });
-
-      const parsed = JSON.parse(response.text?.trim() || '{}');
-      return res.json({
-        success: true,
-        orderId,
-        fileId,
-        analysis: parsed,
-      });
-    } catch (err: any) {
-      console.error('AI Video Focus Analysis failed:', err);
-      return res.status(500).json({
-        success: false,
-        error: err.message || 'Internal error during video focus analysis',
-      });
     }
   });
 

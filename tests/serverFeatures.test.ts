@@ -26,9 +26,9 @@ test('network failure means no station server', async () => {
   assert.equal(await hasStationServer(), false);
 });
 
-test('server.ts health response is detected, including Gemini', async () => {
-  mockFetch(async () => Response.json({ status: 'ok', realtimeScannerWs: true, geminiAvailable: true }));
-  assert.deepEqual(await getStationServerInfo(), { available: true, geminiAvailable: true });
+test('server.ts health response is detected', async () => {
+  mockFetch(async () => Response.json({ status: 'ok', realtimeScannerWs: true }));
+  assert.deepEqual(await getStationServerInfo(), { available: true });
 });
 
 test('result is cached: one probe for many callers', async () => {

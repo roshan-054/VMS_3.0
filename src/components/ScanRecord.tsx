@@ -44,7 +44,6 @@ import { dbPutQueue, getStoredMaxVideoSizeMb, getStoredVideoBitrate } from '../l
 import { requestApi, normalizeOrderId, checkDuplicate } from '../lib/api';
 import { triggerUploadWorker, setRecordingInProgress } from '../lib/uploadWorker';
 import { sharedAiFocusEngine, FocusMode, FocusState } from '../lib/aiFocusEngine';
-import { AiVideoFocusModal } from './AiVideoFocusModal';
 import { PhoneScannerModal } from './PhoneScannerModal';
 import { sharedScannerSync } from '../lib/phoneScannerSync';
 import {
@@ -106,7 +105,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   });
   const [aiFocusMode, setAiFocusMode] = useState<FocusMode>('AUTO');
   const [aiFocusState, setAiFocusState] = useState<FocusState | null>(null);
-  const [isAiFocusModalOpen, setIsAiFocusModalOpen] = useState(false);
   const [focusClickPoint, setFocusClickPoint] = useState<{ x: number; y: number } | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -2019,17 +2017,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                   </button>
 
                   <button
-                    id="open-drive-analysis-btn"
-                    type="button"
-                    onClick={() => setIsAiFocusModalOpen(true)}
-                    className="px-3.5 py-2.5 bg-gradient-to-r from-indigo-50 to-purple-50 hover:from-indigo-100 hover:to-purple-100 border border-indigo-200 text-indigo-900 text-sm rounded-lg font-semibold transition inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
-                    title="Analyze uploaded packing videos in Google Drive to identify focusing areas with Gemini AI"
-                  >
-                    <Sliders className="w-4 h-4 text-indigo-600" />
-                    Analyze Drive Videos
-                  </button>
-
-                  <button
                     id="open-phone-scanner-toolbar-btn"
                     type="button"
                     onClick={() => setIsPhoneScannerModalOpen(true)}
@@ -2173,15 +2160,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                 </button>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setIsAiFocusModalOpen(true)}
-                className="px-3 py-1 text-xs font-semibold rounded-md border border-indigo-500/50 bg-indigo-500/15 text-indigo-300 hover:bg-indigo-500/25 transition cursor-pointer inline-flex items-center gap-1.5"
-                title="Use uploaded packing videos in Google Drive for AI focus analysis and calibration"
-              >
-                <Sliders className="w-3 h-3 text-indigo-400" />
-                <span>Calibrate with Drive Videos</span>
-              </button>
             </div>
           </div>
         </div>
@@ -2494,18 +2472,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
           </div>
         </div>
       </div>
-
-      {/* AI Video Focus & Area Identification Modal */}
-      <AiVideoFocusModal
-        isOpen={isAiFocusModalOpen}
-        onClose={() => setIsAiFocusModalOpen(false)}
-        orderId={orderId.trim()}
-        onShowToast={onShowToast}
-        onAppliedCalibration={() => {
-          setAiFocusEnabled(true);
-          setAiFocusMode('AUTO');
-        }}
-      />
 
       {/* Wireless Phone Barcode Scanner Setup & Real-Time Sync Modal */}
       <PhoneScannerModal
