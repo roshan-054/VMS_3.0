@@ -7,6 +7,7 @@ import dotenv from 'dotenv';
 import { WebSocketServer, WebSocket } from 'ws';
 import { GoogleGenAI, Type } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
+import { isDriveUploadUrl } from './serverSecurity';
 
 dotenv.config();
 
@@ -18,6 +19,38 @@ const ai = new GoogleGenAI({
     },
   },
 });
+
+// Apps Script backend used to verify VMS login tokens for server features that cost money
+// (Gemini). Set VMS_APPS_SCRIPT_URL to your own /exec deployment.
+const APPS_SCRIPT_URL =
+  process.env.VMS_APPS_SCRIPT_URL ||
+  'https://script.google.com/macros/s/AKfycbwZFm2t3o2vLFC7blM1AOzmgDMxB0UiZ_scWkLYasPGn7iB9XPoCCIi3mggjObpaMP_/exec';
+
+const verifiedTokens = new Map<string, { email: string; until: number }>();
+
+async function verifyVmsToken(token: string): Promise<{ email: string } | null> {
+  token = String(token || '').trim();
+  if (!token || token.length > 200) return null;
+  const hit = verifiedTokens.get(token);
+  if (hit && hit.until > Date.now()) return { email: hit.email };
+  try {
+    const resp = await fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      redirect: 'follow',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'validateSession', token }),
+    });
+    const data: any = await resp.json().catch(() => null);
+    if (data && data.success && data.user && data.user.email) {
+      verifiedTokens.set(token, { email: String(data.user.email), until: Date.now() + 5 * 60 * 1000 });
+      if (verifiedTokens.size > 1000) verifiedTokens.delete(verifiedTokens.keys().next().value as string);
+      return { email: String(data.user.email) };
+    }
+  } catch (err) {
+    console.warn('VMS token verification failed:', err);
+  }
+  return null;
+}
 
 interface ScannerClientSocket extends WebSocket {
   stationId?: string;
@@ -49,29 +82,6 @@ async function startServer() {
     const str = String(raw || '').trim().toLowerCase();
     const digits = str.replace(/\D/g, '').slice(0, 4);
     return digits ? `station-${digits}` : 'station-5829';
-  }
-
-  function getAnyActiveStation(): { stationId: string; pin: string } | null {
-    const now = Date.now();
-    // 1. Check WS stations
-    for (const [stId, room] of stationRooms.entries()) {
-      for (const client of room) {
-        if (client.readyState === WebSocket.OPEN && client.role === 'station') {
-          const pin = stId.replace(/\D/g, '').slice(0, 4) || '5829';
-          return { stationId: stId, pin };
-        }
-      }
-    }
-    // 2. Check HTTP presence stations (active within last 25 seconds)
-    for (const [stId, map] of httpPresence.entries()) {
-      for (const entry of map.values()) {
-        if (entry.role === 'station' && now - entry.lastSeen < 25000) {
-          const pin = stId.replace(/\D/g, '').slice(0, 4) || '5829';
-          return { stationId: stId, pin };
-        }
-      }
-    }
-    return null;
   }
 
   function recordPresence(rawStationId: string, clientId: string, role: 'station' | 'phone', deviceName: string) {
@@ -319,10 +329,17 @@ async function startServer() {
     if (!uploadUrl) {
       return res.status(400).json({ success: false, error: 'Missing x-drive-upload-url header' });
     }
+    if (!isDriveUploadUrl(uploadUrl)) {
+      return res.status(400).json({ success: false, error: 'x-drive-upload-url must be a Google Drive resumable upload session URL' });
+    }
+    if (!/^bytes (\d+-\d+|\*)\/(\d+|\*)$/.test(contentRange)) {
+      return res.status(400).json({ success: false, error: 'Invalid Content-Range header' });
+    }
 
     try {
       const driveResp = await fetch(uploadUrl, {
         method: 'PUT',
+        redirect: 'manual',
         headers: {
           'Content-Range': contentRange,
           'Content-Type': contentType,
@@ -416,20 +433,11 @@ async function startServer() {
 
   // REST API: Instant Station & Phone Pairing Handshake (<20ms response)
   app.post('/api/scanner/pair', (req, res) => {
-    let stationId = cleanStationId(req.body.stationId);
+    const stationId = cleanStationId(req.body.stationId);
     const { clientId = `client-${Date.now()}`, role = 'phone', deviceName = 'Device' } = req.body;
 
-    // Smart Auto-Pairing: If a phone connects and its specified stationId has no active workstation,
-    // automatically link it to the workstation currently active on the server!
-    if (role === 'phone') {
-      const initialStats = getActiveStationStats(stationId);
-      if (initialStats.connectedStations === 0) {
-        const active = getAnyActiveStation();
-        if (active && active.stationId) {
-          stationId = active.stationId;
-        }
-      }
-    }
+    // A phone only joins the station whose PIN it was given. (Auto-attaching unknown phones to
+    // whichever station was active let anyone send barcodes or start/stop a station's recording.)
 
     recordPresence(stationId, String(clientId), role === 'station' ? 'station' : 'phone', String(deviceName));
     const stats = getActiveStationStats(stationId);
@@ -475,12 +483,11 @@ async function startServer() {
         }
       }
     }
-    const active = getAnyActiveStation();
+    // Active station PINs are not disclosed here: knowing a PIN is what lets a phone pair.
     res.json({
       success: true,
       lanIps,
       port: PORT,
-      activeStation: active,
       serverTime: Date.now(),
     });
   });
@@ -549,21 +556,6 @@ async function startServer() {
     });
   });
 
-  // Serve backend Apps Script Code.gs
-  app.get('/api/backend-code', (req, res) => {
-    try {
-      const codePath = path.join(process.cwd(), 'backend', 'Code.gs');
-      if (fs.existsSync(codePath)) {
-        const code = fs.readFileSync(codePath, 'utf-8');
-        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        return res.send(code);
-      }
-      res.status(404).send('// backend/Code.gs not found');
-    } catch (err: any) {
-      res.status(500).send(`// Error reading backend/Code.gs: ${err.message}`);
-    }
-  });
-
   // Google Sheet direct CSV fetch proxy (bypasses browser CORS & provides clear error messaging)
   app.get('/api/proxy/sheet-csv', async (req, res) => {
     try {
@@ -571,6 +563,9 @@ async function startServer() {
       const tabName = String(req.query.tabName || 'GTINCatalog').trim();
       if (!sheetId) {
         return res.status(400).json({ error: 'Missing sheetId query parameter' });
+      }
+      if (!/^[A-Za-z0-9_-]{10,100}$/.test(sheetId) || tabName.length > 100) {
+        return res.status(400).json({ error: 'Invalid sheetId or tabName' });
       }
 
       const encTab = encodeURIComponent(tabName);
@@ -613,6 +608,11 @@ async function startServer() {
         videoFrames = [], // Array of { timestampSec: number, base64: string }
         metadata = {},
       } = req.body;
+
+      const caller = await verifyVmsToken(String(req.headers['x-vms-token'] || ''));
+      if (!caller) {
+        return res.status(401).json({ success: false, code: 'AUTH_REQUIRED', error: 'Sign in to VMS to use AI analysis.' });
+      }
 
       if (!process.env.GEMINI_API_KEY) {
         return res.status(500).json({

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { loadBackendCode } from '../lib/backendCode';
 import {
   Users,
   UserPlus,
@@ -831,13 +832,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
     setShowCodeModal(true);
     setCodeModalLoading(true);
     try {
-      const res = await fetch('/api/backend-code');
-      if (res.ok) {
-        const text = await res.text();
-        setCodeModalContent(text);
-      } else {
-        setCodeModalContent('// Error loading code: ' + res.statusText);
-      }
+      setCodeModalContent(await loadBackendCode());
     } catch (err: any) {
       setCodeModalContent('// Error loading code: ' + (err?.message || err));
     } finally {

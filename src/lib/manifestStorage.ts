@@ -1,4 +1,5 @@
 import { OrderManifest, ManifestItem, GtinCatalogProduct, PackVerificationLog, VideoRecord } from '../types';
+import { hasStationServer } from './serverFeatures';
 import { requestApi, normalizeOrderId, checkDuplicate } from './api';
 import { dbGetAllQueue } from './storage';
 import { getDirectImageUrl } from './branding';
@@ -1155,7 +1156,7 @@ async function fetchAndParseDirectGoogleSheetCsv(sheetId: string, tabName: strin
   let text = '';
 
   // 1. Try local server-side proxy route first (bypasses browser CORS & iframe sandbox restrictions)
-  try {
+  if (await hasStationServer()) try {
     const proxyResp = await fetch(`/api/proxy/sheet-csv?sheetId=${sheetId}&tabName=${encTab}`);
     if (proxyResp.ok) {
       text = await proxyResp.text();

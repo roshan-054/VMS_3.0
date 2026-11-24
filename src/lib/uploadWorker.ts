@@ -1,4 +1,5 @@
 import { QueueItem } from '../types';
+import { hasStationServer } from './serverFeatures';
 import {
   dbGetAllQueue,
   dbGetQueueItem,
@@ -691,7 +692,8 @@ export async function triggerUploadWorker(): Promise<void> {
             let proxyData: any = null;
 
             // 1. Try local Node.js proxy to bypass browser CORS and stream raw binary at full cloud speed
-            try {
+            //    (only when the station server is actually serving this page; not on GitHub Pages)
+            if (await hasStationServer()) try {
               const proxyResp = await fetch('/api/drive/resumable-chunk', {
                 method: 'PUT',
                 headers: {

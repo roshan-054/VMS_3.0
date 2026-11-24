@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { loadBackendCode } from '../lib/backendCode';
 import {
   Settings,
   Link2,
@@ -74,9 +75,8 @@ export const SetupModal: React.FC<SetupModalProps> = ({ isOpen, onClose, onShowT
 
   const handleCopyCode = async () => {
     try {
-      const res = await fetch('/api/backend-code');
-      if (res.ok) {
-        const fullCode = await res.text();
+      {
+        const fullCode = await loadBackendCode();
         if (fullCode && fullCode.length > 500) {
           await navigator.clipboard.writeText(fullCode);
           setCopiedCode(true);
