@@ -99,6 +99,7 @@ function createRuntime({ users = [] } = {}) {
       newBlob: () => noopProxy(),
     },
     Session: { getScriptTimeZone: () => 'Asia/Kolkata' },
+    Logger: { log() {} },
     DriveApp: noopProxy(), Drive: noopProxy(), ScriptApp: noopProxy(), UrlFetchApp: noopProxy(),
   };
   vm.createContext(sandbox);

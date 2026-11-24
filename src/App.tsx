@@ -74,12 +74,8 @@ export function App() {
           return JSON.parse(storedUser);
         }
       } catch (e) {}
-      return {
-        name: 'Master Admin',
-        email: 'askroshan.2002@gmail.com',
-        role: 'Master Admin',
-        status: 'Approved',
-      };
+      // A token without a known user is not trusted: sign in again.
+      setStoredToken('');
     }
     return null;
   });
