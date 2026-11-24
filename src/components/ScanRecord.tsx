@@ -29,7 +29,6 @@ import {
   ShieldAlert,
   ExternalLink,
   RefreshCw,
-  Smartphone,
   QrCode,
   Radio,
   Lock,
@@ -48,8 +47,6 @@ import { LocalBackupFolderPicker } from './LocalBackupFolderPicker';
 import { LiveClock, ElapsedTimer, RecordedSize } from './RecordingIndicators';
 import { startRecordingSession, prepareCameraFeed, releaseCameraFeed, type RecordingSession, type RecordingResult } from '../lib/recordingPipeline';
 import { sharedAiFocusEngine, FocusMode, FocusState } from '../lib/aiFocusEngine';
-import { PhoneScannerModal } from './PhoneScannerModal';
-import { sharedScannerSync } from '../lib/phoneScannerSync';
 import {
   getManifestByOrderId,
   getStoredManifests,
@@ -57,7 +54,6 @@ import {
   isBarcodeEqual,
   updateManifestStatus,
   getVerificationSettings,
-  syncManifestsWithCloud
 } from '../lib/manifestStorage';
 import { PackVerificationModal } from './PackVerificationModal';
 
@@ -82,12 +78,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   const [customPlatform, setCustomPlatform] = useState('');
   
   const effectivePlatform = platform === 'Custom' ? customPlatform.trim() || 'Custom' : platform;
-
-  // Wireless Phone Barcode Scanner Sync
-  const [isPhoneScannerModalOpen, setIsPhoneScannerModalOpen] = useState(false);
-  const [isPhoneConnected, setIsPhoneConnected] = useState(false);
-  const [connectedPhonesCount, setConnectedPhonesCount] = useState(0);
-  const [phoneDeviceName, setPhoneDeviceName] = useState('');
 
   // Camera & Stream State
   const [isCameraActive, setIsCameraActive] = useState(false);
@@ -651,7 +641,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   // One entry point for every scanned / typed / pasted order code.
   // While a video is recording the order is locked: a stray scan (e.g. a product barcode) can never
   // replace the Order ID of the video being recorded.
-  const applyOrderCode = (raw: string, source: 'scanner' | 'typed' | 'pasted' | 'phone'): boolean => {
+  const applyOrderCode = (raw: string, source: 'scanner' | 'typed' | 'pasted'): boolean => {
     const cleaned = cleanBarcode(raw);
     if (!cleaned) return false;
     if (isRecordingRef.current) {
@@ -1368,70 +1358,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     }
   };
 
-  const startRecordingRef = useRef(startRecording);
-  startRecordingRef.current = startRecording;
-  const stopRecordingRef = useRef(stopRecording);
-  stopRecordingRef.current = stopRecording;
-  const lastStationBarcodeRef = useRef<string>('');
-  const lastStationBarcodeTimeRef = useRef<number>(0);
-
-  // Real-time synchronization with Wireless Phone Barcode Scanner
-  useEffect(() => {
-    sharedScannerSync.connectAsStation(
-      (barcode, _format, _platform, device) => {
-        const cleaned = cleanBarcode(barcode);
-        if (cleaned) {
-          // If the scanned code is the station pairing QR code itself, do not set as Order ID
-          if (cleaned.includes('scanner=mobile') || cleaned.includes('pin=') || cleaned.startsWith('http://') || cleaned.startsWith('https://')) {
-            onShowToast('Pairing QR code detected. Scanner is already connected!', 'info');
-            return;
-          }
-
-          // Anti-continuous scanning guard: ignore identical barcode received within 1.2 seconds
-          const now = Date.now();
-          if (cleaned === lastStationBarcodeRef.current && now - lastStationBarcodeTimeRef.current < 1200) {
-            return;
-          }
-          lastStationBarcodeRef.current = cleaned;
-          lastStationBarcodeTimeRef.current = now;
-
-          if (applyOrderCodeRef.current(cleaned, 'phone')) {
-            onShowToast(`📱 Phone Scanned: ${cleaned} (${device || 'Mobile Phone'})`, 'success');
-          }
-        }
-      },
-      (connected, count, device) => {
-        setIsPhoneConnected(connected);
-        setConnectedPhonesCount(count);
-        if (device) setPhoneDeviceName(device);
-      }
-    );
-
-    const unsubCmd = sharedScannerSync.onRemoteCommand((action, device) => {
-      if (action === 'START_RECORDING') {
-        if (!isRecordingRef.current) {
-          startRecordingRef.current();
-          onShowToast(`📱 Remote START from ${device || 'Phone'}`, 'info');
-        }
-      } else if (action === 'STOP_RECORDING') {
-        if (isRecordingRef.current) {
-          stopRecordingRef.current();
-          onShowToast(`📱 Remote STOP from ${device || 'Phone'}`, 'info');
-        }
-      } else if (action === 'TRIGGER_FOCUS') {
-        triggerAutoFocus();
-        onShowToast(`📱 Remote Auto-Focus Triggered`, 'info');
-      } else if (action === 'TOGGLE_CAMERA') {
-        handleToggleCamera();
-      }
-    });
-
-    return () => {
-      unsubCmd();
-    };
-  }, []);
-
-
   return (
     <div id="scan-record-container" className="space-y-6">
       {/* Top Status Banner */}
@@ -1446,53 +1372,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {/* Live Manifest Sync Status & Refresh Button */}
-          <button
-            id="force-manifest-sync-btn"
-            type="button"
-            onClick={async () => {
-              onShowToast('Syncing latest manifests & assignments from Google Sheets...', 'info');
-              const res = await syncManifestsWithCloud();
-              if (res.success) {
-                onShowToast(`✓ Real-time sync complete (${res.manifests?.length || 0} active manifest orders loaded)`, 'success');
-              } else {
-                onShowToast(res.error || 'Live sync complete', 'info');
-              }
-            }}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 dark:bg-indigo-950/80 dark:text-indigo-300 dark:border-indigo-800 transition cursor-pointer shadow-2xs shrink-0"
-            title="Real-time background sync active. Click to force immediate refresh from Google Sheets."
-          >
-            <RefreshCw className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-            <span className="whitespace-nowrap">⚡ Live Sync</span>
-          </button>
-
-          {/* Wireless Phone Barcode Scanner Status & Pair Button */}
-          <button
-            id="open-phone-scanner-modal-btn"
-            type="button"
-            onClick={() => setIsPhoneScannerModalOpen(true)}
-            className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold border transition cursor-pointer shadow-xs whitespace-nowrap shrink-0 ${
-              isPhoneConnected
-                ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100 dark:bg-emerald-950/80 dark:text-emerald-300 dark:border-emerald-700/80 hover:dark:bg-emerald-900/60'
-                : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 dark:bg-blue-950/80 dark:text-blue-200 dark:border-blue-700/80 hover:dark:bg-blue-900/60'
-            }`}
-            title="Connect your phone as a wireless barcode scanner in real-time"
-          >
-            <Smartphone className={`w-3.5 h-3.5 shrink-0 ${isPhoneConnected ? 'text-emerald-600 dark:text-emerald-400' : 'text-blue-600 dark:text-blue-400'}`} />
-            <span className="whitespace-nowrap">
-              {isPhoneConnected
-                ? `Phone Scanner: Active (${connectedPhonesCount})`
-                : 'Phone Barcode Scanner'}
-            </span>
-            {isPhoneConnected ? (
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-            ) : (
-              <span className="text-[10px] font-mono bg-blue-200/90 dark:bg-blue-900 text-blue-900 dark:text-blue-100 border border-blue-300/60 dark:border-blue-600/50 px-2 py-0.5 rounded-full font-bold whitespace-nowrap shrink-0 leading-none">
-                Pair (QR)
-              </span>
-            )}
-          </button>
-
           <span
             id="camera-status-chip"
             className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border whitespace-nowrap shrink-0 transition ${
@@ -1831,16 +1710,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                     {aiFocusEnabled ? 'AI Focus: Active' : 'Enable AI Focus'}
                   </button>
 
-                  <button
-                    id="open-phone-scanner-toolbar-btn"
-                    type="button"
-                    onClick={() => setIsPhoneScannerModalOpen(true)}
-                    className="px-3.5 py-2.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-900 dark:bg-blue-950/70 dark:border-blue-700/80 dark:text-blue-200 text-sm rounded-lg font-semibold transition inline-flex items-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap"
-                    title="Connect your phone as a wireless barcode reader in real-time"
-                  >
-                    <Smartphone className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                    <span>{isPhoneConnected ? `Phone Linked (${connectedPhonesCount})` : 'Phone Scanner (QR)'}</span>
-                  </button>
                 </>
               )}
             </div>
@@ -1998,16 +1867,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                     <Barcode className="w-3.5 h-3.5 text-blue-600" />
                     USB Scanner
                   </span>
-                  <span className="text-slate-300 dark:text-slate-600">|</span>
-                  <button
-                    type="button"
-                    onClick={() => setIsPhoneScannerModalOpen(true)}
-                    className="text-[11px] text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-semibold flex items-center gap-1 hover:underline cursor-pointer whitespace-nowrap"
-                    title="Connect phone as wireless barcode reader"
-                  >
-                    <Smartphone className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-                    <span>{isPhoneConnected ? 'Phone: Linked' : 'Phone Scanner'}</span>
-                  </button>
                 </div>
               </div>
               <div className="relative">
@@ -2297,13 +2156,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
           </div>
         </div>
       </div>
-
-      {/* Wireless Phone Barcode Scanner Setup & Real-Time Sync Modal */}
-      <PhoneScannerModal
-        isOpen={isPhoneScannerModalOpen}
-        onClose={() => setIsPhoneScannerModalOpen(false)}
-        onShowToast={onShowToast}
-      />
 
       {/* Pre-Pack Manifest & Physical GTIN Barcode Verification Modal */}
       {isPackVerificationOpen && activeManifest && (
