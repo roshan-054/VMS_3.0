@@ -40,7 +40,7 @@ import {
 } from 'lucide-react';
 import { PlatformType, RecordingType, QueueItem, OrderManifest, ManifestItem, User } from '../types';
 import { dbPutQueue, getStoredMaxVideoSizeMb, getStoredVideoBitrate } from '../lib/storage';
-import { requestApi, normalizeOrderId, checkDuplicate } from '../lib/api';
+import { normalizeOrderId, checkDuplicate } from '../lib/api';
 import { triggerUploadWorker, setRecordingInProgress } from '../lib/uploadWorker';
 import { saveRecordingLocally, ensureBackupPermission, backupPathParts } from '../lib/localBackup';
 import { LocalBackupFolderPicker } from './LocalBackupFolderPicker';
@@ -1305,17 +1305,8 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       // Resume background uploads now that recording has completed and the new file is safely persisted
       setRecordingInProgress(false);
 
-      requestApi('startUpload', {
-        orderId: queueItem.orderId,
-        platform: queueItem.platform,
-        fileName: queueItem.fileName,
-        fileSize: queueItem.fileSize,
-        uploadId: queueItem.id,
-        recordingType: queueItem.recordingType,
-        queueJobId: queueItem.id,
-        status: 'Pending',
-        stage: 'Queued in Station Storage'
-      }).catch(() => {});
+      // The upload worker opens the Drive upload session itself. (An extra startUpload here used
+      // to open a second, unused session per video and hold an upload slot for 25 s.)
       window.dispatchEvent(new CustomEvent('ops_queue_updated'));
       onQueueUpdated();
       triggerUploadWorker();

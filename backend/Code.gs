@@ -1854,84 +1854,95 @@ function initDriveResumableSession_(name, mime, size, parentFolderId) {
   return '';
 }
 
-/* ---------- Global 1-by-1 Upload Queue & Multi-User Concurrency Arbiter ---------- */
-function getGlobalUploadLease_() {
-  const raw = PropertiesService.getScriptProperties().getProperty('GLOBAL_ACTIVE_UPLOAD');
-  if (!raw) return null;
-  try {
-    const lease = JSON.parse(raw);
-    const now = Date.now();
-    // Lease expires after 25 seconds of inactive chunk heartbeats or 15 minutes total maximum
-    if (now - Number(lease.lastHeartbeatAt || 0) > 25000 || (now - Number(lease.startedAt || 0) > 900000)) {
-      PropertiesService.getScriptProperties().deleteProperty('GLOBAL_ACTIVE_UPLOAD');
-      return null;
+/* ---------- Shared upload slots (several stations upload at the same time) ---------- */
+// Up to N stations upload in parallel; extra stations wait for a free slot. Previously only one
+// station in the whole company could upload at a time, so queues grew with every extra packer.
+// Change the limit with the script property MAX_PARALLEL_UPLOADS (1-10).
+var UPLOAD_SLOTS_KEY_ = 'ACTIVE_UPLOAD_SLOTS';
+
+function maxParallelUploads_() {
+  var n = Number(PropertiesService.getScriptProperties().getProperty('MAX_PARALLEL_UPLOADS') || 4);
+  return isNaN(n) ? 4 : Math.max(1, Math.min(10, Math.floor(n)));
+}
+
+function readUploadSlots_() {
+  var props = PropertiesService.getScriptProperties();
+  var slots = {};
+  try { slots = JSON.parse(props.getProperty(UPLOAD_SLOTS_KEY_) || '{}') || {}; } catch (_) { slots = {}; }
+  var now = Date.now();
+  var changed = false;
+  Object.keys(slots).forEach(function(id) {
+    var l = slots[id];
+    // A slot frees itself after 25 s without a chunk/heartbeat, or 15 minutes in total.
+    if (!l || now - Number(l.lastHeartbeatAt || 0) > 25000 || now - Number(l.startedAt || 0) > 900000) {
+      delete slots[id];
+      changed = true;
     }
-    return lease;
-  } catch(_) {
-    PropertiesService.getScriptProperties().deleteProperty('GLOBAL_ACTIVE_UPLOAD');
-    return null;
-  }
+  });
+  if (changed) writeUploadSlots_(slots);
+  return slots;
+}
+
+function writeUploadSlots_(slots) {
+  var props = PropertiesService.getScriptProperties();
+  if (Object.keys(slots).length === 0) props.deleteProperty(UPLOAD_SLOTS_KEY_);
+  else props.setProperty(UPLOAD_SLOTS_KEY_, JSON.stringify(slots));
 }
 
 function checkGlobalUploadSlot_(orderId, uploadId, userEmail) {
-  const activeLease = getGlobalUploadLease_();
-  if (!activeLease) {
-    return { available: true };
+  var slots = readUploadSlots_();
+  var ids = Object.keys(slots);
+  var mine = ids.filter(function(id) {
+    return id === uploadId || (slots[id].orderId === orderId && slots[id].packerEmail === userEmail);
+  });
+  if (mine.length > 0 || ids.length < maxParallelUploads_()) {
+    return { available: true, active: ids.length, limit: maxParallelUploads_() };
   }
-  // If the same upload session or same order/user, allow continuation
-  if (activeLease.uploadId === uploadId || (activeLease.orderId === orderId && activeLease.packerEmail === userEmail)) {
-    if (Date.now() - Number(activeLease.startedAt || 0) < 300000) {
-      touchGlobalUploadSlot_(uploadId);
-      return { available: true };
-    } else {
-      PropertiesService.getScriptProperties().deleteProperty('GLOBAL_ACTIVE_UPLOAD');
-      return { available: true };
-    }
-  }
+  var oldest = slots[ids.sort(function(a, b) { return slots[a].startedAt - slots[b].startedAt; })[0]];
   return {
     available: false,
-    activeUploader: activeLease.packerEmail || 'Another workstation',
-    activeOrderId: activeLease.orderId || 'video',
-    startedAt: activeLease.startedAt,
+    activeUploader: oldest.packerEmail || 'Another workstation',
+    activeOrderId: oldest.orderId || 'video',
+    startedAt: oldest.startedAt,
+    active: ids.length,
+    limit: maxParallelUploads_(),
     retryAfterMs: 3000
   };
 }
 
 function setGlobalUploadLease_(uploadId, orderId, userEmail) {
-  const lease = {
-    uploadId: uploadId,
-    orderId: orderId,
-    packerEmail: userEmail,
-    startedAt: Date.now(),
-    lastHeartbeatAt: Date.now()
-  };
-  PropertiesService.getScriptProperties().setProperty('GLOBAL_ACTIVE_UPLOAD', JSON.stringify(lease));
+  var lease = { uploadId: uploadId, orderId: orderId, packerEmail: userEmail, startedAt: Date.now(), lastHeartbeatAt: Date.now() };
+  withScriptLock_(function() {
+    var slots = readUploadSlots_();
+    // Same order from the same packer restarting: replace its old slot.
+    Object.keys(slots).forEach(function(id) {
+      if (slots[id].orderId === orderId && slots[id].packerEmail === userEmail) delete slots[id];
+    });
+    slots[uploadId] = lease;
+    writeUploadSlots_(slots);
+  });
   return lease;
 }
 
 function touchGlobalUploadSlot_(uploadId) {
   try {
-    const raw = PropertiesService.getScriptProperties().getProperty('GLOBAL_ACTIVE_UPLOAD');
-    if (raw) {
-      const lease = JSON.parse(raw);
-      if (!uploadId || lease.uploadId === uploadId) {
-        lease.lastHeartbeatAt = Date.now();
-        PropertiesService.getScriptProperties().setProperty('GLOBAL_ACTIVE_UPLOAD', JSON.stringify(lease));
-      }
+    var slots = readUploadSlots_();
+    if (uploadId && slots[uploadId]) {
+      slots[uploadId].lastHeartbeatAt = Date.now();
+      writeUploadSlots_(slots);
     }
-  } catch(_) {}
+  } catch (_) {}
 }
 
 function releaseGlobalUploadSlot_(uploadId) {
   try {
-    const raw = PropertiesService.getScriptProperties().getProperty('GLOBAL_ACTIVE_UPLOAD');
-    if (raw) {
-      const lease = JSON.parse(raw);
-      if (!uploadId || lease.uploadId === uploadId) {
-        PropertiesService.getScriptProperties().deleteProperty('GLOBAL_ACTIVE_UPLOAD');
-      }
+    if (!uploadId) return;
+    var slots = readUploadSlots_();
+    if (slots[uploadId]) {
+      delete slots[uploadId];
+      writeUploadSlots_(slots);
     }
-  } catch(_) {}
+  } catch (_) {}
 }
 
 /* ---------- Start Upload Session ---------- */
@@ -1963,8 +1974,7 @@ function startUpload_(p){
 
   const uploadId = Utilities.getUuid();
 
-  // GLOBAL 1-BY-1 MULTI-USER QUEUE CHECK:
-  // If another station is actively uploading chunks, smoothly queue this upload
+  // Shared upload slots: when every slot is busy, this station waits for the next free one.
   const isBypassGlobalQueue = p.bypassGlobalQueue === true || String(p.bypassGlobalQueue) === 'true';
   if (!isBypassGlobalQueue) {
     const slotStatus = checkGlobalUploadSlot_(order, uploadId, user.email);
@@ -1976,7 +1986,7 @@ function startUpload_(p){
         activeUploader: slotStatus.activeUploader,
         activeOrderId: slotStatus.activeOrderId,
         retryAfterMs: slotStatus.retryAfterMs || 3000,
-        message: `Global 1-by-1 Queue Active: Station ${slotStatus.activeUploader} is currently uploading Order #${slotStatus.activeOrderId}. Your workstation is queued next for smooth transmission.`
+        message: `All ${slotStatus.limit} upload slots are busy. This station uploads as soon as one is free.`
       };
     }
   }
