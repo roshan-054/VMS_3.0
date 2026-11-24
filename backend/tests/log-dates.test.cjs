@@ -40,3 +40,24 @@ test('Search and analytics also read the corrected date', () => {
   assert.ok(rows.length >= 1, JSON.stringify(s).slice(0, 200));
   assert.equal(new Date(rows[0].timestamp).getFullYear(), 2026);
 });
+
+test('Upload Logs default view: recent rows saved as day-first text are newest, not dropped below older ones', () => {
+  const { rt, token } = setup();
+  const ol = rt.sheets.get('OrderLog');
+  // 600 older real-date rows (16 Nov), then today's rows typed/pasted as text in Indian order.
+  const base = new Date(2026, 10, 16, 14, 0).getTime();
+  for (let i = 0; i < 600; i++) ol.appendRow([new Date(base + i * 60000), '#OD-' + (8000 + i), 'D2C', 'v@x', 'F16_' + i + '_xxxxxxxx', '', '10 MB', 'Completed', 'Forward', 'j16_' + i]);
+  const today = new Date();
+  const dd = String(today.getDate()).padStart(2, '0'), mm = String(today.getMonth() + 1).padStart(2, '0'), yy = today.getFullYear();
+  ol.appendRow([`${dd}/${mm}/${yy} 00:05:00`, '#OD-T1', 'D2C', 'v@x', 'FT1_xxxxxxxxxxxx', '', '10 MB', 'Completed', 'Forward', 'jt1']);
+  ol.appendRow([`${dd}/${mm}/${yy} 00:06:00`, '#OD-T2', 'D2C', 'v@x', 'FT2_xxxxxxxxxxxx', '', '10 MB', 'Completed', 'Forward', 'jt2']);
+  const res = rt.call('getUploadLogs', { token, limit: 500 });
+  const ids = res.logs.slice(0, 4).map((l) => l.orderId);
+  assert.ok(ids.includes('#OD-T1') && ids.includes('#OD-T2'), ids.join(','));
+  const times = res.logs.map((l) => new Date(l.timestamp).getTime());
+  for (let i = 1; i < times.length; i++) assert.ok(times[i - 1] >= times[i], 'sorted newest first at ' + i);
+  // A date filter no longer lets unreadable dates slip in.
+  ol.appendRow(['someday', '#OD-BAD', 'D2C', 'v@x', 'FBAD_xxxxxxxxxxx', '', '1 MB', 'Completed', 'Forward', 'jbad']);
+  const f = rt.call('getUploadLogs', { token, fromDate: '2026-11-16', toDate: '2026-11-16', limit: 5000 });
+  assert.ok(!f.logs.some((l) => l.orderId === '#OD-BAD'));
+});

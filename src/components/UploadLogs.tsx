@@ -44,6 +44,7 @@ import { canUserDeleteData } from '../lib/permissions';
 import { retryUploadItem, fixAndCleanAllStuckUploads, subscribeWorkerStatus, triggerUploadWorker } from '../lib/uploadWorker';
 import { getStoredManifests, getManifestByOrderId } from '../lib/manifestStorage';
 import { getDirectImageUrl } from '../lib/branding';
+import { fmtDateTime, toDate, dateMs } from '../lib/dateFormat';
 
 interface UploadLogsProps {
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
@@ -1081,8 +1082,8 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
     const list = [...filteredLogs];
     list.sort((a, b) => {
       if (sortField === 'timestamp') {
-        const timeA = new Date(a.timestamp).getTime() || 0;
-        const timeB = new Date(b.timestamp).getTime() || 0;
+        const timeA = dateMs(a.timestamp);
+        const timeB = dateMs(b.timestamp);
         return sortOrder === 'desc' ? timeB - timeA : timeA - timeB;
       }
       if (sortField === 'orderId') {
@@ -1185,17 +1186,9 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
 
   const formatTimestamp = (ts: string) => {
     try {
-      const d = new Date(ts);
-      if (isNaN(d.getTime())) return ts;
-      return d.toLocaleString(undefined, {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false,
-      });
+      const d = toDate(ts);
+      if (!d) return ts;
+      return fmtDateTime(d, true);
     } catch (e) {
       return ts;
     }

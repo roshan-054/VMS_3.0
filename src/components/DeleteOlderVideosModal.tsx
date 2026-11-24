@@ -31,6 +31,7 @@ import {
   formatFileSize
 } from '../lib/api';
 import { getStoredDriveFolderId } from '../lib/storage';
+import { fmtDate } from '../lib/dateFormat';
 
 interface DeleteOlderVideosModalProps {
   isOpen: boolean;
@@ -121,7 +122,7 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
       setScanResult(res);
       if (res.totalOlderOrders > 0 || res.totalOlderDriveVideos > 0 || res.totalOlderSheetRows > 0) {
         onShowToast(
-          `Found ${res.totalOlderOrders} record(s) older than ${daysVal} days (Cutoff: ${res.cutoffDate})`,
+          `Found ${res.totalOlderOrders} record(s) older than ${daysVal} days (Cutoff: ${fmtDate(res.cutoffDate)})`,
           'info'
         );
       } else {
@@ -192,7 +193,7 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
   const getCutoffDateStr = (days: number) => {
     const d = new Date();
     d.setDate(d.getDate() - days);
-    return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+    return fmtDate(d);
   };
 
   return (
@@ -457,7 +458,7 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
                           </span>
                           {item.dateStr && (
                             <span className="text-slate-500 font-mono text-[10px]">
-                              {item.dateStr}
+                              {fmtDate(item.dateStr)}
                             </span>
                           )}
                           {item.playbackUrl && (
@@ -535,7 +536,7 @@ export const DeleteOlderVideosModal: React.FC<DeleteOlderVideosModalProps> = ({
               </div>
               <p className="text-xs text-emerald-800">
                 <span className="font-bold">{deleteResult.movedDriveVideosCount}</span> video(s) moved to Google Drive Trash and{' '}
-                <span className="font-bold">{deleteResult.removedSheetRowsCount}</span> log row(s) removed (older than {daysThreshold} days, cutoff {deleteResult.cutoffDate}).
+                <span className="font-bold">{deleteResult.removedSheetRowsCount}</span> log row(s) removed (older than {daysThreshold} days, cutoff {fmtDate(deleteResult.cutoffDate)}).
                 {deleteResult.alreadyGoneCount ? ` ${deleteResult.alreadyGoneCount} video(s) were already deleted.` : ''}
               </p>
               {!!deleteResult.failedCount && (

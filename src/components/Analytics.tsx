@@ -32,6 +32,7 @@ import { requestApi } from '../lib/api';
 import { computeLocalAnalyticsData } from '../lib/localAnalytics';
 import { getStoredManifests, getStoredGtinCatalog, enrichManifestItems } from '../lib/manifestStorage';
 import { getDirectImageUrl } from '../lib/branding';
+import { fmtDate } from '../lib/dateFormat';
 
 interface AnalyticsProps {
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
@@ -54,8 +55,8 @@ export function formatDDMM(dateStr?: string): string {
   if (!dateStr) return '';
   const parts = dateStr.trim().split('-');
   if (parts.length === 3) {
-    // YYYY-MM-DD -> DD-MM
-    return `${parts[2]}-${parts[1]}`;
+    // YYYY-MM-DD -> DD-MMM
+    return fmtDate(dateStr.trim()).slice(0, 6);
   }
   if (parts.length === 2 && parts[0].length === 2 && parts[1].length === 2) {
     // MM-DD -> DD-MM
@@ -66,12 +67,7 @@ export function formatDDMM(dateStr?: string): string {
 
 export function formatDDMMYYYY(dateStr?: string): string {
   if (!dateStr) return '';
-  const parts = dateStr.trim().split('-');
-  if (parts.length === 3) {
-    // YYYY-MM-DD -> DD-MM-YYYY
-    return `${parts[2]}-${parts[1]}-${parts[0]}`;
-  }
-  return dateStr;
+  return fmtDate(dateStr.trim());
 }
 
 export function formatTime12h(dateOrIso?: string | Date): string {
@@ -1372,7 +1368,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast, userKey }) =>
         <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-100 bg-slate-50/70 p-3 rounded-xl">
           <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
             <CalendarDays className="w-4 h-4 text-blue-600" />
-            <span>Active Range: <strong className="text-slate-900 font-mono">{fromDate}</strong> to <strong className="text-slate-900 font-mono">{toDate}</strong></span>
+            <span>Active Range: <strong className="text-slate-900 font-mono">{fmtDate(fromDate)}</strong> to <strong className="text-slate-900 font-mono">{fmtDate(toDate)}</strong></span>
           </div>
 
           <div className="flex items-center gap-2">
@@ -1447,7 +1443,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast, userKey }) =>
                   Daily Order Process Count with Platform Breakdown
                 </h3>
                 <p className="text-[11px] text-slate-500">
-                  Daily volume distribution across Amazon, D2C, JioMart, and Custom platforms for {fromDate} to {toDate}.
+                  Daily volume distribution across Amazon, D2C, JioMart, and Custom platforms for {fmtDate(fromDate)} to {fmtDate(toDate)}.
                 </p>
               </div>
 

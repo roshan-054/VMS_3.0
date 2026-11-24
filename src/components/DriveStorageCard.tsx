@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { HardDrive, RefreshCw, ExternalLink, AlertTriangle } from 'lucide-react';
 import { requestApi } from '../lib/api';
+import { fmtDateTime } from '../lib/dateFormat';
 
 export interface DriveStorageStatus {
   account: { used: number; limit: number; free: number; unlimited: boolean; percent: number; error?: string };
@@ -63,7 +64,7 @@ export const DriveStorageCard: React.FC = () => {
           <h3 className="text-sm font-bold text-slate-800">Google Drive storage</h3>
           {data && (
             <span className="text-[11px] text-slate-500">
-              checked {new Date(data.checkedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
+              checked {fmtDateTime(data.checkedAt)}
             </span>
           )}
         </div>

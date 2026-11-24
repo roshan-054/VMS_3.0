@@ -18,6 +18,7 @@ import {
   Clock
 } from 'lucide-react';
 import { requestApi } from '../lib/api';
+import { fmtDate } from '../lib/dateFormat';
 
 interface ReportsProps {
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
@@ -335,7 +336,7 @@ export const Reports: React.FC<ReportsProps> = ({ onShowToast }) => {
               Report Date Range Preset
             </label>
             <span className="text-[11px] font-mono text-slate-500 font-semibold">
-              {fromDate} → {toDate}
+              {fmtDate(fromDate)} → {fmtDate(toDate)}
             </span>
           </div>
           <div className="flex flex-wrap gap-1.5">
@@ -528,7 +529,7 @@ export const Reports: React.FC<ReportsProps> = ({ onShowToast }) => {
               Report Rows Preview ({displayRows.length} {displayRows.length === 1 ? 'row' : 'rows'})
             </span>
             <span className="text-[11px] text-slate-400 font-mono">
-              • {fromDate} to {toDate}
+              • {fmtDate(fromDate)} to {fmtDate(toDate)}
             </span>
           </div>
 

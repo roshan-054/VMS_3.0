@@ -272,7 +272,7 @@ html.dark [class*="border-slate-300"],
 html.dark [class*="border-gray-100"],
 html.dark [class*="border-gray-200"],
 html.dark [class*="border-gray-300"] {
-  border-color: #1e293b !important;
+  border-color: #33425e !important;
 }
 
 html.dark [class*="border-blue-100"],
@@ -312,9 +312,9 @@ html.dark [class*="border-rose-300"] {
 html.dark input,
 html.dark select,
 html.dark textarea {
-  background-color: #111827 !important;
+  background-color: #0c1424 !important;
   color: #f8fafc !important;
-  border-color: #374151 !important;
+  border-color: #3e4f6d !important;
 }
 
 html.dark input:focus,
@@ -326,7 +326,7 @@ html.dark textarea:focus {
 
 html.dark input::placeholder,
 html.dark textarea::placeholder {
-  color: #4b5563 !important;
+  color: #6b7a93 !important;
 }
 
 /* Table Elements */
@@ -852,3 +852,23 @@ html.dark [class~="bg-gray-900"] {
   background-color: #1e293b !important;
 }
 
+
+/* Night mode layout contrast: cards lift off the page, nested panels and inputs are framed. */
+html.dark [class~="bg-white"][class*="border"],
+html.dark .bg-white[class*="rounded-2xl"],
+html.dark .bg-white[class*="rounded-3xl"],
+html.dark .bg-white[class*="rounded-xl"] {
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.08), 0 6px 18px -6px rgba(0, 0, 0, 0.7) !important;
+}
+html.dark [class~="bg-slate-50"][class*="border"],
+html.dark [class*="bg-slate-50/"][class*="border"] {
+  background-color: #111a2d !important;
+}
+html.dark button[class*="border-slate"],
+html.dark a[class*="border-slate"] {
+  border-color: #3e4f6d !important;
+}
+html.dark hr,
+html.dark [class*="divide-slate"] > * + * {
+  border-color: #2a3852 !important;
+}

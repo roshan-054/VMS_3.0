@@ -75,7 +75,7 @@ const ADMIN_ACTIONS = [
   'scanDuplicates', 'scanDuplicateRecords', 'cleanDuplicates', 'removeDuplicates', 'removeDuplicateRecords',
   'scanOlder', 'scanOlderVideos', 'deleteOlder', 'deleteOlderVideos',
   'applyConditionalFormatting', 'saveBranding', 'uploadBrandingImage', 'checkDriveFolder',
-  'getStationQueues', 'getDriveStorage'
+  'getStationQueues', 'getDriveStorage', 'applyDateFormats'
 ];
 
 function doPost(e) {
@@ -86,6 +86,7 @@ function doPost(e) {
     if (PUBLIC_ACTIONS.indexOf(a) === -1) {
       if (ADMIN_ACTIONS.indexOf(a) !== -1) admin_(p.token);
       else session_(p.token);
+      try { applySheetDateFormats_(false); } catch (_) {}
     }
     switch(a) {
       case 'health': return output_({success:true, status:'online', version:'3.0.0', service:'Order Packing Video System (VMS 3.0)'});
@@ -142,6 +143,7 @@ function doPost(e) {
       case 'reportStationQueue': return output_(reportStationQueue_(p));
       case 'getStationQueues': return output_(getStationQueues_(p));
       case 'getDriveStorage': return output_(getDriveStorage_(p));
+      case 'applyDateFormats': return output_(applySheetDateFormats_(true));
       case 'saveOrderManifest': return output_(manifestWrite_(saveOrderManifest_(p)));
       case 'saveOrderManifestsBatch': return output_(manifestWrite_(saveOrderManifestsBatch_(p)));
       case 'getOrderManifests': return output_(getOrderManifests_(p));
@@ -686,6 +688,7 @@ function setupSystem() {
   });
   Logger.log('==================================================');
 
+  try { applySheetDateFormats_(true); } catch (_) {}
   return {
     success: true,
     message: 'System setup completed & duplicate formatting configured.',
@@ -961,8 +964,33 @@ function driveExists_(id){
  * 15 Oct 2126 for 15 Oct 2026), which put them above every real entry in newest-first lists.
  * A date more than 2 days in the future is moved back by whole centuries until it is not.
  */
+// Text dates typed or pasted into the sheet: 24/11/2026 14:02, 24-11-2026, 24-Nov-26 14:02, 24 Nov 2026, 2:02 PM …
+// (day first, the Indian order), with odd spaces from copy-paste normalised.
+const MONTHS_ = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+function parseSheetDateText_(raw) {
+  const t = String(raw || '').replace(/[\u00a0\u2000-\u200b\u202f\u205f\u3000]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!t) return new Date(NaN);
+  const time = function(rest, d) {
+    const m = String(rest || '').match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([ap]\.?m\.?)?/i);
+    if (!m) return d;
+    let h = Number(m[1]);
+    const ap = (m[4] || '').toLowerCase().replace(/\./g, '');
+    if (ap === 'pm' && h < 12) h += 12;
+    if (ap === 'am' && h === 12) h = 0;
+    d.setHours(h, Number(m[2]), Number(m[3] || 0), 0);
+    return d;
+  };
+  const year = function(y) { y = Number(y); return y < 100 ? 2000 + y : y; };
+  let m = t.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})\b,?(.*)$/);
+  if (m && Number(m[2]) <= 12) return time(m[4], new Date(year(m[3]), Number(m[2]) - 1, Number(m[1])));
+  m = t.match(/^(\d{1,2})[\s\/.-]([A-Za-z]{3})[A-Za-z]*[\s\/.-],?\s*(\d{2,4})\b,?(.*)$/);
+  if (m && MONTHS_[m[2].toLowerCase()] !== undefined) return time(m[4], new Date(year(m[3]), MONTHS_[m[2].toLowerCase()], Number(m[1])));
+  const d = new Date(t);
+  return d;
+}
+
 function rowDate_(value) {
-  let d = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+  let d = value instanceof Date ? new Date(value.getTime()) : (typeof value === 'number' ? new Date(value) : parseSheetDateText_(value));
   if (isNaN(d.getTime())) return d;
   const limit = Date.now() + 2 * 86400000;
   while (d.getTime() > limit && d.getFullYear() > 2000) {
@@ -978,6 +1006,52 @@ function rowDate_(value) {
 function rowIso_(value) {
   const d = rowDate_(value);
   return isNaN(d.getTime()) ? String(value || '') : d.toISOString();
+}
+
+// ---------------------------------------------------------------------------
+// One date format in the Google Sheet: DD-MMM-YY (time kept after it), e.g. 24-Nov-26 14:02.
+// Text timestamps in the log tabs are turned into real dates (and year-2126 slips repaired) so
+// the sheet sorts and filters correctly. Runs from setup, from the admin button, and quietly at
+// most every 6 hours from normal traffic, so new rows keep the format.
+const SHEET_DATE_FORMAT_ = 'dd-mmm-yy hh:mm';
+const SHEET_DATE_FORMAT_FLAG_ = 'VMS_DATE_FORMAT_V1';
+
+function applySheetDateFormats_(force) {
+  const cache = CacheService.getScriptCache();
+  if (!force && cache.get(SHEET_DATE_FORMAT_FLAG_)) return { success: true, skipped: true };
+  const ss = ss_();
+  const fixValues = [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET, CONFIG.DOWNLOAD_LOG_SHEET];
+  const formatOnly = [CONFIG.SECURITY_LOG_SHEET, CONFIG.TRASH_LOG_SHEET, CONFIG.PACK_VERIFICATION_LOG_SHEET, CONFIG.USERS_SHEET];
+  const report = {};
+  fixValues.concat(formatOnly).forEach(function(name) {
+    const sh = ss.getSheetByName(name);
+    if (!sh) return;
+    const last = sh.getLastRow();
+    let converted = 0;
+    if (last >= 2 && fixValues.indexOf(name) !== -1) {
+      const range = sh.getRange(2, 1, last - 1, 1);
+      const vals = range.getValues();
+      let changed = false;
+      for (let i = 0; i < vals.length; i++) {
+        const v = vals[i][0];
+        if (v === '' || v === null) continue;
+        const d = rowDate_(v);
+        if (isNaN(d.getTime())) continue;
+        if (!(v instanceof Date) || v.getTime() !== d.getTime()) {
+          vals[i][0] = d;
+          changed = true;
+          converted++;
+        }
+      }
+      if (changed) range.setValues(vals);
+    }
+    try {
+      sh.getRange(2, 1, Math.max(sh.getMaxRows() - 1, 1), 1).setNumberFormat(SHEET_DATE_FORMAT_);
+    } catch (e) {}
+    report[name] = converted;
+  });
+  try { cache.put(SHEET_DATE_FORMAT_FLAG_, '1', 21600); } catch (_) {}
+  return { success: true, converted: report, format: 'DD-MMM-YY hh:mm' };
 }
 
 function completedDuplicate_(order,platform,type){
@@ -2638,10 +2712,9 @@ function uploadLogs_(p){
     // 1. Date Range
     if (fromDate || toDate) {
       const d = rowDate_(ts);
-      if (!isNaN(d.getTime())) {
-        if (fromDate && d < fromDate) return false;
-        if (toDate && d > toDate) return false;
-      }
+      if (isNaN(d.getTime())) return false;
+      if (fromDate && d < fromDate) return false;
+      if (toDate && d > toDate) return false;
     }
 
     // 2. Platform Filter

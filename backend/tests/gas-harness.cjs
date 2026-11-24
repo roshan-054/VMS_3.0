@@ -23,13 +23,14 @@ function noopProxy() {
 }
 
 class MockSheet {
-  constructor(name, rows) { this.name = name; this.rows = rows || []; }
+  constructor(name, rows) { this.name = name; this.rows = rows || []; this.numberFormats = {}; }
   getName() { return this.name; }
   getDataRange() { const s = this; return { getValues: () => s.rows.map((r) => r.slice()) }; }
   appendRow(row) { this.rows.push(row.slice()); return this; }
   deleteRow(r) { this.rows.splice(r - 1, 1); }
   deleteRows(r, n) { this.rows.splice(r - 1, n); }
   getLastRow() { return this.rows.length; }
+  getMaxRows() { return Math.max(this.rows.length, 1000); }
   createTextFinder(text) {
     const s = this;
     let mc = false;
@@ -52,7 +53,7 @@ class MockSheet {
       getValue() { ensure(); return s.rows[r - 1][c - 1] ?? ''; },
       setValue(v) { ensure(); s.rows[r - 1][c - 1] = v; return this; },
       setValues(vals) { ensure(); vals.forEach((row, i) => row.forEach((v, j) => { s.rows[r - 1 + i][c - 1 + j] = v; })); return this; },
-      setNumberFormat() { return this; }, setFontWeight() { return this; }, setBackground() { return this; },
+      setNumberFormat(f) { s.numberFormats[c] = f; return this; }, setFontWeight() { return this; }, setBackground() { return this; },
       setFontColor() { return this; }, setHorizontalAlignment() { return this; }, setWrap() { return this; },
     };
   }

@@ -14,6 +14,7 @@ import {
 import { requestApi, checkDuplicate, normalizeOrderId, cleanupStuckUploads } from './api';
 import { updateManifestStatus } from './manifestStorage';
 import { setStationRecording } from './recordingState';
+import { fmtDateTime } from './dateFormat';
 
 export type WorkerToastHandler = (msg: string, type: 'info' | 'success' | 'error') => void;
 
@@ -338,7 +339,7 @@ export async function triggerUploadWorker(): Promise<void> {
         currentItem.duplicateReason = isInProgressCollision
           ? `Active upload in progress by ${remoteDuplicate?.packerEmail || 'another station'} started at ${remoteDuplicate?.timestamp || 'just now'}.`
           : `Order ${currentItem.orderId} already exists in Google Drive / ${targetSheetName} for ${typeLabel} (Recorded: ${
-              remoteDuplicate?.timestamp || (localCompleted?.createdAt ? new Date(localCompleted.createdAt).toLocaleString() : 'Previous Record')
+              remoteDuplicate?.timestamp || (localCompleted?.createdAt ? fmtDateTime(localCompleted.createdAt) : 'Previous Record')
             }).`;
 
         await safePutQueue(currentItem);
