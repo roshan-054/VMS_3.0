@@ -1540,14 +1540,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
-                        <h4 className="text-xs font-bold text-slate-900">Delete Videos & Logs Older Than 90 Days</h4>
+                        <h4 className="text-xs font-bold text-slate-900">Move Videos Older Than 90 Days to Trash</h4>
                       </div>
                     </div>
                   </div>
                 </div>
 
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-3 bg-white rounded-xl border border-red-100">
-                  <p className="text-xs text-slate-600">Moves old videos to Google Drive Trash and removes their log rows.</p>
+                  <p className="text-xs text-slate-600">Moves old videos to Google Drive Trash. Sheet rows are kept.</p>
 
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
                     <button

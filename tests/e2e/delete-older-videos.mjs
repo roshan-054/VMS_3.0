@@ -54,16 +54,17 @@ check('scan: 400 rows, 200 unique videos', /200/.test(modalText), modalText.repl
 const body = await page.locator('body').innerText();
 check('no doubled ## in order IDs', !/##OD/.test(body) && /#OD-199/.test(body), (body.match(/#+OD-\d+/) || [''])[0]);
 
-await page.getByRole('button', { name: /Purge Videos & Logs Older Than 90 Days/ }).click();
+await page.getByRole('button', { name: /Move Videos Older Than 90 Days to Trash/ }).click();
 await page.getByRole('button', { name: /Yes, Delete Older Videos Now/ }).click();
 await page.locator('#delete-older-progress').waitFor();
 await page.locator('#delete-older-result').waitFor({ timeout: 60000 });
 const res = await page.locator('#delete-older-result').innerText();
 check('all 200 old videos moved to Drive Trash', trashed.size === OLD, trashed.size);
 check('needed several rounds', rounds >= 3, rounds);
-check('result says 200 videos / 400 rows', /200 video\(s\) moved/.test(res) && /400 log row/.test(res), res.replace(/\s+/g, ' '));
+check('result says 200 videos moved, rows kept', /200 video\(s\) moved/.test(res) && /rows kept/.test(res), res.replace(/\s+/g, ' '));
+check('no option to delete sheet rows', !(await page.locator('text=/Purge Log Entries/').count()) && (await page.locator('#delete-older-keeps-rows').count()) === 1, '');
 check('recent videos untouched', [...Array(RECENT)].every((_, k) => !trashed.has(fid(OLD + k))), '');
-check('recent rows kept, old rows gone', rt.sheets.get('OrderLog').rows.length === 1 + RECENT && rt.sheets.get('UploadLog').rows.length === 1 + RECENT,
+check('every sheet row kept, old ones marked', rt.sheets.get('OrderLog').rows.length === 1 + OLD + RECENT && rt.sheets.get('UploadLog').rows.length === 1 + OLD + RECENT && /Drive Trash/.test(rt.sheets.get('OrderLog').rows[1][11]),
   rt.sheets.get('OrderLog').rows.length + '/' + rt.sheets.get('UploadLog').rows.length);
 check('list re-scanned to empty', await page.locator('text=/Scanned Items Older Than 90 Days \\(0\\)/').count() > 0 || !(await page.locator('text=/#OD-1\\b/').count()), '');
 await page.screenshot({ path: '/tmp/claude-0/-home-user/308beb12-2ead-5463-b9ca-4e608d018ec7/scratchpad/delete-older-done.png' });

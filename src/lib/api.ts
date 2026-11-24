@@ -888,7 +888,7 @@ export async function deleteOlderVideos(
       platform: params.platform || '',
       recordingType: params.recordingType || '',
       moveDriveVideosToTrash: params.moveDriveVideosToTrash !== false,
-      removeSheetEntries: params.removeSheetEntries !== false,
+      removeSheetEntries: false, // sheet rows are never deleted
     });
     if (!res || res.success === false) throw new Error(res?.error || 'The cleanup did not run.');
     last = res;
