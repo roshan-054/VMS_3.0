@@ -4,7 +4,7 @@ import { requestApi, normalizeOrderId, checkDuplicate } from './api';
 import { dbGetAllQueue } from './storage';
 import { getDirectImageUrl } from './branding';
 import { isStationRecording } from './recordingState';
-import { detectCatalogColumns, parseTagList, productHasTag, describeTagsFound, TagCount } from './catalogTags';
+import { detectCatalogColumns, guessTagColumn, parseTagList, productHasTag, describeTagsFound, TagCount } from './catalogTags';
 
 const STORAGE_KEY_MANIFESTS = 'vms_order_manifests_v1';
 const STORAGE_KEY_GTIN_CATALOG = 'vms_gtin_catalog_v1';
@@ -1166,7 +1166,7 @@ export function extractSpreadsheetId(input: string): string {
 /**
  * Direct Google Sheet CSV parser fallback if Apps Script backend endpoint is unreachable or permissions restricted.
  */
-async function fetchAndParseDirectGoogleSheetCsv(sheetId: string, tabName: string): Promise<GtinCatalogProduct[]> {
+async function fetchAndParseDirectGoogleSheetCsv(sheetId: string, tabName: string, wantedTags: string[] = []): Promise<GtinCatalogProduct[]> {
   const encTab = encodeURIComponent(tabName || 'GTINCatalog');
   let text = '';
 
@@ -1247,6 +1247,9 @@ async function fetchAndParseDirectGoogleSheetCsv(sheetId: string, tabName: strin
   const col = detectCatalogColumns(lines[0]);
   if (col.gtin === undefined && col.sku === undefined) {
     throw new Error(`Could not find a GTIN/Barcode or SKU column. Headers found: ${lines[0].filter(Boolean).join(', ')}`);
+  }
+  if (col.tag === undefined) {
+    col.tag = guessTagColumn(lines, lines[0], Object.values(col) as number[], wantedTags);
   }
   const cell = (row: string[], key: keyof typeof col) => {
     const i = col[key];
@@ -1334,7 +1337,7 @@ export async function syncGtinFromGoogleSheet(
   // Fallback only when Apps Script could not be reached: read the public CSV export directly.
   if (!reachedServer) {
     try {
-      items = await fetchAndParseDirectGoogleSheetCsv(targetId, targetTab);
+      items = await fetchAndParseDirectGoogleSheetCsv(targetId, targetTab, tagList);
       info = { success: true, totalRows: items.length };
     } catch (csvErr: any) {
       return { success: false, count: 0, message: csvErr?.message || 'Could not read the Google Sheet.' };

@@ -70,3 +70,42 @@ export function describeTagsFound(tags?: TagCount[], limit = 8): string {
   if (!tags || tags.length === 0) return 'no tags';
   return tags.slice(0, limit).map((t) => `${t.tag} (${t.count})`).join(', ') + (tags.length > limit ? ', …' : '');
 }
+
+/**
+ * Finds a tag column that has no "Tag" header, e.g. a column titled "Active-online" holding
+ * Active-online / Offline. Mirrors guessTagColumn_ in backend/Code.gs.
+ */
+export function guessTagColumn(rows: unknown[][], headerRow: string[], taken: number[], wantedTags: string[]): number | undefined {
+  const takenSet = new Set(taken);
+  const wanted = new Set(wantedTags.map(normTag));
+  let best = -1;
+  let bestScore = 0;
+  const limit = Math.min(rows.length, 2001);
+  for (let c = 0; c < headerRow.length; c++) {
+    if (takenSet.has(c)) continue;
+    const values = new Map<string, number>();
+    let textRows = 0, filled = 0, hits = 0;
+    for (let i = 1; i < limit; i++) {
+      const v = rows[i]?.[c];
+      if (v === '' || v === null || v === undefined) continue;
+      filled++;
+      if (v instanceof Date || typeof v === 'number') continue;
+      const str = String(v).trim();
+      if (!str || str.length > 40 || /^https?:/i.test(str) || /^[\d.,\s-]+$/.test(str)) continue;
+      textRows++;
+      for (const tk of splitTags(str)) {
+        const k = normTag(tk);
+        values.set(k, (values.get(k) || 0) + 1);
+        if (wanted.has(k)) hits++;
+      }
+    }
+    if (filled === 0 || textRows / filled < 0.6) continue;
+    const head = normTag(headerRow[c]);
+    let score = 0;
+    if (head && (wanted.has(head) || (values.get(head) || 0) >= Math.max(1, textRows * 0.2))) score = 3;
+    else if (values.size <= Math.max(12, textRows * 0.2)) score = hits > 0 ? 2 : 1;
+    if (wantedTags.length > 0 && hits === 0 && score < 3) score = 0;
+    if (score > bestScore) { bestScore = score; best = c; }
+  }
+  return best >= 0 ? best : undefined;
+}

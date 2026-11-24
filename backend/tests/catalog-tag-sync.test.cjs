@@ -115,3 +115,40 @@ test('filtering a tab without a tag column is refused with a clear message', () 
   assert.equal(res.success, false);
   assert.match(res.error, /no Tag column/);
 });
+
+// Deepak's Master_UE layout: the tag column is headed with a tag value ("Active-online"), not "Tag".
+const MASTER_UE = [
+  ['Product SKU', 'GTIN Number', 'Product Name', 'Quantity', 'COGS', 'Active-online', 'Image'],
+  ['UP-KUM-01', 8906191690025, 'Kumkum Powder', 1, 11.31, 'Active-online', 'https://www.paraayan.com/cdn/shop/files/kumkum.jpg?v=1&width=1946'],
+  ['UP-GO-CH-01', 8906191691732, 'Gopi Chandan', 1, 11.31, 'Active-online', 'https://www.paraayan.com/cdn/shop/files/gopi.jpg'],
+  ['SHR-AK-02', 8906191690896, 'Akshat pk of 2', 2, 18.42, 'Active-online', 'https://www.paraayan.com/cdn/shop/files/Akshat.png'],
+  ['OLD-01', 8906191699999, 'Old Item', 1, 9.5, 'Inactive', ''],
+  ['OFF-01', 8906191698888, 'Offline Item', 1, 9.5, 'Offline', ''],
+];
+
+test('Master_UE layout: tag column headed "Active-online" is found and filtered exactly', () => {
+  const { rt, token } = setup();
+  rt.addSheet('Master_UE', MASTER_UE.map((r) => r.slice()));
+  const res = rt.call('syncExternalGtinSheet', { token, gtinSheetId: 'masterUE123', tabName: 'Master_UE', tags: ['Active-online'] });
+  assert.equal(res.success, true, res.error);
+  assert.deepEqual(res.columns, { sku: 'Product SKU', gtin: 'GTIN Number', name: 'Product Name', qty: 'Quantity', cogs: 'COGS', image: 'Image', tag: 'Active-online' });
+  assert.equal(res.tagColumn, 'Active-online');
+  assert.deepEqual(skus(res.items), ['SHR-AK-02', 'UP-GO-CH-01', 'UP-KUM-01']);
+  const ak = res.items.find((p) => p.sku === 'SHR-AK-02');
+  assert.equal(ak.gtin, '8906191690896');
+  assert.equal(ak.productName, 'Akshat pk of 2');
+  assert.equal(ak.defaultQuantity, 2);
+  assert.equal(ak.tag, 'Active-online');
+
+  const off = rt.call('syncExternalGtinSheet', { token, gtinSheetId: 'masterUE123', tabName: 'Master_UE', tags: ['Offline'] });
+  assert.deepEqual(skus(off.items), ['OFF-01']);
+});
+
+test('Master_UE layout where every row is Active-online still finds the tag column', () => {
+  const { rt, token } = setup();
+  rt.addSheet('Master_UE', MASTER_UE.slice(0, 4).map((r) => r.slice()));
+  const res = rt.call('getGtinCatalog', { token, tabName: 'Master_UE', tags: ['Active-online'] });
+  assert.equal(res.success, true, res.error);
+  assert.equal(res.count, 3);
+  assert.equal(res.tagColumn, 'Active-online');
+});

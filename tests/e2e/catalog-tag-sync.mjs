@@ -17,6 +17,14 @@ backend.rt.addSheet('UE', [
   [5, 'Tiffin Set', 'TF-5', '8901000000059', '', 'Active-online, Offline', 'Kitchen', 999],
   [6, 'Untagged Jar', 'JR-6', '8901000000066', '', '', 'Kitchen', 199],
 ]);
+// Deepak's real Master_UE layout: the tag column is headed "Active-online".
+backend.rt.addSheet('Master_UE', [
+  ['Product SKU', 'GTIN Number', 'Product Name', 'Quantity', 'COGS', 'Active-online', 'Image'],
+  ['UP-KUM-01', 8906191690025, 'Kumkum Powder', 1, 11.31, 'Active-online', 'https://www.paraayan.com/cdn/shop/files/kumkum.jpg'],
+  ['UP-GO-CH-01', 8906191691732, 'Gopi Chandan', 1, 11.31, 'Active-online', 'https://www.paraayan.com/cdn/shop/files/gopi.jpg'],
+  ['SHR-AK-02', 8906191690896, 'Akshat pk of 2', 2, 18.42, 'Active-online', 'https://www.paraayan.com/cdn/shop/files/Akshat.png'],
+  ['OFF-01', 8906191698888, 'Offline Item', 1, 9.5, 'Offline', ''],
+]);
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
@@ -29,8 +37,9 @@ const results = [];
 const check = (name, ok, detail) => results.push({ check: name, pass: !!ok, detail: String(detail).slice(0, 110) });
 const catalogSkus = () => page.evaluate(() => JSON.parse(localStorage.getItem('vms_gtin_catalog_v1') || '[]').map((p) => p.sku).sort().join(','));
 
-async function syncWith(tab, tags) {
+async function syncWith(tab, tags, url = '') {
   await page.getByRole('button', { name: /Change Sheet \/ Tab/ }).first().click();
+  await page.getByPlaceholder(/Leave blank for Master Sheet/).fill(url);
   await page.getByPlaceholder(/e\.g\. UE, Master UE/).fill(tab);
   await page.getByPlaceholder(/e\.g\. Active-online/).fill(tags);
   await page.getByRole('button', { name: /Sync & Fetch to GTIN Catalog/ }).click();
@@ -72,6 +81,9 @@ check('Save Settings keeps the tag', cfg2.tagsFilter === 'Offline' && cfg2.tabNa
 await page.getByRole('button', { name: /Sync Now/ }).first().click();
 await page.waitForTimeout(1500);
 check('Sync Now uses saved tab + tag', (await catalogSkus()) === 'FL-4,TF-5', await catalogSkus());
+
+msg = await syncWith('Master_UE', 'Active-online', 'https://docs.google.com/spreadsheets/d/1MasterUEsheetId_abc/edit#gid=0');
+check('Master_UE sheet link: "Active-online" column used, 3 products', (await catalogSkus()) === 'SHR-AK-02,UP-GO-CH-01,UP-KUM-01' && /column "Active-online"/.test(msg), `${await catalogSkus()} | ${msg}`);
 
 await page.screenshot({ path: process.env.SHOT || '/tmp/claude-0/catalog-sync.png' });
 console.table(results);
