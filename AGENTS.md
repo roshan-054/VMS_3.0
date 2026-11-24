@@ -32,7 +32,8 @@
 
 ### 6. Authentication & User Management
 - Authentication strictly enforced via created ID / email and password (no demo/workstation bypass mode).
-- Registration creates verified operator/admin accounts with immediate session activation.
+- The first account created on an empty Users sheet becomes the approved administrator and is signed in immediately.
+- Every later registration creates a `User` account with status `Pending`; it cannot sign in until an administrator approves it in Admin & Users.
 
 ### 7. Permanent Cloud Branding & Drive Integration (Admin Only)
 - Admin configuration panel in `AdminPanel.tsx` (`Logo & Favicon` and `System Settings` sub-tabs).
