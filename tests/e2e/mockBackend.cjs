@@ -17,7 +17,7 @@ function seedManifests(rt, count, packerEmail) {
   }
 }
 
-function createMockBackend({ manifests = 0, latencyMs = 0 } = {}) {
+function createMockBackend({ manifests = 0, latencyMs = 0, latencyByAction = {} } = {}) {
   const rt = createRuntime({ users: [[new Date(), ADMIN.name, ADMIN.email, sha(ADMIN.password), 'Admin', 'Approved']] });
   if (manifests) seedManifests(rt, manifests, ADMIN.email);
   const calls = [];
@@ -34,7 +34,8 @@ function createMockBackend({ manifests = 0, latencyMs = 0 } = {}) {
     } catch (e) {
       out = JSON.stringify({ success: false, error: String(e.message || e) });
     }
-    if (latencyMs) await new Promise((r) => setTimeout(r, latencyMs));
+    const delay = latencyByAction[body.action] ?? latencyMs;
+    if (delay) await new Promise((r) => setTimeout(r, delay));
     return route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: out });
   }
   return { rt, calls, handle, ADMIN };
