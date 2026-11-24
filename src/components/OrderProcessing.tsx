@@ -75,6 +75,7 @@ import { getDirectImageUrl } from '../lib/branding';
 import { requestApi } from '../lib/api';
 import { isAdmin, isMasterAdmin } from '../lib/permissions';
 import { SmartProductImage } from './SmartProductImage';
+import { fmtDate, fmtTime, fmtDateTime } from '../lib/dateFormat';
 
 interface OrderProcessingProps {
   currentUser: User | null;
@@ -928,9 +929,9 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
         `"${(m.assignedPackerName || 'Unassigned').replace(/"/g, '""')}"`,
         `"${(m.assignedPackerEmail || '').replace(/"/g, '""')}"`,
         `"${(m.processedByName || '').replace(/"/g, '""')}"`,
-        `"${m.processedAt ? new Date(m.processedAt).toLocaleString() : ''}"`,
+        `"${m.processedAt ? fmtDateTime(m.processedAt) : ''}"`,
         `"${(m.packedByName || '').replace(/"/g, '""')}"`,
-        `"${m.packedAt ? new Date(m.packedAt).toLocaleString() : ''}"`,
+        `"${m.packedAt ? fmtDateTime(m.packedAt) : ''}"`,
         `"${(m.notes || '').replace(/"/g, '""')}"`
       ];
     });
@@ -978,9 +979,9 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
           'Assigned Packer': m.assignedPackerName || 'Unassigned',
           'Packer Email': m.assignedPackerEmail || '',
           'Processed By': m.processedByName || '',
-          'Processed Time': m.processedAt ? new Date(m.processedAt).toLocaleString() : '',
+          'Processed Time': m.processedAt ? fmtDateTime(m.processedAt) : '',
           'Packed By': m.packedByName || '',
-          'Packed Time': m.packedAt ? new Date(m.packedAt).toLocaleString() : '',
+          'Packed Time': m.packedAt ? fmtDateTime(m.packedAt) : '',
           'Special Notes': m.notes || ''
         };
       });
@@ -1000,8 +1001,8 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
             'Unit Quantity': it.quantity || 1,
             'Assigned Packer': m.assignedPackerName || 'Unassigned',
             'Processed By': m.processedByName || '',
-            'Processed Time': m.processedAt ? new Date(m.processedAt).toLocaleString() : '',
-            'Packed Time': m.packedAt ? new Date(m.packedAt).toLocaleString() : ''
+            'Processed Time': m.processedAt ? fmtDateTime(m.processedAt) : '',
+            'Packed Time': m.packedAt ? fmtDateTime(m.packedAt) : ''
           });
         });
       });
@@ -2506,7 +2507,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                           {(m.processedByName || m.processedAt) && (
                             <span
                               className="inline-flex items-center gap-1.5 bg-slate-100/90 text-slate-800 border border-slate-200/90 px-2.5 py-1 rounded-md font-medium shadow-2xs"
-                              title={`Created & Processed${m.processedByName ? ` by ${m.processedByName}` : ''}${m.processedAt ? ` on ${new Date(m.processedAt).toLocaleDateString([], { day: '2-digit', month: 'short', year: 'numeric' })} at ${new Date(m.processedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`}
+                              title={`Created & Processed${m.processedByName ? ` by ${m.processedByName}` : ''}${m.processedAt ? ` on ${fmtDate(m.processedAt)} at ${fmtTime(m.processedAt)}` : ''}`}
                             >
                               <Shield className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                               <span className="text-slate-500 font-bold">Processed By:</span>
@@ -2515,11 +2516,11 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                                 <span className="inline-flex items-center gap-1 text-slate-600 text-[10px] font-mono bg-white px-1.5 py-0.5 rounded border border-slate-200/80 ml-0.5">
                                   <Calendar className="w-2.5 h-2.5 text-indigo-500 shrink-0" />
                                   <span className="font-semibold text-slate-800">
-                                    {new Date(m.processedAt).toLocaleDateString([], { day: '2-digit', month: 'short', year: 'numeric' })}
+                                    {fmtDate(m.processedAt)}
                                   </span>
                                   <span className="text-slate-300">•</span>
                                   <span>
-                                    {new Date(m.processedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    {fmtTime(m.processedAt)}
                                   </span>
                                 </span>
                               )}
@@ -2661,11 +2662,11 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                             <span className="text-slate-600 text-[10px] font-mono flex items-center gap-1 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">
                               <Calendar className="w-2.5 h-2.5 text-indigo-500 shrink-0" />
                               <span className="font-semibold text-slate-800">
-                                {new Date(m.processedAt).toLocaleDateString([], { day: '2-digit', month: 'short', year: 'numeric' })}
+                                {fmtDate(m.processedAt)}
                               </span>
                               <span className="text-slate-300">•</span>
                               <span>
-                                {new Date(m.processedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                {fmtTime(m.processedAt)}
                               </span>
                             </span>
                           )}
@@ -3452,7 +3453,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                   {verificationLogs.map((log, idx) => (
                     <tr key={idx} className="hover:bg-slate-50/80">
                       <td className="p-3 font-mono text-slate-500 whitespace-nowrap">
-                        {new Date(log.timestamp).toLocaleString()}
+                        {fmtDateTime(log.timestamp)}
                       </td>
                       <td className="p-3 font-mono font-bold text-slate-900 whitespace-nowrap">
                         {log.orderId}
@@ -4278,7 +4279,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                     <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-600 pt-1">
                       {matchedVideo.timestamp && (
                         <span>
-                          <strong>Recorded:</strong> {new Date(matchedVideo.timestamp).toLocaleString()}
+                          <strong>Recorded:</strong> {fmtDateTime(matchedVideo.timestamp)}
                         </span>
                       )}
                       {matchedVideo.packerEmail && (

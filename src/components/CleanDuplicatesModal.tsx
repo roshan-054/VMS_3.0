@@ -28,6 +28,7 @@ import {
   DuplicateGroupItem
 } from '../lib/api';
 import { getStoredDriveFolderId, getStoredApiUrl } from '../lib/storage';
+import { fmtDateTime } from '../lib/dateFormat';
 
 interface CleanDuplicatesModalProps {
   isOpen: boolean;
@@ -528,7 +529,7 @@ export const CleanDuplicatesModal: React.FC<CleanDuplicatesModalProps> = ({
                           <div className="text-[11px] text-slate-600 flex flex-wrap items-center gap-3">
                             <span className="flex items-center gap-1">
                               <Clock className="w-3 h-3 text-emerald-600" />
-                              {grp.keeper.timestamp ? new Date(grp.keeper.timestamp).toLocaleString() : 'N/A'}
+                              {grp.keeper.timestamp ? fmtDateTime(grp.keeper.timestamp) : 'N/A'}
                             </span>
                             {grp.keeper.packerEmail && (
                               <span className="flex items-center gap-1 font-mono">
@@ -585,7 +586,7 @@ export const CleanDuplicatesModal: React.FC<CleanDuplicatesModalProps> = ({
                             <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-3">
                               <span className="flex items-center gap-1">
                                 <Clock className="w-3 h-3 text-slate-400" />
-                                {dup.timestamp ? new Date(dup.timestamp).toLocaleString() : 'N/A'}
+                                {dup.timestamp ? fmtDateTime(dup.timestamp) : 'N/A'}
                               </span>
                               {dup.packerEmail && (
                                 <span className="flex items-center gap-1 font-mono">

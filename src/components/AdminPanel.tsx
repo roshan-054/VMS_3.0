@@ -96,6 +96,7 @@ import {
   syncGtinFromGoogleSheet,
   syncGtinWithMasterSheet
 } from '../lib/manifestStorage';
+import { fmtDate } from '../lib/dateFormat';
 
 interface AdminPanelProps {
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
@@ -2185,7 +2186,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                         </span>
                       </td>
                       <td className="px-4 py-3 text-slate-500 text-[11px]">
-                        {u.created ? new Date(u.created).toLocaleDateString() : 'Active'}
+                        {u.created ? fmtDate(u.created) : 'Active'}
                       </td>
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-1.5 flex-wrap">

@@ -30,6 +30,7 @@ import {
 } from '../lib/manifestStorage';
 import { getDirectImageUrl } from '../lib/branding';
 import { SmartProductImage } from './SmartProductImage';
+import { fmtDateTime } from '../lib/dateFormat';
 
 interface PackVerificationModalProps {
   manifest: OrderManifest;
@@ -395,7 +396,7 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
             {manifest.packedAt && (
               <div className="flex items-center justify-between">
                 <span className="text-slate-400">Packed At:</span>
-                <span className="font-bold text-slate-300">{new Date(manifest.packedAt).toLocaleString()}</span>
+                <span className="font-bold text-slate-300">{fmtDateTime(manifest.packedAt)}</span>
               </div>
             )}
           </div>

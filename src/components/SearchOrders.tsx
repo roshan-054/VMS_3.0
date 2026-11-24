@@ -39,6 +39,7 @@ import { canUserDeleteData } from '../lib/permissions';
 import { getStoredManifests, getManifestByOrderId } from '../lib/manifestStorage';
 import { getDirectImageUrl } from '../lib/branding';
 import { SmartProductImage } from './SmartProductImage';
+import { fmtDateTime } from '../lib/dateFormat';
 
 interface SearchOrdersProps {
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
@@ -663,7 +664,7 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast, current
                       <span>•</span>
                       <span className="flex items-center gap-1">
                         <Clock className="w-3 h-3" />
-                        {new Date(r.timestamp).toLocaleDateString()} {new Date(r.timestamp).toLocaleTimeString()}
+                        {fmtDateTime(r.timestamp, true)}
                       </span>
                       <span>•</span>
                       <span className="flex items-center gap-1">
@@ -835,7 +836,7 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast, current
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
                     <span className="text-[10px] font-bold text-slate-400 uppercase">Recording Timestamp</span>
                     <p className="text-xs font-mono font-medium text-slate-800">
-                      {new Date(selectedRecord.timestamp).toLocaleString()}
+                      {fmtDateTime(selectedRecord.timestamp, true)}
                     </p>
                   </div>
 

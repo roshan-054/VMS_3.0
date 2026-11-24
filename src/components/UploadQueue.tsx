@@ -47,6 +47,7 @@ import {
   bulkDeleteUploadItems
 } from '../lib/uploadWorker';
 import { ManualUpload } from './ManualUpload';
+import { fmtDateTime } from '../lib/dateFormat';
 
 interface UploadQueueProps {
   onQueueChanged: () => void;
@@ -867,7 +868,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
                           {fileSizeMb} MB {item.uploadedBytes && item.status !== 'completed' ? `(${uploadedMb} MB uploaded)` : ''}
                         </span>
                         <span>•</span>
-                        <span>{new Date(item.createdAt).toLocaleTimeString()}</span>
+                        <span>{fmtDateTime(item.createdAt)}</span>
                         {item.stage && (
                           <>
                             <span>•</span>

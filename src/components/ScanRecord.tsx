@@ -55,6 +55,7 @@ import {
   getVerificationSettings,
 } from '../lib/manifestStorage';
 import { PackVerificationModal } from './PackVerificationModal';
+import { fmtDateTime } from '../lib/dateFormat';
 
 const MIN_VIDEO_BYTES = 64 * 1024; // anything smaller has no real footage
 const MIN_VIDEO_MS = 2000;
@@ -181,7 +182,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
 
           if (manifest.status === 'Packed' || (manifest as any).status === 'Completed') {
             const packerInfo = manifest.packedByName || manifest.assignedPackerName || 'Packer';
-            const packedTime = manifest.packedAt ? ` on ${new Date(manifest.packedAt).toLocaleString()}` : '';
+            const packedTime = manifest.packedAt ? ` on ${fmtDateTime(manifest.packedAt)}` : '';
             onShowToast(`Order ${clean} is ALREADY PACKED & VERIFIED by ${packerInfo}${packedTime}. Packing is complete!`, 'success');
             setStatusMessage({
               text: `Order ${clean} has already been packed & verified by ${packerInfo}${packedTime}.`,
@@ -263,7 +264,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       // Guard 1: Already packed orders (Only for Forward packing)
       if (manifest.status === 'Packed' || (manifest as any).status === 'Completed') {
         const packerName = manifest.packedByName || manifest.assignedPackerName || 'Packer';
-        const packedDate = manifest.packedAt ? ` on ${new Date(manifest.packedAt).toLocaleString()}` : '';
+        const packedDate = manifest.packedAt ? ` on ${fmtDateTime(manifest.packedAt)}` : '';
         onShowToast(`✓ Order ${clean} is ALREADY PACKED & VERIFIED by ${packerName}${packedDate}! Packing is complete.`, 'success');
         setStatusMessage({
           text: `Order ${clean} has already been packed & verified by ${packerName}${packedDate}.`,

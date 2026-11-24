@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { fmtDateTime } from '../lib/dateFormat';
 
 /**
  * Small self-updating labels. They tick on their own so the large Scan & Record screen does not
@@ -21,7 +22,7 @@ export function formatTimer(seconds: number): string {
 export const LiveClock: React.FC = () => {
   useTick(true);
   const d = new Date();
-  return <>{`${d.toLocaleDateString('en-CA')} ${d.toLocaleTimeString('en-GB', { hour12: false })}`}</>;
+  return <>{fmtDateTime(d, true)}</>;
 };
 
 export const ElapsedTimer: React.FC<{ startedAt: number | null }> = ({ startedAt }) => {
