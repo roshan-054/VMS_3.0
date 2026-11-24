@@ -137,6 +137,7 @@ function doPost(e) {
       case 'saveBranding': return output_(saveBrandingConfig_(p));
       case 'uploadBrandingImage': return output_(uploadBrandingImage_(p));
       case 'getDriveFileSize': return output_(getDriveFileSize_(p));
+      case 'getVideoChunk': return output_(getVideoChunk_(p));
       case 'saveOrderManifest': return output_(manifestWrite_(saveOrderManifest_(p)));
       case 'saveOrderManifestsBatch': return output_(manifestWrite_(saveOrderManifestsBatch_(p)));
       case 'getOrderManifests': return output_(getOrderManifests_(p));
@@ -4206,6 +4207,64 @@ function uploadBrandingImage_(p) {
 /**
  * Resolves exact Google Drive file size on-demand and writes it back to Google Sheets.
  */
+// ---------------------------------------------------------------------------
+// Full-quality playback: the panel's player downloads the ORIGINAL uploaded file in chunks
+// (Drive's /preview player re-encodes to a lower resolution and is often "still processing").
+// Only files that appear in the order / return / upload logs can be read this way.
+// ---------------------------------------------------------------------------
+const VIDEO_CHUNK_MAX_ = 8 * 1024 * 1024;
+
+function isLoggedVideo_(fid) {
+  const cache = CacheService.getScriptCache();
+  const key = 'vmsvid_' + fid;
+  if (cache.get(key)) return true;
+  const names = [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET];
+  for (let i = 0; i < names.length; i++) {
+    const sh = ss_().getSheetByName(names[i]);
+    if (!sh) continue;
+    let found = false;
+    if (typeof sh.createTextFinder === 'function') {
+      found = !!sh.createTextFinder(fid).matchCase(true).findNext();
+    } else {
+      const rows = sh.getDataRange().getValues();
+      found = rows.some(function(r) { return r.some(function(c) { return String(c).indexOf(fid) !== -1; }); });
+    }
+    if (found) {
+      cache.put(key, '1', 21600);
+      return true;
+    }
+  }
+  return false;
+}
+
+function getVideoChunk_(p) {
+  session_(p.token);
+  const fid = String(p.fileId || p.driveFileId || '').trim();
+  if (!/^[A-Za-z0-9_-]{10,}$/.test(fid)) throw new Error('Valid video file ID is required.');
+  if (!isLoggedVideo_(fid)) {
+    return { success: false, code: 'NOT_A_VMS_VIDEO', error: 'This file is not a recorded packing video.' };
+  }
+  const start = Math.max(0, Math.floor(Number(p.start) || 0));
+  const want = Math.min(VIDEO_CHUNK_MAX_, Math.max(1, Math.floor(Number(p.length) || VIDEO_CHUNK_MAX_)));
+  const file = DriveApp.getFileById(fid);
+  const size = Number(file.getSize()) || 0;
+  const meta = { success: true, fileId: fid, size: size, start: start, mimeType: file.getMimeType(), name: file.getName() };
+  if (start >= size) { meta.length = 0; meta.data = ''; return meta; }
+  const end = Math.min(size, start + want) - 1;
+  const resp = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(fid) + '?alt=media&supportsAllDrives=true', {
+    method: 'get',
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken(), Range: 'bytes=' + start + '-' + end },
+    muteHttpExceptions: true,
+  });
+  const code = resp.getResponseCode();
+  if (code !== 206 && code !== 200) throw new Error('Google Drive returned ' + code + ' while reading the video.');
+  let bytes = resp.getContent();
+  if (code === 200 && bytes.length > end - start + 1) bytes = bytes.slice(start, end + 1); // server ignored Range
+  meta.length = bytes.length;
+  meta.data = Utilities.base64Encode(bytes);
+  return meta;
+}
+
 function getDriveFileSize_(p) {
   session_(p.token);
   const fid = String(p.driveFileId || p.fileId || '').trim();

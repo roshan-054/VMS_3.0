@@ -29,6 +29,19 @@ class MockSheet {
   appendRow(row) { this.rows.push(row.slice()); return this; }
   deleteRow(r) { this.rows.splice(r - 1, 1); }
   getLastRow() { return this.rows.length; }
+  createTextFinder(text) {
+    const s = this;
+    let mc = false;
+    const f = {
+      matchCase(v) { mc = v; return f; }, matchEntireCell() { return f; },
+      findNext() {
+        const t = mc ? String(text) : String(text).toLowerCase();
+        for (const r of s.rows) for (const c of r) { const v = mc ? String(c) : String(c).toLowerCase(); if (v.includes(t)) return { getValue: () => c }; }
+        return null;
+      },
+    };
+    return f;
+  }
   getLastColumn() { return this.rows.reduce((m, r) => Math.max(m, r.length), 0); }
   getRange(r, c, nr = 1, nc = 1) {
     const s = this;
@@ -99,7 +112,7 @@ function createRuntime({ users = [] } = {}) {
         if (!fmt) return x.toISOString();
         return fmt.replace('yyyy', x.getFullYear()).replace('MMM', MON[x.getMonth()]).replace('MM', p2(x.getMonth() + 1)).replace('dd', p2(x.getDate())).replace('HH', p2(x.getHours())).replace('mm', p2(x.getMinutes())).replace('ss', p2(x.getSeconds()));
       },
-      base64Encode: (s) => Buffer.from(String(s)).toString('base64'),
+      base64Encode: (s) => Buffer.from(Array.isArray(s) || s instanceof Uint8Array ? Array.from(s, (b) => b & 255) : String(s)).toString('base64'),
       base64EncodeWebSafe: (s) => Buffer.from(String(s)).toString('base64url'),
       base64Decode: (s) => Array.from(Buffer.from(String(s), 'base64')),
       newBlob: () => noopProxy(),
