@@ -1344,11 +1344,8 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
         <div>
           <h2 className="text-xl font-semibold text-slate-800 tracking-tight flex items-center gap-2">
             <Camera className="w-5 h-5 text-blue-600" />
-            Scan & Record Station
+            Scan & Record
           </h2>
-          <p className="text-sm text-slate-500">
-            Live video capture with automatic local backup and Google Drive sync.
-          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span
@@ -1975,9 +1972,6 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
               </div>
               <p className="font-mono text-[11px] text-slate-600 break-all bg-white p-2 rounded border border-slate-200">
                 {backupPathParts(effectivePlatform, recordingType, new Date().toLocaleDateString('en-CA')).join(' / ')} / {orderId ? `${orderId.trim()}_${effectivePlatform}_${recordingType}.mp4` : '[OrderID]_[Platform]_[Type].mp4'}
-              </p>
-              <p className="text-[11px] text-slate-400">
-                Saved on this computer first, then queued and uploaded automatically to the same folders on Google Drive.
               </p>
               <LocalBackupFolderPicker onShowToast={onShowToast} />
             </div>

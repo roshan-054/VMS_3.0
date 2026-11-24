@@ -146,11 +146,8 @@ export const SystemHealth: React.FC<SystemHealthProps> = ({ onShowToast }) => {
         <div>
           <h2 className="text-xl font-semibold text-slate-800 tracking-tight flex items-center gap-2">
             <Activity className="w-5 h-5 text-blue-600" />
-            System Diagnostics & Health Check
+            Health & Diagnostics
           </h2>
-          <p className="text-sm text-slate-500">
-            Verify workstation hardware and cloud connectivity status.
-          </p>
         </div>
         <button
           onClick={runDiagnostics}

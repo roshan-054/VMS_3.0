@@ -108,17 +108,9 @@ export const DriveLocationSetting: React.FC<{
         </div>
       )}
 
-      <div className="bg-slate-50 rounded-xl p-3 border border-slate-200 text-[11px] text-slate-600 space-y-1">
-        <p>
-          Every station uploads into this folder from its next video. Inside it the app creates{' '}
-          <code>Platform / Type / Month / Date</code> folders as before. Videos already uploaded stay where they are.
-        </p>
-        <p>
-          <b>Using a different Google account:</b> share the folder from that account with the account that deployed the Apps Script
-          (Editor access), or use a Shared Drive. Then paste its link here. Files count against the storage of the
-          deploying account, unless the folder is in a Shared Drive.
-        </p>
-      </div>
+      <p className="text-[11px] text-slate-500">
+        All stations upload here from their next video. The folder must be shared with the Apps Script account as Editor.
+      </p>
     </div>
   );
 };

@@ -298,11 +298,8 @@ export const Reports: React.FC<ReportsProps> = ({ onShowToast }) => {
         <div>
           <h2 className="text-xl font-bold text-slate-800 tracking-tight flex items-center gap-2">
             <FileSpreadsheet className="w-5 h-5 text-blue-600" />
-            Consolidated Packing & Audit Reports
+            Reports
           </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Generate, filter, and export high-precision audit logs and video links from your Google Sheet database.
-          </p>
         </div>
 
         {/* Download CSV & Excel Actions */}
@@ -568,7 +565,7 @@ export const Reports: React.FC<ReportsProps> = ({ onShowToast }) => {
             <FileSpreadsheet className="w-10 h-10 text-slate-300 mx-auto" />
             <p className="font-semibold text-slate-600">No report preview generated yet.</p>
             <p className="text-[11px] text-slate-400">
-              Click "Generate Report Preview" above to query your live Google Sheet database.
+              Choose dates and click Generate Report Preview.
             </p>
           </div>
         ) : displayRows.length === 0 ? (

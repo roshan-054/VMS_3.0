@@ -1290,11 +1290,8 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast, userKey }) =>
         <div>
           <h2 className="text-xl font-bold text-slate-800 tracking-tight flex items-center gap-2">
             <LineChartIcon className="w-5 h-5 text-blue-600" />
-            Station Packing Analytics & Throughput
+            Analytics
           </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Real-time performance metrics, platform volume distributions, and operator leaderboards from Google Drive video logs.
-          </p>
         </div>
 
         <div className="flex items-center gap-2">
@@ -1513,9 +1510,6 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast, userKey }) =>
                   <Package className="w-4 h-4 text-indigo-600" />
                   SKU Intelligence: Packed vs Processed
                 </h3>
-                <p className="text-[11px] text-slate-500">
-                  Compare packed quantities vs successfully processed & uploaded quantities per SKU.
-                </p>
               </div>
 
               <div className="flex items-center gap-2">
@@ -1627,9 +1621,6 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast, userKey }) =>
                   <Layers className="w-4 h-4 text-purple-600" />
                   Single vs Multi-Order Packed & Processed (Platform Breakdown)
                 </h3>
-                <p className="text-[11px] text-slate-500">
-                  Breakdown of single-item vs multi-item orders packed and successfully processed across platforms.
-                </p>
               </div>
             </div>
 
@@ -1679,9 +1670,6 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast, userKey }) =>
                   <Award className="w-4 h-4 text-amber-600" />
                   Top SKUs &amp; Order Volume (Overall vs Date Range)
                 </h3>
-                <p className="text-[11px] text-slate-500">
-                  Click any SKU card to inspect platform breakdown (Amazon, D2C, JioMart, Custom) and order history.
-                </p>
               </div>
 
               {/* Controls: Search & Show Limit */}
@@ -2087,9 +2075,6 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast, userKey }) =>
                 ? 'Daily Return Inbound Throughput & Trend (Line Graph)'
                 : 'Daily Throughput & Trend (Line Graph)'}
             </h3>
-            <p className="text-[11px] text-slate-500">
-              Interactive continuous trend curve representing daily video volumes across the selected timeframe.
-            </p>
           </div>
 
           {/* Metric Selector Pills */}
@@ -2159,11 +2144,8 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast, userKey }) =>
               </div>
             </div>
           ) : (
-            <div className="w-full bg-slate-50/80 border border-slate-100 p-2.5 sm:px-3 rounded-xl flex items-center justify-between text-xs text-slate-500">
-              <span className="flex items-center gap-2">
-                <Sparkles className={`w-3.5 h-3.5 ${activeChartMode === 'return' ? 'text-purple-500' : 'text-blue-500'}`} />
-                <span>Hover or drag along the curve to inspect daily volumes, shift start times, and cutoff recording hours.</span>
-              </span>
+            <div className="w-full border border-transparent p-2.5 sm:px-3 rounded-xl flex items-center justify-between text-xs text-slate-500">
+              <span />
               <span className="text-[11px] font-mono text-slate-400 hidden sm:inline">
                 {points.length} data points
               </span>
@@ -2510,9 +2492,6 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast, userKey }) =>
               <Users className="w-4 h-4 text-amber-600" />
               Operator & Packer Productivity Leaderboard
             </h3>
-            <p className="text-[11px] text-slate-500">
-              Workstation activity ranked by total successful package recordings.
-            </p>
           </div>
         </div>
 
@@ -2578,9 +2557,6 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast, userKey }) =>
               <Timer className="w-4 h-4 text-indigo-600" />
               Daily Shift Cutoff & Recording Schedule Breakdown
             </h3>
-            <p className="text-[11px] text-slate-500">
-              Detailed log of shift start times, cutoff recording hours (till what time recording was done), and active station operating spans per day.
-            </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
