@@ -16,10 +16,13 @@ export function createOsdCache(): OsdCache {
   return { second: -1, text: '', font: '', width: 0 };
 }
 
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** Burned-in timestamp in the app's standard format: 25-Nov-26  17:17:31 (DD-MMM-YY, 24-hour time). */
 export function formatOsdTime(ms: number): string {
   const d = new Date(ms);
   const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}  ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  return `${p(d.getDate())}-${MON[d.getMonth()]}-${p(d.getFullYear() % 100)}  ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
 export function drawOsd(ctx: Ctx2D, cw: number, ch: number, nowMs: number, recording: boolean, cache: OsdCache): void {

@@ -16,7 +16,7 @@
 ### 3. Video Timestamp & OSD Engine
 - **Authentic CCTV / Security Camera OSD**:
   - Rendered onto a continuous canvas pipeline at 30 FPS and recorded directly into the output MP4/WebM video stream via `canvas.captureStream()`.
-  - **Top-Right**: Live Date and Time in `YYYY-MM-DD  HH:MM:SS` format (monospace, crisp white text with dark translucent backing).
+  - **Top-Right**: Live Date and Time in `DD-MMM-YY  HH:MM:SS` format (e.g. `25-Nov-26  17:17:31`) (monospace, crisp white text with dark translucent backing).
   - **Bottom-Right**: Dynamic `● REC` indicator active during recording.
 - Audio recording is **disabled by default** (muted) to preserve packing station privacy and bandwidth; operators can toggle it on when needed via the toolbar microphone button.
 
