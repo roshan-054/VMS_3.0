@@ -84,15 +84,20 @@ export function ensureVideoStreamWorker(timeoutMs = 4000): Promise<boolean> {
     try {
       listen();
       const base = new URL('./', document.baseURI);
-      await navigator.serviceWorker.register(new URL('video-sw.js', base).href, { scope: base.href });
+      const reg = await navigator.serviceWorker.register(new URL('video-sw.js', base).href, { scope: base.href });
       if (navigator.serviceWorker.controller) return true;
-      return await new Promise<boolean>((resolve) => {
+      const controlled = new Promise<boolean>((resolve) => {
         const t = setTimeout(() => resolve(Boolean(navigator.serviceWorker.controller)), timeoutMs);
         navigator.serviceWorker.addEventListener('controllerchange', () => {
           clearTimeout(t);
           resolve(true);
         }, { once: true });
       });
+      // After a hard reload (Ctrl+Shift+R) the worker is already active but does not control this
+      // tab, and no controllerchange comes on its own: ask it to take control.
+      // (A worker that is still installing claims the tab itself when it activates.)
+      reg.active?.postMessage({ type: 'vms-claim' });
+      return await controlled;
     } catch (err) {
       console.warn('Video stream worker unavailable:', err);
       return false;

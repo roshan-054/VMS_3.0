@@ -56,6 +56,9 @@ await page.getByRole('button', { name: /Play & View Details/ }).first().click({ 
 
 const loading = await page.locator('#hq-player-loading').waitFor({ timeout: 20000 }).then(() => true).catch(() => false);
 check('shows download progress while loading', loading, loading);
+const previewMeanwhile = await page.locator('#hq-player-preview-while-loading iframe[src*="/preview"]').count();
+check('Drive preview plays while the full file downloads', previewMeanwhile === 1, previewMeanwhile);
+await page.locator('#hq-player-play-full').click({ timeout: 60000 });
 await page.waitForFunction(() => {
   const v = document.querySelector('#hq-player-video');
   return v && v.readyState >= 2 && v.videoWidth > 0;
