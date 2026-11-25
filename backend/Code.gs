@@ -4662,6 +4662,22 @@ function isLoggedVideo_(fid) {
   return false;
 }
 
+/**
+ * Readable message for a failed Drive REST call. A 403 that says the Drive API is disabled means
+ * the Apps Script project is linked to a Google Cloud project where the Drive API is not enabled.
+ */
+function driveErrorText_(code, resp, what) {
+  let reason = '';
+  try {
+    const body = JSON.parse(resp.getContentText() || '{}');
+    reason = (body.error && body.error.message) || '';
+  } catch (_) {}
+  if (code === 403 && /has not been used|is disabled|SERVICE_DISABLED|accessNotConfigured/i.test(reason)) {
+    return 'The Google Drive API is turned off in the Google Cloud project this backend uses. Enable "Google Drive API" in Google Cloud Console (APIs & Services > Library) for that project, wait a minute, then try again.';
+  }
+  return 'Google Drive returned ' + code + ' while ' + what + (reason ? ': ' + reason : '.');
+}
+
 function getVideoChunk_(p) {
   session_(p.token);
   const fid = String(p.fileId || p.driveFileId || '').trim();
@@ -4682,7 +4698,7 @@ function getVideoChunk_(p) {
   if (code === 416) {
     return { success: true, fileId: fid, size: start, start: start, length: 0, data: '' };
   }
-  if (code !== 206 && code !== 200) throw new Error('Google Drive returned ' + code + ' while reading the video.');
+  if (code !== 206 && code !== 200) throw new Error(driveErrorText_(code, resp, 'reading the video'));
   const headers = resp.getHeaders() || {};
   const header = function(name) {
     const k = Object.keys(headers).filter(function(h) { return h.toLowerCase() === name; })[0];

@@ -10,7 +10,7 @@ export const VIDEO_CHUNK_BYTES = 8 * 1024 * 1024; // the backend's maximum per c
 const PARALLEL = 6;
 const RETRIES = 2;
 
-interface ChunkResponse {
+export interface ChunkResponse {
   size: number;
   start: number;
   length: number;
@@ -19,19 +19,19 @@ interface ChunkResponse {
   data: string;
 }
 
-function decodeBase64(b64: string): Uint8Array {
+export function decodeBase64(b64: string): Uint8Array {
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
 }
 
-async function fetchChunk(fileId: string, start: number, signal?: AbortSignal): Promise<ChunkResponse> {
+export async function fetchChunk(fileId: string, start: number, signal?: AbortSignal, length = VIDEO_CHUNK_BYTES): Promise<ChunkResponse> {
   let lastErr: any;
   for (let attempt = 0; attempt <= RETRIES; attempt++) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     try {
-      const res = (await requestApi('getVideoChunk', { fileId, start, length: VIDEO_CHUNK_BYTES })) as unknown as ChunkResponse & { success: boolean; error?: string };
+      const res = (await requestApi('getVideoChunk', { fileId, start, length })) as unknown as ChunkResponse & { success: boolean; error?: string };
       if (!res.success) throw new Error(res.error || 'Could not read the video.');
       return res;
     } catch (err: any) {
@@ -128,12 +128,26 @@ export function getDriveStreamUrl(fileId: string): string {
   return `https://drive.usercontent.google.com/download?id=${encodeURIComponent(fileId)}&export=download&confirm=t`;
 }
 
-// When streaming fails twice in a row on this computer (blocked network, Drive refusing), go
-// straight to the download path for the rest of the session.
+// When the direct Drive stream fails on this computer (blocked network, Drive refusing anonymous
+// reads), remember it for a week so later videos skip straight to the backend stream instead of
+// waiting for the direct stream to time out every time.
+const STREAM_BROKEN_KEY = 'vms_drive_stream_broken_until';
+const STREAM_BROKEN_MS = 7 * 24 * 3600 * 1000;
 let streamFailures = 0;
+function readBrokenUntil(): number {
+  try {
+    return Number(localStorage.getItem(STREAM_BROKEN_KEY)) || 0;
+  } catch (_) {
+    return 0;
+  }
+}
 export function isDriveStreamUsable(): boolean {
-  return streamFailures < 2;
+  return streamFailures < 1 && readBrokenUntil() < Date.now();
 }
 export function reportDriveStreamResult(ok: boolean): void {
   streamFailures = ok ? 0 : streamFailures + 1;
+  try {
+    if (ok) localStorage.removeItem(STREAM_BROKEN_KEY);
+    else localStorage.setItem(STREAM_BROKEN_KEY, String(Date.now() + STREAM_BROKEN_MS));
+  } catch (_) {}
 }

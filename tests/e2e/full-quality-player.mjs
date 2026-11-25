@@ -41,7 +41,10 @@ rt.sandbox.UrlFetchApp = {
 const results = [];
 const check = (name, ok, detail) => results.push({ check: name, pass: !!ok, detail: String(detail).slice(0, 110) });
 const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] });
-const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
+// Service workers blocked: this covers the last fallback, the whole-file download through the
+// backend (tests/e2e/fast-playback.mjs covers the two streaming ways).
+const context = await browser.newContext({ viewport: { width: 1366, height: 900 }, serviceWorkers: 'block' });
+const page = await context.newPage();
 await attach(page, backend);
 // This test covers the download-through-the-backend path: direct streaming from Drive is blocked.
 await page.route(/drive\.usercontent\.google\.com/, (route) => route.abort());
