@@ -77,7 +77,7 @@ const ADMIN_ACTIONS = [
   'applyConditionalFormatting', 'saveBranding', 'uploadBrandingImage', 'checkDriveFolder',
   'getStationQueues', 'getDriveStorage', 'applyDateFormats',
   'scanSheetCleanup', 'runSheetCleanup',
-  'getBackendUpdateStatus', 'updateBackend', 'rollbackBackend'
+  'getBackendUpdateStatus', 'updateBackend', 'rollbackBackend', 'getSheetCleanupProgress'
 ];
 
 function doPost(e) {
@@ -147,6 +147,7 @@ function doPost(e) {
       case 'getDriveStorage': return output_(getDriveStorage_(p));
       case 'scanSheetCleanup': return output_(scanSheetCleanup_(p));
       case 'runSheetCleanup': return output_(runSheetCleanup_(p));
+      case 'getSheetCleanupProgress': return output_(getSheetCleanupProgress_());
       case 'applyDateFormats': return output_(applySheetDateFormats_(true));
       case 'getBackendUpdateStatus': return output_(getBackendUpdateStatus_(p));
       case 'updateBackend': return output_(updateBackend_(p));
@@ -6067,6 +6068,17 @@ function cleanupArchiveSheet_(name, headers) {
   return sh;
 }
 
+// Live progress of a running cleanup round, read by the Settings page while the round runs.
+const SHEET_CLEANUP_PROGRESS_KEY_ = 'VMS_SHEET_CLEANUP_PROGRESS';
+function setSheetCleanupProgress_(o) {
+  try { CacheService.getScriptCache().put(SHEET_CLEANUP_PROGRESS_KEY_, JSON.stringify(Object.assign({ at: Date.now() }, o)), 600); } catch (_) {}
+}
+function getSheetCleanupProgress_() {
+  let o = null;
+  try { o = JSON.parse(CacheService.getScriptCache().get(SHEET_CLEANUP_PROGRESS_KEY_) || 'null'); } catch (_) {}
+  return { success: true, progress: o };
+}
+
 function runSheetCleanup_(p) {
   const user = session_(p.token);
   const budgetMs = p.budgetMs !== undefined && p.budgetMs !== '' ? Math.max(0, Number(p.budgetMs) || 0) : 240000;
@@ -6084,13 +6096,21 @@ function runSheetCleanup_(p) {
     // Extra video copies first (only when asked), while their rows still exist.
     let videosTrashed = 0;
     let videosFailed = 0;
+    const videosTotal = trashVideos ? plan.extraVideoIds.length : 0;
+    const progress = function(phase, rowsDone) {
+      setSheetCleanupProgress_({ phase: phase, videosDone: videosTrashed + videosFailed, videosTotal: videosTotal,
+        rowsDone: rowsDone, rowsTotal: before.totalRemove });
+    };
+    progress(videosTotal ? 'videos' : 'rows', 0);
     if (trashVideos && plan.extraVideoIds.length) {
       for (let i = 0; i < plan.extraVideoIds.length; i += 50) { // 50 at a time in parallel; quick
         const res = trashDriveFiles_(plan.extraVideoIds.slice(i, i + 50));
         Object.keys(res).forEach(function(id) {
           if (res[id] === 'trashed' || res[id] === 'gone') videosTrashed++; else videosFailed++;
         });
+        progress('videos', 0);
       }
+      progress('rows', 0);
     }
 
     for (let s = 0; s < plan.sheets.length && !outOfTime; s++) {
@@ -6119,6 +6139,7 @@ function runSheetCleanup_(p) {
         archived += rowsOut.length;
         entry.sh.deleteRows(run.start, run.items.length);
         done += run.items.length;
+        progress('rows', removed + done);
       }
       if (done) {
         removedBySheet[entry.name] = done;
@@ -6129,6 +6150,7 @@ function runSheetCleanup_(p) {
     SpreadsheetApp.flush();
     const remaining = before.totalRemove - removed;
     const done = !outOfTime && remaining <= 0;
+    progress(done ? 'done' : 'rows', removed);
     try {
       sheet_(CONFIG.SECURITY_LOG_SHEET).appendRow([new Date(), user.email, 'SHEET_CLEANUP', 'SUCCESS',
         'rowsRemoved=' + removed + ' archived=' + archived + ' videosTrashed=' + videosTrashed + ' ' + JSON.stringify(removedBySheet)]);

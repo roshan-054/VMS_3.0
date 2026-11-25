@@ -115,3 +115,15 @@ test('admins only', () => {
   assert.equal(rt.call('scanSheetCleanup', { token: packer }).success, false);
   assert.equal(rt.call('runSheetCleanup', { token: packer }).success, false);
 });
+
+test('live progress reports videos moved and rows removed (admin only)', () => {
+  const { rt, admin, packer } = setup();
+  assert.equal(rt.call('getSheetCleanupProgress', { token: packer }).success, false);
+  const r = rt.call('runSheetCleanup', { token: admin, trashExtraVideos: true });
+  assert.equal(r.success, true, r.error);
+  const p = rt.call('getSheetCleanupProgress', { token: admin }).progress;
+  assert.equal(p.phase, 'done');
+  assert.equal(p.rowsDone, r.removedRowsCount);
+  assert.equal(p.videosDone, r.videosTrashedCount + r.videosFailedCount);
+  assert.ok(p.videosTotal > 0 && p.rowsTotal >= p.rowsDone);
+});

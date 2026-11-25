@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Eraser, RefreshCw, Archive, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { BackendUpdateCard } from './BackendUpdateCard';
-import { scanSheetCleanup, runSheetCleanup, SheetCleanupScan, SheetCleanupResult } from '../lib/api';
+import { scanSheetCleanup, runSheetCleanup, getSheetCleanupProgress, SheetCleanupScan, SheetCleanupResult, SheetCleanupLiveProgress } from '../lib/api';
 
 interface Props {
   onShowToast: (message: string, type: 'success' | 'error' | 'info') => void;
@@ -17,6 +17,7 @@ export const SettingsPage: React.FC<Props> = ({ onShowToast }) => {
   const [confirming, setConfirming] = useState(false);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<{ removed: number; remaining: number } | null>(null);
+  const [live, setLive] = useState<SheetCleanupLiveProgress | null>(null);
   const [result, setResult] = useState<SheetCleanupResult | null>(null);
   const [trashVideos, setTrashVideos] = useState(false);
   const [error, setError] = useState('');
@@ -40,8 +41,24 @@ export const SettingsPage: React.FC<Props> = ({ onShowToast }) => {
     setConfirming(false);
     setError('');
     setProgress({ removed: 0, remaining: scan?.totalRemove || 0 });
+    setLive(null);
+    // Poll the live progress of the round in progress (rows and Drive Trash) every 3 seconds.
+    const startedAt = Date.now();
+    let polling = true;
+    const poll = async () => {
+      while (polling) {
+        const p = await getSheetCleanupProgress();
+        if (!polling) break;
+        if (p && p.at >= startedAt - 120000) setLive(p);
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+    };
+    poll();
     try {
-      const res = await runSheetCleanup({ trashExtraVideos: trashVideos }, (removed, remaining) => setProgress({ removed, remaining }));
+      const res = await runSheetCleanup({ trashExtraVideos: trashVideos }, (removed, remaining) => {
+        setProgress({ removed, remaining });
+        setLive((l) => (l ? { ...l, rowsDone: 0, phase: 'rows' } : l));
+      });
       setResult(res);
       onShowToast(`${res.removedRowsCount} row(s) removed and archived.`, 'success');
       setScan(await scanSheetCleanup().catch(() => null));
@@ -49,8 +66,10 @@ export const SettingsPage: React.FC<Props> = ({ onShowToast }) => {
       setError(e?.message || 'The cleanup did not finish.');
       onShowToast(e?.message || 'The cleanup did not finish.', 'error');
     } finally {
+      polling = false;
       setRunning(false);
       setProgress(null);
+      setLive(null);
     }
   };
 
@@ -192,11 +211,35 @@ export const SettingsPage: React.FC<Props> = ({ onShowToast }) => {
           </div>
         )}
 
-        {progress && (
-          <div id="sheet-cleanup-progress" className="text-xs text-slate-700">
-            Removing rows… {progress.removed.toLocaleString()} done{progress.remaining ? `, ${progress.remaining.toLocaleString()} left` : ''}
-          </div>
-        )}
+        {progress && (() => {
+          const rowsTotal = scan?.totalRemove || progress.removed + progress.remaining || 0;
+          const rowsDone = Math.min(rowsTotal, progress.removed + (live && live.phase !== 'videos' ? live.rowsDone : 0));
+          const vTotal = live?.videosTotal || 0;
+          const vDone = live ? Math.min(vTotal, live.videosDone) : 0;
+          const bar = (id: string, label: string, done: number, total: number, active: boolean) => {
+            const pct = total ? Math.round((done / total) * 100) : 0;
+            return (
+              <div id={id} className="space-y-1">
+                <div className="flex justify-between text-xs text-slate-700">
+                  <span className="font-semibold">{label}</span>
+                  <span className="font-mono">{done.toLocaleString()} / {total.toLocaleString()} · {pct}%</span>
+                </div>
+                <div className="h-2.5 rounded-full bg-slate-200 overflow-hidden" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+                  <div className={`h-full rounded-full bg-blue-600 transition-all duration-500 ${active && pct < 100 ? 'animate-pulse' : ''}`} style={{ width: `${pct}%` }} />
+                </div>
+              </div>
+            );
+          };
+          return (
+            <div className="space-y-3">
+              {trashVideos && vTotal > 0 && bar('sheet-cleanup-progress-videos', 'Moving extra videos to Drive Trash', vDone, vTotal, live?.phase === 'videos')}
+              {bar('sheet-cleanup-progress-rows', 'Removing rows', rowsDone, rowsTotal, !live || live.phase !== 'videos')}
+              <div id="sheet-cleanup-progress" className="text-xs text-slate-500">
+                {live?.phase === 'videos' ? 'Moving videos to Drive Trash…' : 'Removing rows…'} {rowsDone.toLocaleString()} done{rowsTotal - rowsDone > 0 ? `, ${(rowsTotal - rowsDone).toLocaleString()} left` : ''}
+              </div>
+            </div>
+          );
+        })()}
 
         {result && (
           <div id="sheet-cleanup-result" className="flex items-start gap-2 text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">

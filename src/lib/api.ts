@@ -67,6 +67,9 @@ const ACTION_TIMEOUT_MS: Record<string, number> = {
   scanSheetCleanup: 120000,
   runSheetCleanup: 300000,
   setup: 120000,
+  applyDateFormats: 120000,
+  repairPlaybackUrls: 120000,
+  applyConditionalFormatting: 120000,
 };
 export const DEFAULT_API_TIMEOUT_MS = 20000;
 export function apiTimeoutFor(action: string): number {
@@ -1112,6 +1115,25 @@ export async function scanSheetCleanup(): Promise<SheetCleanupScan> {
   const res: any = await requestApi<SheetCleanupScan>('scanSheetCleanup', {});
   if (!res || res.success === false) throw new Error(res?.error || 'Could not scan the sheet.');
   return res as SheetCleanupScan;
+}
+
+export interface SheetCleanupLiveProgress {
+  phase: 'videos' | 'rows' | 'done';
+  videosDone: number;
+  videosTotal: number;
+  rowsDone: number;
+  rowsTotal: number;
+  at: number;
+}
+
+/** Progress of the cleanup round running right now (null when unknown or the backend is older). */
+export async function getSheetCleanupProgress(): Promise<SheetCleanupLiveProgress | null> {
+  try {
+    const res: any = await requestApi('getSheetCleanupProgress', {});
+    return res && res.success && res.progress ? (res.progress as SheetCleanupLiveProgress) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Runs the cleanup in server rounds until everything planned is removed. */
