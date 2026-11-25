@@ -4,6 +4,21 @@ const p2 = (n: number) => String(n).padStart(2, '0');
 
 /** Accepts a Date, ISO string, epoch ms, or a plain 'YYYY-MM-DD' (read as a local calendar day). */
 export function toDate(v: Date | string | number | null | undefined): Date | null {
+  return fixCentury(parseAny(v));
+}
+
+/** Old sheet rows sometimes carry a year 100 too far ahead (2124, 2126). Move those back by centuries. */
+function fixCentury(d: Date | null): Date | null {
+  if (!d) return d;
+  while (d.getFullYear() >= 2100) {
+    const back = new Date(d.getTime());
+    back.setFullYear(d.getFullYear() - 100);
+    d = back;
+  }
+  return d;
+}
+
+function parseAny(v: Date | string | number | null | undefined): Date | null {
   if (v === null || v === undefined || v === '') return null;
   if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
   if (typeof v === 'string') {

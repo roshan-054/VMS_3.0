@@ -21,3 +21,10 @@ test('reads day-first text dates from the sheet', () => {
   assert.ok(dateMs('24/11/2026 10:00') > dateMs('16 Nov 2026, 14:06:05'));
   assert.equal(dateMs('garbage'), 0);
 });
+
+test('year-2124/2126 rows from old sheets read as the real year', () => {
+  assert.equal(fmtDate('2124-04-10T10:45:09.744Z'), '10-Apr-24');
+  assert.equal(fmtDate(new Date(2126, 9, 15)), '15-Oct-26');
+  assert.ok(dateMs('2124-04-10T21:45:09.744Z') < Date.now());
+  assert.equal(fmtDate(new Date(2027, 0, 5)), '05-Jan-27', 'real future dates are left alone');
+});
