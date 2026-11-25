@@ -44,7 +44,7 @@ import { canUserDeleteData } from '../lib/permissions';
 import { retryUploadItem, fixAndCleanAllStuckUploads, subscribeWorkerStatus, triggerUploadWorker } from '../lib/uploadWorker';
 import { getStoredManifests, getManifestByOrderId } from '../lib/manifestStorage';
 import { getDirectImageUrl } from '../lib/branding';
-import { fmtDateTime, toDate, dateMs } from '../lib/dateFormat';
+import { fmtDateTime, toDate as parseDate, dateMs } from '../lib/dateFormat';
 
 interface UploadLogsProps {
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
@@ -1186,7 +1186,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
 
   const formatTimestamp = (ts: string) => {
     try {
-      const d = toDate(ts);
+      const d = parseDate(ts);
       if (!d) return ts;
       return fmtDateTime(d, true);
     } catch (e) {
@@ -2374,7 +2374,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
               <div className="space-y-2">
                 <div>
                   <span className="text-slate-400 font-medium">Timestamp:</span>
-                  <span className="ml-2 font-mono text-slate-800">{selectedLog.timestamp}</span>
+                  <span className="ml-2 font-mono text-slate-800">{formatTimestamp(selectedLog.timestamp)}</span>
                 </div>
 
                 <div>

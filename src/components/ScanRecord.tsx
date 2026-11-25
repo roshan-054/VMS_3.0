@@ -1898,7 +1898,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                       {(duplicateStatus.existingRecord as any)?.packerEmail ? (
                         <>Order <strong>{orderId}</strong> is currently being packed/uploaded by <strong>{(duplicateStatus.existingRecord as any)?.packerEmail}</strong>. Do NOT pack this order again to avoid duplicate shipping/verification.</>
                       ) : (
-                        <>Order <strong>{orderId}</strong> already has a completed <strong>{recordingType}</strong> video recorded on {duplicateStatus.existingRecord?.timestamp ? new Date(duplicateStatus.existingRecord.timestamp).toLocaleDateString() : 'earlier session'}.</>
+                        <>Order <strong>{orderId}</strong> already has a completed <strong>{recordingType}</strong> video recorded on {duplicateStatus.existingRecord?.timestamp ? fmtDateTime(duplicateStatus.existingRecord.timestamp) : 'earlier session'}.</>
                       )}
                     </p>
                     <label className="flex items-center gap-2 pt-1 border-t border-amber-200/80 cursor-pointer select-none">

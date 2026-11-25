@@ -76,7 +76,8 @@ const ADMIN_ACTIONS = [
   'scanOlder', 'scanOlderVideos', 'deleteOlder', 'deleteOlderVideos',
   'applyConditionalFormatting', 'saveBranding', 'uploadBrandingImage', 'checkDriveFolder',
   'getStationQueues', 'getDriveStorage', 'applyDateFormats',
-  'scanSheetCleanup', 'runSheetCleanup'
+  'scanSheetCleanup', 'runSheetCleanup',
+  'getBackendUpdateStatus', 'updateBackend', 'rollbackBackend'
 ];
 
 function doPost(e) {
@@ -147,6 +148,9 @@ function doPost(e) {
       case 'scanSheetCleanup': return output_(scanSheetCleanup_(p));
       case 'runSheetCleanup': return output_(runSheetCleanup_(p));
       case 'applyDateFormats': return output_(applySheetDateFormats_(true));
+      case 'getBackendUpdateStatus': return output_(getBackendUpdateStatus_(p));
+      case 'updateBackend': return output_(updateBackend_(p));
+      case 'rollbackBackend': return output_(rollbackBackend_(p));
       case 'saveOrderManifest': return output_(manifestWrite_(saveOrderManifest_(p)));
       case 'saveOrderManifestsBatch': return output_(manifestWrite_(saveOrderManifestsBatch_(p)));
       case 'getOrderManifests': return output_(getOrderManifests_(p));
@@ -6142,4 +6146,252 @@ function runSheetCleanup_(p) {
         (trashVideos ? ', ' + videosTrashed + ' extra video copies moved to Drive Trash' : '') + '.'
     };
   });
+}
+
+
+// ---------------------------------------------------------------------------
+// Backend self-update (Admin > Settings > Backend code).
+// Pulls backend/Code.gs and backend/appsscript.json from the main branch of the GitHub repo,
+// writes them into this Apps Script project with the Apps Script API, saves a new version and
+// points the existing web-app deployment at it, so the /exec URL stays the same.
+// The source URL is fixed here; nothing the browser sends can change which code is installed.
+// One-time setup (see README "Updating the backend from the admin panel"):
+//   1. Turn on "Google Apps Script API" at https://script.google.com/home/usersettings
+//   2. Use the appsscript.json from the repo (it adds the script.projects and script.deployments scopes)
+//   3. Paste this Code.gs, run authorizeBackendUpdater once from the editor, deploy a new version.
+const BACKEND_SOURCE_ = {
+  CODE_URL: 'https://raw.githubusercontent.com/roshan-054/VMS_3.0/main/backend/Code.gs',
+  MANIFEST_URL: 'https://raw.githubusercontent.com/roshan-054/VMS_3.0/main/backend/appsscript.json',
+  API: 'https://script.googleapis.com/v1/projects/',
+  NEEDED_SCOPES: ['https://www.googleapis.com/auth/script.projects', 'https://www.googleapis.com/auth/script.deployments'],
+  PROP_SHA: 'VMS_BACKEND_SHA',
+  PROP_AT: 'VMS_BACKEND_UPDATED_AT',
+  PROP_BY: 'VMS_BACKEND_UPDATED_BY',
+  PROP_VERSION: 'VMS_BACKEND_VERSION',
+  PROP_PREV_VERSION: 'VMS_BACKEND_PREV_VERSION',
+  PROP_DEPLOYMENT: 'VMS_BACKEND_DEPLOYMENT'
+};
+
+/** Run once from the Apps Script editor so Google asks for the new permissions. */
+function authorizeBackendUpdater() {
+  const r = scriptApi_('GET', ScriptApp.getScriptId() + '/content');
+  Logger.log(r.ok ? 'Backend updater is ready.' : r.error);
+  return r.ok ? 'Backend updater is ready.' : r.error;
+}
+
+function backendSourceSha_(text) {
+  const norm = String(text || '').replace(/\r\n/g, '\n').replace(/[ \t]+$/gm, '').replace(/\s+$/, '');
+  const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, norm, Utilities.Charset.UTF_8);
+  return bytes.map(function(b) { return ('0' + (b & 255).toString(16)).slice(-2); }).join('').slice(0, 12);
+}
+
+function scriptApiHelp_(status, message) {
+  const m = String(message || '');
+  if (/has not been used|is disabled|SERVICE_DISABLED|not enabled the Apps Script API|User has not enabled/i.test(m)) {
+    return 'Turn on "Google Apps Script API" at script.google.com/home/usersettings (Settings > Google Apps Script API: On). ' +
+      'If it is already on, the Google Cloud project linked to this script needs the Apps Script API enabled too: open the link in the message, click Enable, wait 2 minutes and try again.';
+  }
+  if (status === 401 || status === 403 || /insufficient|scope|permission/i.test(m)) {
+    return 'The script does not have permission yet. In the Apps Script editor use the appsscript.json from the repo, run authorizeBackendUpdater once and allow access, then deploy a new version.';
+  }
+  return '';
+}
+
+function scriptApi_(method, path, body) {
+  let token = '';
+  try { token = ScriptApp.getOAuthToken(); } catch (e) { return { ok: false, status: 0, error: 'No access token: ' + (e && e.message ? e.message : e) }; }
+  const opts = { method: method, muteHttpExceptions: true, headers: { Authorization: 'Bearer ' + token } };
+  if (body !== undefined) { opts.contentType = 'application/json'; opts.payload = JSON.stringify(body); }
+  let resp;
+  try { resp = UrlFetchApp.fetch(BACKEND_SOURCE_.API + path, opts); }
+  catch (e) { return { ok: false, status: 0, error: String(e && e.message ? e.message : e) }; }
+  const status = resp.getResponseCode();
+  let data = null;
+  try { data = JSON.parse(resp.getContentText() || '{}'); } catch (_) {}
+  if (status >= 200 && status < 300) return { ok: true, status: status, data: data || {} };
+  const msg = (data && data.error && data.error.message) || ('HTTP ' + status);
+  return { ok: false, status: status, error: msg, help: scriptApiHelp_(status, msg) };
+}
+
+function fetchLatestBackend_() {
+  const get = function(url) {
+    const r = UrlFetchApp.fetch(url + '?t=' + Date.now(), { muteHttpExceptions: true, headers: { 'Cache-Control': 'no-cache' } });
+    if (r.getResponseCode() !== 200) throw new Error('Could not download ' + url.split('/').pop() + ' from GitHub (HTTP ' + r.getResponseCode() + ').');
+    return r.getContentText();
+  };
+  const code = get(BACKEND_SOURCE_.CODE_URL);
+  const manifestText = get(BACKEND_SOURCE_.MANIFEST_URL);
+  if (code.length < 20000 || code.indexOf('function doPost(') === -1 || code.indexOf('const CONFIG') === -1 || code.indexOf('function updateBackend_(') === -1) {
+    throw new Error('The Code.gs on GitHub does not look like a complete VMS backend, so nothing was changed.');
+  }
+  let manifest;
+  try { manifest = JSON.parse(manifestText); } catch (_) { throw new Error('appsscript.json on GitHub is not valid JSON, so nothing was changed.'); }
+  return { code: code, manifest: manifest, sha: backendSourceSha_(code) };
+}
+
+function findBackendFiles_(files) {
+  let code = null, manifest = null;
+  (files || []).forEach(function(f) {
+    if (f.type === 'JSON' && f.name === 'appsscript') manifest = f;
+    else if (f.type === 'SERVER_JS' && String(f.source || '').indexOf('function doPost(') !== -1 && (!code || f.name === 'Code')) code = f;
+  });
+  return { code: code, manifest: manifest };
+}
+
+function getBackendUpdateStatus_(p) {
+  const props = PropertiesService.getScriptProperties();
+  const out = {
+    success: true,
+    live: {
+      sha: props.getProperty(BACKEND_SOURCE_.PROP_SHA) || '',
+      updatedAt: props.getProperty(BACKEND_SOURCE_.PROP_AT) || '',
+      updatedBy: props.getProperty(BACKEND_SOURCE_.PROP_BY) || '',
+      version: Number(props.getProperty(BACKEND_SOURCE_.PROP_VERSION) || 0) || null,
+      previousVersion: Number(props.getProperty(BACKEND_SOURCE_.PROP_PREV_VERSION) || 0) || null,
+      hasUpdater: true
+    },
+    latest: null,
+    api: { ready: false, error: '', help: '' },
+    source: BACKEND_SOURCE_.CODE_URL
+  };
+  try {
+    const latest = fetchLatestBackend_();
+    out.latest = { sha: latest.sha, bytes: latest.code.length };
+  } catch (e) {
+    out.latestError = e && e.message ? e.message : String(e);
+  }
+  const content = scriptApi_('GET', ScriptApp.getScriptId() + '/content');
+  if (content.ok) {
+    out.api.ready = true;
+    const files = findBackendFiles_(content.data.files);
+    if (files.code) out.live.sha = backendSourceSha_(files.code.source);
+  } else {
+    out.api.error = content.error;
+    out.api.help = content.help;
+  }
+  out.upToDate = !!(out.latest && out.live.sha && out.latest.sha === out.live.sha);
+  return out;
+}
+
+function pickWebAppDeployment_(deployments, webAppUrl) {
+  const web = (deployments || []).filter(function(d) {
+    return d.deploymentConfig && d.deploymentConfig.versionNumber &&
+      (d.entryPoints || []).some(function(e) { return e.entryPointType === 'WEB_APP'; });
+  });
+  const url = String(webAppUrl || '');
+  const match = web.filter(function(d) { return url && url.indexOf('/s/' + d.deploymentId + '/') !== -1; });
+  if (match.length === 1) return match[0];
+  const saved = PropertiesService.getScriptProperties().getProperty(BACKEND_SOURCE_.PROP_DEPLOYMENT);
+  const savedMatch = web.filter(function(d) { return d.deploymentId === saved; });
+  if (savedMatch.length === 1) return savedMatch[0];
+  if (web.length === 1) return web[0];
+  throw new Error(web.length ? 'Found ' + web.length + ' web app deployments and none matches the URL this app uses, so nothing was switched.' : 'No web app deployment found to update.');
+}
+
+function setDeploymentVersion_(scriptId, dep, versionNumber, description) {
+  return scriptApi_('PUT', scriptId + '/deployments/' + encodeURIComponent(dep.deploymentId), {
+    deploymentConfig: {
+      scriptId: scriptId,
+      versionNumber: versionNumber,
+      manifestFileName: (dep.deploymentConfig && dep.deploymentConfig.manifestFileName) || 'appsscript',
+      description: description
+    }
+  });
+}
+
+function updateBackend_(p) {
+  const user = admin_(p.token);
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return { success: false, error: 'Another backend update is already running.' };
+  try {
+    const scriptId = ScriptApp.getScriptId();
+    const latest = fetchLatestBackend_();
+    const content = scriptApi_('GET', scriptId + '/content');
+    if (!content.ok) return { success: false, error: content.error, help: content.help, step: 'read' };
+    const files = content.data.files || [];
+    const cur = findBackendFiles_(files);
+    if (!cur.code) return { success: false, error: 'Could not find the VMS Code.gs file in this Apps Script project.', step: 'read' };
+    if (backendSourceSha_(cur.code.source) === latest.sha && !p.force) {
+      return { success: true, upToDate: true, sha: latest.sha, message: 'The backend already runs the latest Code.gs.' };
+    }
+
+    // Keep this project's own time zone and web-app settings; take the rest of the manifest from GitHub.
+    let curManifest = {};
+    try { curManifest = JSON.parse((cur.manifest && cur.manifest.source) || '{}'); } catch (_) {}
+    const newManifest = latest.manifest;
+    if (curManifest.timeZone) newManifest.timeZone = curManifest.timeZone;
+    if (curManifest.webapp) newManifest.webapp = curManifest.webapp;
+    const have = curManifest.oauthScopes || [];
+    const missing = (newManifest.oauthScopes || []).filter(function(s) { return have.indexOf(s) === -1; });
+    if (missing.length) {
+      return { success: false, step: 'permissions', missingScopes: missing,
+        error: 'The new Code.gs needs extra Google permissions (' + missing.map(function(s) { return s.split('/').pop(); }).join(', ') + ').',
+        help: 'Do this update by hand once: paste the new appsscript.json and Code.gs in the Apps Script editor, run authorizeBackendUpdater, allow access, and deploy a new version.' };
+    }
+
+    // Find the deployment to move before touching any code.
+    const deps = scriptApi_('GET', scriptId + '/deployments?pageSize=50');
+    if (!deps.ok) return { success: false, error: deps.error, help: deps.help, step: 'deployments' };
+    const dep = pickWebAppDeployment_(deps.data.deployments, p.webAppUrl);
+
+    const before = cur.code.source;
+    const updated = files.map(function(f) {
+      if (f === cur.code) return { name: f.name, type: f.type, source: latest.code };
+      if (f === cur.manifest) return { name: f.name, type: f.type, source: JSON.stringify(newManifest, null, 2) };
+      return { name: f.name, type: f.type, source: f.source };
+    });
+    const put = scriptApi_('PUT', scriptId + '/content', { files: updated });
+    if (!put.ok) return { success: false, error: put.error, help: put.help, step: 'write' };
+
+    const stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd-MMM-yy HH:mm');
+    const description = 'VMS update ' + stamp + ' (' + latest.sha + ') by ' + (user.email || 'admin');
+    const ver = scriptApi_('POST', scriptId + '/versions', { description: description });
+    if (!ver.ok || !ver.data.versionNumber) {
+      // Put the old code back so the editor matches what is deployed.
+      scriptApi_('PUT', scriptId + '/content', { files: files.map(function(f) { return { name: f.name, type: f.type, source: f.source }; }) });
+      return { success: false, error: ver.error || 'No version number returned.', help: ver.help, step: 'version' };
+    }
+    const prevVersion = dep.deploymentConfig.versionNumber;
+    const upd = setDeploymentVersion_(scriptId, dep, ver.data.versionNumber, description);
+    if (!upd.ok) return { success: false, error: upd.error, help: upd.help, step: 'deploy', versionNumber: ver.data.versionNumber };
+
+    PropertiesService.getScriptProperties().setProperties({
+      [BACKEND_SOURCE_.PROP_SHA]: latest.sha,
+      [BACKEND_SOURCE_.PROP_AT]: new Date().toISOString(),
+      [BACKEND_SOURCE_.PROP_BY]: user.email || '',
+      [BACKEND_SOURCE_.PROP_VERSION]: String(ver.data.versionNumber),
+      [BACKEND_SOURCE_.PROP_PREV_VERSION]: String(prevVersion || ''),
+      [BACKEND_SOURCE_.PROP_DEPLOYMENT]: dep.deploymentId
+    });
+    return {
+      success: true, sha: latest.sha, previousSha: backendSourceSha_(before),
+      versionNumber: ver.data.versionNumber, previousVersion: prevVersion, deploymentId: dep.deploymentId,
+      message: 'Backend updated to version ' + ver.data.versionNumber + '. New requests use it within about a minute.'
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function rollbackBackend_(p) {
+  const user = admin_(p.token);
+  const props = PropertiesService.getScriptProperties();
+  const prev = Number(props.getProperty(BACKEND_SOURCE_.PROP_PREV_VERSION) || 0);
+  if (!prev) return { success: false, error: 'There is no earlier version recorded to go back to.' };
+  const scriptId = ScriptApp.getScriptId();
+  const deps = scriptApi_('GET', scriptId + '/deployments?pageSize=50');
+  if (!deps.ok) return { success: false, error: deps.error, help: deps.help };
+  const dep = pickWebAppDeployment_(deps.data.deployments, p.webAppUrl);
+  const current = dep.deploymentConfig.versionNumber;
+  const stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd-MMM-yy HH:mm');
+  const upd = setDeploymentVersion_(scriptId, dep, prev, 'VMS rollback ' + stamp + ' to version ' + prev + ' by ' + (user.email || 'admin'));
+  if (!upd.ok) return { success: false, error: upd.error, help: upd.help };
+  props.setProperties({
+    [BACKEND_SOURCE_.PROP_VERSION]: String(prev),
+    [BACKEND_SOURCE_.PROP_PREV_VERSION]: String(current || ''),
+    [BACKEND_SOURCE_.PROP_AT]: new Date().toISOString(),
+    [BACKEND_SOURCE_.PROP_BY]: user.email || ''
+  });
+  props.deleteProperty(BACKEND_SOURCE_.PROP_SHA);
+  return { success: true, versionNumber: prev, previousVersion: current, message: 'The web app now runs version ' + prev + ' again.' };
 }

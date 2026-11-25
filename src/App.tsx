@@ -43,6 +43,7 @@ import { getStoredManifests, startGlobalManifestSyncLoop } from './lib/manifestS
 import { startStationReporter } from './lib/stationReporter';
 import { SESSION_EXPIRED_EVENT } from './lib/api';
 import { initUploadWorker } from './lib/uploadWorker';
+import { appBuildLabel, watchForNewBuild } from './lib/appVersion';
 import { ScanRecord } from './components/ScanRecord';
 import { AuthView } from './components/AuthView';
 
@@ -106,6 +107,8 @@ export function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isNightMode, setIsNightMode] = useState<boolean>(() => getStoredNightMode());
+  const [newBuildReady, setNewBuildReady] = useState(false);
+  useEffect(() => watchForNewBuild(() => setNewBuildReady(true)), []);
   const [pendingQueueCount, setPendingQueueCount] = useState(0);
   const [pendingManifestCount, setPendingManifestCount] = useState<number>(() => {
     return getStoredManifests().filter((m) => m.status === 'Pending').length;
@@ -535,6 +538,20 @@ export function App() {
               <div className="text-[10px] text-slate-400 font-mono truncate">{currentUser.role}</div>
             </div>
             <div className="flex items-center gap-1">
+              {canUserAccessAdminPanel(currentUser) && (
+                <button
+                  id="footer-settings-btn"
+                  onClick={() => {
+                    setActiveTab('settings');
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className={`p-1.5 rounded-lg transition shrink-0 cursor-pointer ${activeTab === 'settings' ? 'text-blue-600 bg-blue-50' : 'text-slate-400 hover:text-blue-600 hover:bg-slate-100'}`}
+                  title="Settings"
+                  aria-label="Settings"
+                >
+                  <Settings className="w-4 h-4" />
+                </button>
+              )}
               <button
                 onClick={toggleNightMode}
                 className="p-1.5 text-slate-400 hover:text-amber-500 hover:bg-slate-100 rounded-lg transition shrink-0 cursor-pointer"
@@ -552,11 +569,26 @@ export function App() {
               </button>
             </div>
           </div>
+          <div id="app-build-label" className="px-2 pt-1.5 text-[10px] text-slate-400 font-mono truncate" title="Version of the app running in this tab">
+            Version {appBuildLabel()}
+          </div>
         </div>
       </aside>
 
       {/* Main Content Viewport */}
       <div className="flex-1 flex flex-col min-w-0 bg-slate-100">
+        {newBuildReady && (
+          <div id="new-version-banner" className="bg-blue-600 text-white text-xs font-semibold px-4 py-2 flex items-center justify-center gap-3">
+            <span>A newer version of VMS has been published.</span>
+            <button
+              id="new-version-reload-btn"
+              onClick={() => window.location.reload()}
+              className="bg-white text-blue-700 px-3 py-1 rounded-lg font-bold hover:bg-blue-50 cursor-pointer"
+            >
+              Reload now
+            </button>
+          </div>
+        )}
         <main className="flex-1 w-full px-4 sm:px-6 lg:px-10 xl:px-12 py-6 transition-all duration-200">
           <Suspense fallback={<TabLoading />}>
           {activeTab === 'record' && (

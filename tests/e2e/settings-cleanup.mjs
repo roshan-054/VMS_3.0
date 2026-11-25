@@ -55,7 +55,7 @@ for (const mode of ['light', 'dark']) {
   const preview = await page.locator('#sheet-cleanup-preview').innerText();
   check('preview counts rows to remove', preview.includes(String(EXPECT)), preview.replace(/\s+/g, ' '));
   check('nothing deleted by the scan', rt.sheets.get('UploadLog').rows.length === uploads.length, rt.sheets.get('UploadLog').rows.length);
-  await page.locator('summary').click();
+  await page.locator('#sheet-cleanup-card summary').click();
   await page.locator('#sheet-cleanup-trash-videos').check();
   await page.screenshot({ path: SHOT + '/settings-cleanup-preview.png', fullPage: true });
   await page.locator('#sheet-cleanup-run').click();
