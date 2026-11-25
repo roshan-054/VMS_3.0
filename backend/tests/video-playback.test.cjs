@@ -72,3 +72,17 @@ test('files that are not logged packing videos cannot be read, and login is requ
   const anon = rt.call('getVideoChunk', { fileId: FID, start: 0 });
   assert.equal(anon.success, false);
 });
+
+test('a 403 because the Drive API is off in the Cloud project says how to fix it', () => {
+  const { rt, token } = setup();
+  const reply = (code, body) => ({ getResponseCode: () => code, getHeaders: () => ({}), getContentText: () => JSON.stringify(body), getContent: () => [] });
+  rt.sandbox.UrlFetchApp = {
+    fetch: () => reply(403, { error: { code: 403, message: 'Google Drive API has not been used in project 123 before or it is disabled.', status: 'PERMISSION_DENIED' } }),
+  };
+  const r = rt.call('getVideoChunk', { token, fileId: FID, start: 0 });
+  assert.equal(r.success, false);
+  assert.match(r.error, /Drive API is turned off/);
+  rt.sandbox.UrlFetchApp = { fetch: () => reply(403, { error: { message: 'The user does not have sufficient permissions for this file.' } }) };
+  const other = rt.call('getVideoChunk', { token, fileId: FID, start: 0 });
+  assert.match(other.error, /403 while reading the video: The user does not have sufficient permissions/);
+});

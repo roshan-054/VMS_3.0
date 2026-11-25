@@ -17,7 +17,7 @@ if (!existsSync(ORIG)) {
 const VIDEO = readFileSync(ORIG); // ~45 MB, moov at the end like a recorder's file
 const FID = 'VIDEOFILE_streamtest_456';
 
-async function run(streamWorks) {
+async function run(streamWorks, { workers = 'allow' } = {}) {
   const backend = createMockBackend({ latencyByAction: { getVideoChunk: 3000 } });
   const rt = backend.rt;
   rt.sheets.get('OrderLog').appendRow([new Date(), 'ORD-FAST-1', 'Amazon', 'admin@test.local', FID, `https://drive.google.com/file/d/${FID}/preview`, '45 MB', 'Completed', 'Forward', 'job-fast']);
@@ -29,7 +29,8 @@ async function run(streamWorks) {
     return { getResponseCode: () => 206, getHeaders: () => ({ 'Content-Range': `bytes ${a}-${b}/${VIDEO.length}`, 'Content-Type': 'video/mp4' }), getContent: () => Array.from(part, (x) => (x > 127 ? x - 256 : x)) };
   } };
   const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] });
-  const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
+  const context = await browser.newContext({ viewport: { width: 1366, height: 900 }, serviceWorkers: workers });
+  const page = await context.newPage();
   await attach(page, backend);
   let streamBytes = 0;
   await page.route(/drive\.usercontent\.google\.com/, async (route) => {
@@ -44,6 +45,7 @@ async function run(streamWorks) {
     return route.fulfill({ status: 206, headers: { 'content-type': 'video/mp4', 'accept-ranges': 'bytes', 'content-range': `bytes ${a}-${b}/${VIDEO.length}`, 'content-length': String(b - a + 1) }, body: VIDEO.subarray(a, b + 1) });
   });
   await login(page, BASE, backend);
+  if (workers === 'allow') await page.waitForFunction(() => Boolean(navigator.serviceWorker && navigator.serviceWorker.controller), null, { timeout: 10000 }).catch(() => {});
   await page.getByRole('button', { name: /Search Videos/ }).first().click();
   await page.getByPlaceholder(/402-19283-91/).fill('ORD-FAST-1');
   await page.locator('#search-orders-submit-btn').click();
@@ -72,8 +74,13 @@ check('stream is the original 1920x1080', s.w === 1920 && s.h === 1080, `${s.w}x
 check('seeking to 0:30 works without downloading everything first', s.t >= 29.5, `t=${s.t}`);
 check('no Apps Script chunk calls needed', s.chunkCalls === 0, s.chunkCalls);
 const f = await run(false);
-check('when Drive streaming is blocked, falls back to the backend download', f.source === 'blob' && f.w === 1920, `${f.firstFrameMs} ms via ${f.source}, ${f.chunkCalls} chunk calls`);
-check('streaming is faster than the backend download', s.firstFrameMs < f.firstFrameMs, `${s.firstFrameMs} vs ${f.firstFrameMs} ms`);
+check('when Drive streaming is blocked, streams through the backend instead', f.source === 'backend-stream' && f.w === 1920, `${f.firstFrameMs} ms via ${f.source}, ${f.chunkCalls} chunk calls`);
+check('backend stream shows the first frame within 15 s (3 s per backend call)', f.firstFrameMs < 15000, `${f.firstFrameMs} ms`);
+check('backend stream seeks to 0:30', f.t >= 29.5, `t=${f.t}`);
+const d = await run(false, { workers: 'block' });
+check('without a stream worker, falls back to the full backend download', d.source === 'blob' && d.w === 1920, `${d.firstFrameMs} ms via ${d.source}, ${d.chunkCalls} chunk calls`);
+check('backend stream starts faster than the full download', f.firstFrameMs < d.firstFrameMs, `${f.firstFrameMs} vs ${d.firstFrameMs} ms`);
+check('direct stream is fastest', s.firstFrameMs < f.firstFrameMs, `${s.firstFrameMs} vs ${f.firstFrameMs} ms`);
 console.table(results);
 const failed = results.filter((r) => !r.pass).length;
 console.log(failed ? `${failed} FAILED` : `ALL ${results.length} PASSED`);
