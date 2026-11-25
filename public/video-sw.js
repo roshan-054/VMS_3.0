@@ -112,3 +112,9 @@ async function serve(event, fileId) {
   if (m) headers['Content-Range'] = 'bytes ' + start + '-' + last + '/' + size;
   return new Response(body, { status: m ? 206 : 200, headers });
 }
+
+// A tab that was hard-reloaded (Ctrl+Shift+R) is not controlled by this worker until it claims
+// it. The page asks for that when it finds itself uncontrolled.
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'vms-claim') event.waitUntil(self.clients.claim());
+});

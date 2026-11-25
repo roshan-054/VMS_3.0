@@ -74,6 +74,9 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
   const [source, setSource] = useState<OriginalSource>(firstSource);
   const [streamStarted, setStreamStarted] = useState(false);
   const [workerReady, setWorkerReady] = useState<boolean | null>(null);
+  // When full quality has to be downloaded whole, the Drive preview plays meanwhile and the
+  // viewer switches over when the download is done (fullReady = they chose to, or it was instant).
+  const [fullReady, setFullReady] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -85,7 +88,10 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
 
   // No stream worker in this browser: go straight from the direct stream to the download.
   useEffect(() => {
-    if (source === 'backend' && workerReady === false) setSource('download');
+    if (source === 'backend' && workerReady === false) {
+      console.warn('[VMS player] stream worker unavailable in this tab; downloading the whole file instead.');
+      setSource('download');
+    }
   }, [source, workerReady]);
 
   useEffect(() => {
@@ -96,17 +102,23 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
     setVideoSize(null);
     setSource(firstSource());
     setStreamStarted(false);
+    setFullReady(false);
   }, [fileId, localBlobUrl]);
 
   useEffect(() => {
     if (playerMode !== 'original' || !fileId || originalUrl || source !== 'download') return;
     let alive = true;
+    const t0 = Date.now();
     setOriginalError('');
     const { url, unsubscribe } = getOriginalVideoUrl(fileId, (loaded, total) => {
       if (alive) setOriginalProgress({ loaded, total });
     });
     url
-      .then((u) => alive && setOriginalUrl(u))
+      .then((u) => {
+        if (!alive) return;
+        setOriginalUrl(u);
+        if (Date.now() - t0 < 2000) setFullReady(true); // already downloaded earlier: play it at once
+      })
       .catch((err: any) => alive && setOriginalError(err?.message || 'Could not load the full-quality video.'));
     return () => {
       alive = false;
@@ -122,11 +134,13 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
         : source === 'backend' && workerReady
           ? getBackendStreamUrl(fileId)
           : '';
-  const nativeSrc = playerMode === 'local_master' ? localBlobUrl || '' : playerMode === 'original' ? streamUrl || originalUrl : '';
+  const nativeSrc = playerMode === 'local_master' ? localBlobUrl || '' : playerMode === 'original' ? streamUrl || (fullReady ? originalUrl : '') : '';
   const isStreaming = Boolean(streamUrl);
+  const previewWhileLoading = playerMode === 'original' && Boolean(fileId) && !nativeSrc && source === 'download' && !originalError;
 
   // The current stream did not work: move on to the next way of playing the original.
-  const streamFailed = useCallback(() => {
+  const streamFailed = useCallback((why: string) => {
+    console.warn('[VMS player] full-quality stream did not start:', why);
     setStreamStarted(false);
     setSource((cur) => {
       if (cur === 'direct') {
@@ -140,12 +154,12 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
   // Give up on a stream that shows nothing within its time limit.
   useEffect(() => {
     if (!isStreaming || streamStarted) return;
-    const t = setTimeout(streamFailed, START_TIMEOUT_MS[source]);
+    const t = setTimeout(() => streamFailed(`${source}: no picture within ${START_TIMEOUT_MS[source] / 1000} s`), START_TIMEOUT_MS[source]);
     return () => clearTimeout(t);
   }, [isStreaming, streamStarted, streamUrl, source, streamFailed]);
 
   const handleVideoError = () => {
-    if (isStreaming) streamFailed();
+    if (isStreaming) streamFailed(`${source}: video error ${videoRef.current?.error?.code ?? ''} ${videoRef.current?.error?.message ?? ''}`);
   };
   const isNative = playerMode !== 'drive_hd';
 
@@ -274,6 +288,7 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
     setDuration(0);
     setVideoSize(null);
     if (mode === 'original') {
+      setFullReady(Boolean(originalUrl)); // already downloaded: play it straight away
       setOriginalError('');
       setRetryKey((k) => k + 1);
       setStreamStarted(false);
@@ -517,6 +532,50 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
               className="w-full h-full object-contain pointer-events-auto"
             />
             </>
+          ) : previewWhileLoading ? (
+            <div className="relative w-full h-full" id="hq-player-preview-while-loading">
+              <iframe
+                src={`https://drive.google.com/file/d/${fileId}/preview`}
+                allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                className="w-full h-full border-0 bg-black min-h-[260px]"
+                title={`Video Stream - Order ${orderId}`}
+              />
+              <div
+                id="hq-player-loading"
+                className="absolute bottom-3 right-3 z-20 bg-slate-950/90 backdrop-blur-md border border-slate-700 rounded-xl px-3 py-2 w-64 space-y-1.5 shadow-xl"
+              >
+                {originalUrl ? (
+                  <button
+                    id="hq-player-play-full"
+                    onClick={() => setFullReady(true)}
+                    className="w-full px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Sparkles className="w-3 h-3 text-amber-300" />
+                    Full quality ready: play it
+                  </button>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between text-[11px] text-slate-300">
+                      <span className="flex items-center gap-1.5 font-semibold">
+                        <Loader2 className="w-3 h-3 text-emerald-400 animate-spin" />
+                        Full quality loading
+                      </span>
+                      <span className="font-mono text-slate-400">
+                        {originalProgress.total
+                          ? `${Math.round(originalProgress.loaded / 1048576)} / ${Math.round(originalProgress.total / 1048576)} MB`
+                          : '…'}
+                      </span>
+                    </div>
+                    <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-emerald-500 transition-all"
+                        style={{ width: `${originalProgress.total ? Math.round((originalProgress.loaded / originalProgress.total) * 100) : 0}%` }}
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
           ) : playerMode === 'original' && fileId ? (
             <div className="p-8 text-center space-y-3 w-full max-w-md" id="hq-player-loading">
               {originalError ? (
@@ -584,7 +643,7 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
           <div className="bg-slate-950/85 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-700/80 text-[11px] font-mono text-emerald-400 flex items-center gap-2 shadow-xl pointer-events-none">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
             <span className="font-bold">
-              {playerMode === 'drive_hd'
+              {playerMode === 'drive_hd' || previewWhileLoading
                 ? 'Drive preview (re-encoded by Google)'
                 : `${playerMode === 'local_master' ? 'Station copy' : 'Original file'}${videoSize?.w ? ` · ${videoSize.w}×${videoSize.h}` : ''}`}
             </span>

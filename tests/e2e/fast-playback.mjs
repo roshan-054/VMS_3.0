@@ -17,7 +17,7 @@ if (!existsSync(ORIG)) {
 const VIDEO = readFileSync(ORIG); // ~45 MB, moov at the end like a recorder's file
 const FID = 'VIDEOFILE_streamtest_456';
 
-async function run(streamWorks, { workers = 'allow' } = {}) {
+async function run(streamWorks, { workers = 'allow', hardReload = false } = {}) {
   const backend = createMockBackend({ latencyByAction: { getVideoChunk: 3000 } });
   const rt = backend.rt;
   rt.sheets.get('OrderLog').appendRow([new Date(), 'ORD-FAST-1', 'Amazon', 'admin@test.local', FID, `https://drive.google.com/file/d/${FID}/preview`, '45 MB', 'Completed', 'Forward', 'job-fast']);
@@ -46,11 +46,30 @@ async function run(streamWorks, { workers = 'allow' } = {}) {
   });
   await login(page, BASE, backend);
   if (workers === 'allow') await page.waitForFunction(() => Boolean(navigator.serviceWorker && navigator.serviceWorker.controller), null, { timeout: 10000 }).catch(() => {});
+  let hardReloadedUncontrolled = null;
+  if (hardReload) {
+    // Ctrl+Shift+R: the page loads without the stream worker controlling it.
+    const cdp = await context.newCDPSession(page);
+    await Promise.all([page.waitForNavigation(), cdp.send('Page.reload', { ignoreCache: true })]);
+    const loggedIn = await page.waitForSelector('text=Scan & Record', { timeout: 8000 }).then(() => true).catch(() => false);
+    if (!loggedIn) {
+      // Sign in on the hard-reloaded page itself (a fresh page.goto would be a normal load).
+      await page.getByPlaceholder(/email/i).first().fill(backend.ADMIN.email);
+      await page.locator('input[type="password"]').first().fill(backend.ADMIN.password);
+      await page.getByRole('button', { name: /sign in|log in|login/i }).first().click();
+      await page.waitForSelector('text=Scan & Record', { timeout: 20000 });
+    }
+    hardReloadedUncontrolled = await page.evaluate(() => !navigator.serviceWorker.controller);
+  }
   await page.getByRole('button', { name: /Search Videos/ }).first().click();
   await page.getByPlaceholder(/402-19283-91/).fill('ORD-FAST-1');
   await page.locator('#search-orders-submit-btn').click();
   const t0 = Date.now();
   await page.getByRole('button', { name: /Play & View Details/ }).first().click({ timeout: 20000 });
+  let previewShownMs = -1;
+  page.waitForSelector('#hq-player-preview-while-loading iframe', { timeout: 120000 }).then(() => { previewShownMs = Date.now() - t0; }).catch(() => {});
+  // When the whole file had to be downloaded, the viewer presses "play full quality" when it is ready.
+  page.locator('#hq-player-play-full').click({ timeout: 120000 }).catch(() => {});
   await page.waitForFunction(() => { const v = document.querySelector('#hq-player-video'); return v && v.readyState >= 2 && v.videoWidth > 0; }, null, { timeout: 120000 });
   const firstFrameMs = Date.now() - t0;
   const info = await page.evaluate(async () => {
@@ -63,7 +82,7 @@ async function run(streamWorks, { workers = 'allow' } = {}) {
   });
   const chunkCalls = backend.calls.filter((c) => c.action === 'getVideoChunk').length;
   await browser.close();
-  return { firstFrameMs, ...info, chunkCalls, streamMB: Math.round(streamBytes / 1048576) };
+  return { firstFrameMs, previewShownMs, hardReloadedUncontrolled, ...info, chunkCalls, streamMB: Math.round(streamBytes / 1048576) };
 }
 
 const results = [];
@@ -77,8 +96,11 @@ const f = await run(false);
 check('when Drive streaming is blocked, streams through the backend instead', f.source === 'backend-stream' && f.w === 1920, `${f.firstFrameMs} ms via ${f.source}, ${f.chunkCalls} chunk calls`);
 check('backend stream shows the first frame within 15 s (3 s per backend call)', f.firstFrameMs < 15000, `${f.firstFrameMs} ms`);
 check('backend stream seeks to 0:30', f.t >= 29.5, `t=${f.t}`);
+const h = await run(false, { hardReload: true });
+check('after a hard reload (Ctrl+Shift+R) it still streams through the backend', h.hardReloadedUncontrolled === true && h.source === 'backend-stream' && h.firstFrameMs < 15000, `uncontrolled after reload: ${h.hardReloadedUncontrolled}; ${h.firstFrameMs} ms via ${h.source}`);
 const d = await run(false, { workers: 'block' });
 check('without a stream worker, falls back to the full backend download', d.source === 'blob' && d.w === 1920, `${d.firstFrameMs} ms via ${d.source}, ${d.chunkCalls} chunk calls`);
+check('during that download the Drive preview plays at once', d.previewShownMs < 5000, `${d.previewShownMs} ms`);
 check('backend stream starts faster than the full download', f.firstFrameMs < d.firstFrameMs, `${f.firstFrameMs} vs ${d.firstFrameMs} ms`);
 check('direct stream is fastest', s.firstFrameMs < f.firstFrameMs, `${s.firstFrameMs} vs ${f.firstFrameMs} ms`);
 console.table(results);
