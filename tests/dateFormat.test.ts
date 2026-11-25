@@ -28,3 +28,9 @@ test('year-2124/2126 rows from old sheets read as the real year', () => {
   assert.ok(dateMs('2124-04-10T21:45:09.744Z') < Date.now());
   assert.equal(fmtDate(new Date(2027, 0, 5)), '05-Jan-27', 'real future dates are left alone');
 });
+
+test('video timestamp overlay uses DD-MMM-YY', async () => {
+  const { formatOsdTime } = await import('../src/lib/videoOsd');
+  assert.equal(formatOsdTime(new Date(2026, 10, 25, 17, 17, 31).getTime()), '25-Nov-26  17:17:31');
+  assert.equal(formatOsdTime(new Date(2027, 0, 5, 9, 4, 3).getTime()), '05-Jan-27  09:04:03');
+});
