@@ -33,6 +33,9 @@ const firstSource = (): OriginalSource => (isDriveStreamUsable() ? 'direct' : 'b
 // How long each stream may take to show the first frame before the next way is tried.
 const START_TIMEOUT_MS: Record<OriginalSource, number> = { direct: 6000, backend: 60000, download: 0 };
 
+// The back / forward buttons and arrow keys jump this many seconds.
+const SKIP_SECONDS = 5;
+
 // Get the stream worker in place early so it is ready by the time a video is opened.
 if (typeof window !== 'undefined') ensureVideoStreamWorker().catch(() => {});
 
@@ -307,16 +310,39 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
     }
   };
 
-  const handleFrameStep = (direction: 'forward' | 'backward', stepSeconds = 0.04) => {
-    if (!videoRef.current) return;
-    videoRef.current.pause();
-    setIsPlaying(false);
-    const newTime = direction === 'forward'
-      ? Math.min(videoRef.current.duration, videoRef.current.currentTime + stepSeconds)
-      : Math.max(0, videoRef.current.currentTime - stepSeconds);
-    videoRef.current.currentTime = newTime;
+  // Jump back or forward by a few seconds. Playback keeps going if it was playing.
+  const handleSkip = (seconds: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    const end = Number.isFinite(v.duration) ? v.duration : v.currentTime + Math.max(0, seconds);
+    const newTime = Math.max(0, Math.min(end, v.currentTime + seconds));
+    v.currentTime = newTime;
     setCurrentTime(newTime);
   };
+
+  // Keyboard: Left/Right arrows jump 5 s, Space plays/pauses. Ignored while typing in a field.
+  const hasNativeVideo = isNative && Boolean(nativeSrc);
+  useEffect(() => {
+    if (!hasNativeVideo) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
+      const t = e.target as HTMLElement | null;
+      const tag = (t?.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || t?.isContentEditable) return;
+      const v = videoRef.current;
+      if (!v) return;
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        e.preventDefault();
+        handleSkip(e.key === 'ArrowRight' ? SKIP_SECONDS : -SKIP_SECONDS);
+      } else if (e.key === ' ' && tag !== 'button') {
+        e.preventDefault();
+        if (v.paused) v.play().catch(() => {});
+        else v.pause();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [hasNativeVideo]);
 
   const handleSpeedChange = (speed: number) => {
     setPlaybackRate(speed);
@@ -617,18 +643,22 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
               </button>
 
               <button
-                onClick={() => handleFrameStep('backward', 0.04)}
-                className="p-2 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-300 hover:text-white rounded-xl border border-slate-700 transition cursor-pointer"
-                title="Step -1 Frame"
+                id="player-skip-back"
+                onClick={() => handleSkip(-SKIP_SECONDS)}
+                className="h-9 px-2 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-300 hover:text-white rounded-xl border border-slate-700 transition cursor-pointer flex items-center gap-0.5 text-[11px] font-bold font-mono"
+                title={`Back ${SKIP_SECONDS} seconds (Left arrow)`}
               >
                 <ChevronLeft className="w-4 h-4" />
+                {SKIP_SECONDS}s
               </button>
 
               <button
-                onClick={() => handleFrameStep('forward', 0.04)}
-                className="p-2 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-300 hover:text-white rounded-xl border border-slate-700 transition cursor-pointer"
-                title="Step +1 Frame"
+                id="player-skip-forward"
+                onClick={() => handleSkip(SKIP_SECONDS)}
+                className="h-9 px-2 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-300 hover:text-white rounded-xl border border-slate-700 transition cursor-pointer flex items-center gap-0.5 text-[11px] font-bold font-mono"
+                title={`Forward ${SKIP_SECONDS} seconds (Right arrow)`}
               >
+                {SKIP_SECONDS}s
                 <ChevronRight className="w-4 h-4" />
               </button>
 
