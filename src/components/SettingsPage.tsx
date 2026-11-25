@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Eraser, RefreshCw, Archive, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { BackendUpdateCard } from './BackendUpdateCard';
+import { ArchivedRowsCard } from './ArchivedRowsCard';
 import { scanSheetCleanup, runSheetCleanup, getSheetCleanupProgress, SheetCleanupScan, SheetCleanupResult, SheetCleanupLiveProgress } from '../lib/api';
 
 interface Props {
@@ -255,6 +256,8 @@ export const SettingsPage: React.FC<Props> = ({ onShowToast }) => {
           </div>
         )}
       </section>
+
+      <ArchivedRowsCard onShowToast={onShowToast} />
 
       <BackendUpdateCard onShowToast={onShowToast} />
     </div>

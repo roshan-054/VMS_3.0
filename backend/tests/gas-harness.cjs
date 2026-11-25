@@ -23,7 +23,7 @@ function noopProxy() {
 }
 
 class MockSheet {
-  constructor(name, rows) { this.name = name; this.rows = rows || []; this.numberFormats = {}; }
+  constructor(name, rows) { this.name = name; this.rows = rows || []; this.numberFormats = {}; this.cellFormats = {}; }
   getName() { return this.name; }
   getDataRange() { const s = this; return { getValues: () => s.rows.map((r) => r.slice()) }; }
   appendRow(row) { this.rows.push(row.slice()); return this; }
@@ -53,7 +53,7 @@ class MockSheet {
       getValue() { ensure(); return s.rows[r - 1][c - 1] ?? ''; },
       setValue(v) { ensure(); s.rows[r - 1][c - 1] = v; return this; },
       setValues(vals) { ensure(); vals.forEach((row, i) => row.forEach((v, j) => { s.rows[r - 1 + i][c - 1 + j] = v; })); return this; },
-      setNumberFormat(f) { s.numberFormats[c] = f; return this; }, setFontWeight() { return this; }, setBackground() { return this; },
+      setNumberFormat(f) { s.numberFormats[c] = f; for (let i = 0; i < Math.min(nr, 5000); i++) s.cellFormats[(r + i) + ':' + c] = f; return this; }, setFontWeight() { return this; }, setBackground() { return this; },
       setFontColor() { return this; }, setHorizontalAlignment() { return this; }, setWrap() { return this; },
     };
   }

@@ -66,6 +66,8 @@ const ACTION_TIMEOUT_MS: Record<string, number> = {
   rollbackBackend: 120000,
   scanSheetCleanup: 120000,
   runSheetCleanup: 300000,
+  listCleanupArchive: 120000,
+  restoreCleanupArchive: 120000,
   setup: 120000,
   applyDateFormats: 120000,
   repairPlaybackUrls: 120000,

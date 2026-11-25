@@ -52,3 +52,26 @@ test('Upload Logs still list newest first after the conversion', () => {
   const ids = (r.results || r.orders || []).map((x) => x.orderId);
   assert.ok(ids.includes('#A3') && ids.includes('#A1'), JSON.stringify(ids));
 });
+
+test('rows the backend appends later are DD-MMM-YY too (SecurityLog, Archive tabs, GTINCatalog)', () => {
+  const { rt, admin } = setup();
+  rt.call('applyDateFormats', { token: admin });
+  // A new SecurityLog row (login) gets the format on its own date cell.
+  rt.call('login', { email: 'alice@example.com', password: 'AdminPass1' });
+  const sec = rt.sheets.get('SecurityLog');
+  assert.equal(sec.cellFormats[sec.rows.length + ':1'], 'dd-mmm-yy hh:mm', 'new SecurityLog row formatted');
+  // GTINCatalog with a blank header row gets its headers back and dated rows formatted.
+  rt.addSheet('GTINCatalog', [['', '', '', '', '', '', '', '', '', 'Tag']]);
+  const r = rt.call('saveGtinCatalogBatch', { token: admin, products: [{ gtin: '8906191690025', sku: 'UP-KUM-01', productName: 'Kumkum Powder', tag: 'Active-online' }] });
+  assert.equal(r.success, true, r.error);
+  const cat = rt.sheets.get('GTINCatalog');
+  assert.deepEqual(cat.rows[0].slice(0, 4), ['Timestamp', 'GTIN', 'SKU', 'Product Name']);
+  assert.equal(cat.cellFormats['2:1'], 'dd-mmm-yy hh:mm');
+  // Archive tabs: Archived At and the original Timestamp column.
+  rt.addSheet('UploadLog Archive', [['Archived At', 'Reason', 'Timestamp', 'Order ID'], ['25/11/2026 17:21:56', 'Duplicate row', new Date(2026, 10, 20), '#A1']]);
+  rt.call('applyDateFormats', { token: admin });
+  const arch = rt.sheets.get('UploadLog Archive');
+  assert.equal(arch.numberFormats[1], 'dd-mmm-yy hh:mm');
+  assert.equal(arch.numberFormats[3], 'dd-mmm-yy hh:mm');
+  assert.ok(arch.rows[1][0] instanceof Date && arch.rows[1][0].getDate() === 25, 'text date became a real date');
+});
