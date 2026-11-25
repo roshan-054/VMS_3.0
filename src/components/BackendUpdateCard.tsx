@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Server, RefreshCw, CheckCircle2, AlertTriangle, Undo2, UploadCloud } from 'lucide-react';
+import { Server, RefreshCw, CheckCircle2, AlertTriangle, Undo2, UploadCloud, Play, Wrench } from 'lucide-react';
 import { requestApi } from '../lib/api';
 import { getStoredApiUrl } from '../lib/storage';
 import { fmtDateTime } from '../lib/dateFormat';
@@ -17,6 +17,14 @@ interface Status {
   upToDate: boolean;
 }
 
+// Safe one-time backend functions an admin can run from here (each asks for confirmation first).
+const MAINTENANCE: { action: string; label: string; detail: string }[] = [
+  { action: 'setup', label: 'Run setup (setupSystem)', detail: 'Creates any missing sheet tabs and resets their header rows. Data rows are not touched.' },
+  { action: 'applyDateFormats', label: 'Apply DD-MMM-YY to sheet dates', detail: 'Turns text dates in the log tabs into real dates shown as DD-MMM-YY.' },
+  { action: 'repairPlaybackUrls', label: 'Repair video playback links', detail: 'Rebuilds the playback link from the Drive file ID where it is missing or wrong.' },
+  { action: 'applyConditionalFormatting', label: 'Refresh duplicate highlighting', detail: 'Re-applies the red highlight for repeated Order IDs and tidies file sizes.' },
+];
+
 const card = 'bg-white rounded-2xl border border-slate-200 shadow-xs p-5 space-y-4';
 const btn = 'inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold disabled:opacity-50 cursor-pointer';
 
@@ -29,6 +37,25 @@ export const BackendUpdateCard: React.FC<Props> = ({ onShowToast }) => {
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<{ error: string; help?: string } | null>(null);
   const [done, setDone] = useState('');
+  const [mConfirm, setMConfirm] = useState('');
+  const [mBusy, setMBusy] = useState('');
+  const [mResult, setMResult] = useState<{ action: string; ok: boolean; text: string } | null>(null);
+
+  const runMaintenance = async (action: string) => {
+    setMConfirm('');
+    setMBusy(action);
+    setMResult(null);
+    try {
+      const r: any = await requestApi(action, {});
+      const text = r?.message || (r?.success ? 'Done.' : r?.error || 'Did not finish.');
+      setMResult({ action, ok: !!r?.success, text });
+      onShowToast(text, r?.success ? 'success' : 'error');
+    } catch (e: any) {
+      setMResult({ action, ok: false, text: e?.message || 'Did not finish.' });
+    } finally {
+      setMBusy('');
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -58,7 +85,7 @@ export const BackendUpdateCard: React.FC<Props> = ({ onShowToast }) => {
     setError(null);
     setDone('');
     try {
-      const r: any = await requestApi(action, { webAppUrl: getStoredApiUrl() });
+      const r: any = await requestApi(action, { webAppUrl: getStoredApiUrl(), force: action === 'updateBackend' && !!status?.upToDate });
       if (!r?.success) {
         setError({ error: r?.error || 'The update did not finish.', help: r?.help });
         onShowToast(r?.error || 'Backend update failed.', 'error');
@@ -135,14 +162,14 @@ export const BackendUpdateCard: React.FC<Props> = ({ onShowToast }) => {
 
       <div className="flex flex-wrap items-center gap-2">
         {!confirming ? (
-          <button id="backend-update-run" type="button" disabled={!canUpdate || status?.upToDate} onClick={() => setConfirming(true)}
+          <button id="backend-update-run" type="button" disabled={!canUpdate} onClick={() => setConfirming(true)}
             className={`${btn} bg-blue-600 text-white hover:bg-blue-700`}>
             <UploadCloud className={`w-3.5 h-3.5 ${busy === 'update' ? 'animate-pulse' : ''}`} />
-            {busy === 'update' ? 'Updating…' : 'Update backend now'}
+            {busy === 'update' ? 'Updating…' : status?.upToDate ? 'Reinstall latest Code.gs' : 'Update backend now'}
           </button>
         ) : (
           <div id="backend-update-confirm" className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-slate-700">Install the latest Code.gs and switch the live web app to it?</span>
+            <span className="text-slate-700">{status?.upToDate ? 'Install the latest Code.gs again as a new version and switch the live web app to it?' : 'Install the latest Code.gs and switch the live web app to it?'}</span>
             <button id="backend-update-confirm-yes" type="button" onClick={() => run('updateBackend')} className={`${btn} bg-blue-600 text-white hover:bg-blue-700`}>Yes, update</button>
             <button type="button" onClick={() => setConfirming(false)} className={`${btn} border border-slate-200 text-slate-700 hover:bg-slate-50`}>Cancel</button>
           </div>
@@ -167,6 +194,37 @@ export const BackendUpdateCard: React.FC<Props> = ({ onShowToast }) => {
           {error.help && <div className="mt-1">{error.help}</div>}
         </div>
       )}
+
+      <div id="backend-maintenance" className="border-t border-slate-100 pt-4 space-y-2">
+        <div className="flex items-center gap-2">
+          <Wrench className="w-4 h-4 text-blue-600" />
+          <h4 className="text-xs font-bold text-slate-800">Run backend functions</h4>
+        </div>
+        {oldBackend && <p className="text-xs text-slate-500">Available after the live backend is updated.</p>}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          {MAINTENANCE.map((m) => (
+            <div key={m.action} className="rounded-xl border border-slate-200 p-3 space-y-2">
+              <div className="text-xs font-semibold text-slate-800">{m.label}</div>
+              <div className="text-[11px] text-slate-500">{m.detail}</div>
+              {mConfirm === m.action ? (
+                <div className="flex items-center gap-2">
+                  <button id={`run-${m.action}-yes`} type="button" onClick={() => runMaintenance(m.action)} className={`${btn} bg-blue-600 text-white hover:bg-blue-700`}>Yes, run</button>
+                  <button type="button" onClick={() => setMConfirm('')} className={`${btn} border border-slate-200 text-slate-700 hover:bg-slate-50`}>Cancel</button>
+                </div>
+              ) : (
+                <button id={`run-${m.action}`} type="button" disabled={!!mBusy || !!busy} onClick={() => setMConfirm(m.action)}
+                  className={`${btn} border border-slate-200 text-slate-700 hover:bg-slate-50`}>
+                  <Play className={`w-3.5 h-3.5 ${mBusy === m.action ? 'animate-pulse' : ''}`} />
+                  {mBusy === m.action ? 'Running…' : 'Run'}
+                </button>
+              )}
+              {mResult?.action === m.action && (
+                <div id={`run-${m.action}-result`} className={`text-[11px] font-medium ${mResult.ok ? 'text-emerald-700' : 'text-red-700'}`}>{mResult.text}</div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
 
       <details className="text-xs text-slate-600">
         <summary className="cursor-pointer font-semibold text-slate-700">One-time setup</summary>

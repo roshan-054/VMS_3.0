@@ -152,3 +152,12 @@ test('does not guess between several deployments that do not match the app URL',
   assert.equal(project.versions.length, 3, 'no version saved');
   assert.equal(project.files.find((f) => f.name === 'Code').source, REAL_CODE, 'code untouched');
 });
+
+test('force reinstalls the same code as a new version', () => {
+  const { rt, admin, project } = setup();
+  rt.call('updateBackend', { token: admin, webAppUrl: WEB_URL });
+  const r = rt.call('updateBackend', { token: admin, webAppUrl: WEB_URL, force: true });
+  assert.equal(r.success, true, r.error);
+  assert.equal(r.versionNumber, 5);
+  assert.equal(project.deployments[1].deploymentConfig.versionNumber, 5);
+});

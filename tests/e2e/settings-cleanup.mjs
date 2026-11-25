@@ -38,6 +38,21 @@ rt.sandbox.runSheetCleanup_ = (p) => { rounds++; return orig({ ...p, budgetMs: 0
 const EXPECT = ORDERS * (COPIES - 1) + 1; // repeats + failed upload
 const results = [];
 const check = (name, ok, detail) => results.push({ check: name, pass: !!ok, detail: String(detail).slice(0, 140) });
+// Hold the first round's reply for a few seconds so the live progress bars can be seen.
+const baseHandle = backend.handle;
+let held = 0;
+backend.handle = async (route) => {
+  const body = route.request().postData() || '';
+  if (body.includes('"runSheetCleanup"') && held++ === 0) {
+    const r = route.request();
+    // Run it now (so progress is written), answer later.
+    let out;
+    try { out = rt.sandbox.doPost({ postData: { contents: body }, parameter: {} }).text; } catch (e) { out = JSON.stringify({ success: false, error: String(e) }); }
+    await new Promise((res) => setTimeout(res, 5000));
+    return route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: out });
+  }
+  return baseHandle(route);
+};
 const browser = await chromium.launch();
 for (const mode of ['light', 'dark']) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
@@ -61,6 +76,13 @@ for (const mode of ['light', 'dark']) {
   await page.locator('#sheet-cleanup-run').click();
   check('asks for confirmation first', await page.locator('#sheet-cleanup-confirm').isVisible() && rounds === 0, rounds);
   await page.locator('#sheet-cleanup-confirm-yes').click();
+  await page.locator('#sheet-cleanup-progress-rows').waitFor({ timeout: 5000 }).catch(() => {});
+  await page.waitForTimeout(3500);
+  const rowsBar = await page.locator('#sheet-cleanup-progress-rows').innerText().catch(() => '');
+  const vidBar = await page.locator('#sheet-cleanup-progress-videos').innerText().catch(() => '');
+  check('rows progress bar shows live count', /Removing rows[\s\S]*[1-9][\d,]* \/ \d+ · \d+%/.test(rowsBar), rowsBar.replace(/\s+/g, ' '));
+  check('Drive Trash progress bar shows videos moved', new RegExp(`${ORDERS * 3} / ${ORDERS * 3} · 100%`).test(vidBar), vidBar.replace(/\s+/g, ' '));
+  await page.locator('#sheet-cleanup-card').screenshot({ path: SHOT + '/settings-cleanup-progress.png' });
   await page.locator('#sheet-cleanup-result').waitFor({ timeout: 60000 });
   const res = await page.locator('#sheet-cleanup-result').innerText();
   check('result reports removed rows', res.includes(String(EXPECT)), res);

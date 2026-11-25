@@ -72,6 +72,25 @@ const browser = await chromium.launch();
   await page.locator('#backend-update-rollback').click();
   await page.waitForFunction(() => /v7/.test(document.querySelector('#backend-update-result')?.textContent || '') || /7 again/.test(document.querySelector('#backend-update-result')?.textContent || ''), null, { timeout: 15000 }).catch(() => {});
   check('rollback moved deployment back to v7', project.deployments[0].deploymentConfig.versionNumber === 7, project.deployments[0].deploymentConfig.versionNumber);
+  // Up to date: the button stays usable as a reinstall.
+  await page.locator('#backend-update-check').click();
+  await page.waitForFunction(() => document.querySelector('#backend-update-status')?.textContent === 'Up to date', null, { timeout: 15000 }).catch(() => {});
+  const runBtn = page.locator('#backend-update-run');
+  check('up to date: button still enabled as Reinstall', (await runBtn.isEnabled()) && /Reinstall/.test(await runBtn.innerText()), await runBtn.innerText());
+  await runBtn.click();
+  await page.locator('#backend-update-confirm-yes').click();
+  await page.waitForFunction(() => /version 9/.test(document.querySelector('#backend-update-result')?.textContent || ''), null, { timeout: 30000 }).catch(() => {});
+  check('reinstall saved a new version and deployed it', project.deployments[0].deploymentConfig.versionNumber === 9, project.deployments[0].deploymentConfig.versionNumber);
+  // Backend functions.
+  for (const a of ['setup', 'applyDateFormats', 'repairPlaybackUrls', 'applyConditionalFormatting']) {
+    await page.locator(`#run-${a}`).click();
+    await page.locator(`#run-${a}-yes`).click();
+    await page.locator(`#run-${a}-result`).waitFor({ timeout: 60000 }).catch(() => {});
+    const txt = await page.locator(`#run-${a}-result`).innerText().catch(() => '');
+    const ok = await page.locator(`#run-${a}-result`).evaluate((el) => el.className.includes('emerald')).catch(() => false);
+    check(`run ${a}`, ok, txt);
+  }
+  await page.locator('#backend-update-card').screenshot({ path: SHOT + '/backend-run-buttons.png' });
   await page.close();
 }
 
