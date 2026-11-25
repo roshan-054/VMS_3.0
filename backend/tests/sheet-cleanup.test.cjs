@@ -127,3 +127,26 @@ test('live progress reports videos moved and rows removed (admin only)', () => {
   assert.equal(p.videosDone, r.videosTrashedCount + r.videosFailedCount);
   assert.ok(p.videosTotal > 0 && p.rowsTotal >= p.rowsDone);
 });
+
+test('archived rows can be listed and put back exactly as they were (admin only)', () => {
+  const { rt, admin, packer, orders } = setup();
+  rt.call('runSheetCleanup', { token: admin });
+  assert.equal(rt.call('listCleanupArchive', { token: packer }).success, false);
+  const list = rt.call('listCleanupArchive', { token: admin });
+  assert.equal(list.success, true, list.error);
+  const ol = list.rows.filter((r) => r.sheet === 'OrderLog');
+  assert.equal(ol.length, 1, 'OrderLog duplicate archived');
+  assert.equal(ol[0].orderId, '#OD-6831');
+  assert.ok(ol[0].sizeBytes > 40 * 1048576);
+  const before = rt.sheets.get('OrderLog').rows.length;
+  const r = rt.call('restoreCleanupArchive', { token: admin, items: [{ sheet: 'OrderLog', archiveRow: ol[0].archiveRow }] });
+  assert.equal(r.success, true, r.error);
+  assert.equal(r.restored, 1);
+  const rows = rt.sheets.get('OrderLog').rows;
+  assert.equal(rows.length, before + 1);
+  const back = rows[rows.length - 1];
+  assert.deepEqual(back.slice(1), orders[1].slice(1), 'same values as the removed row');
+  assert.equal(rt.sheets.get('OrderLog').cellFormats[rows.length + ':1'], 'dd-mmm-yy hh:mm');
+  assert.equal(rt.sheets.get('OrderLog Archive').rows.length, 1, 'row left the Archive tab');
+  assert.equal(rt.call('listCleanupArchive', { token: admin }).rows.filter((x) => x.sheet === 'OrderLog').length, 0);
+});

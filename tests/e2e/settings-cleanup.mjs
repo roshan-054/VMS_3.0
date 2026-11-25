@@ -94,6 +94,22 @@ for (const mode of ['light', 'dark']) {
   check('extra copies moved to Drive Trash, kept videos untouched', trashed.size === ORDERS * 3 && ![...trashed].some((id) => /^FILE_\d+_0_/.test(id)), trashed.size);
   check('rescan shows nothing left', /Rows to remove\s*0/.test(await page.locator('#sheet-cleanup-preview').innerText()), '');
   await page.screenshot({ path: SHOT + '/settings-cleanup-done.png', fullPage: true });
+  // Archived rows: list, pick the real videos, put them back.
+  await page.locator('#archived-rows-refresh').click();
+  await page.waitForFunction(() => document.querySelectorAll('#archived-rows-table tbody tr').length > 0, null, { timeout: 30000 }).catch(() => {});
+  const listed = await page.locator('#archived-rows-table tbody tr').count();
+  check('archived rows listed', listed === EXPECT, listed);
+  const dateCell = await page.locator('#archived-rows-table tbody tr').first().locator('td').nth(4).innerText();
+  check('archived dates DD-MMM-YY', /^\d{2}-[A-Z][a-z]{2}-\d{2} \d{2}:\d{2}$/.test(dateCell), dateCell);
+  await page.locator('#archived-select-videos').click();
+  const before = rt.sheets.get('UploadLog').rows.length;
+  await page.locator('#archived-restore').click();
+  await page.locator('#archived-restore-yes').click();
+  await page.locator('#archived-restore-result').waitFor({ timeout: 30000 });
+  const back = rt.sheets.get('UploadLog').rows.length - before;
+  check('restore put the video rows back', back === EXPECT - 1, back);
+  check('restored rows left the Archive tab', rt.sheets.get('UploadLog Archive').rows.length === 2, rt.sheets.get('UploadLog Archive').rows.length);
+  await page.locator('#archived-rows-card').screenshot({ path: SHOT + '/archived-rows.png' });
   await page.close();
 }
 await browser.close();

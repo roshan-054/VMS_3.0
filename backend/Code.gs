@@ -77,7 +77,8 @@ const ADMIN_ACTIONS = [
   'applyConditionalFormatting', 'saveBranding', 'uploadBrandingImage', 'checkDriveFolder',
   'getStationQueues', 'getDriveStorage', 'applyDateFormats',
   'scanSheetCleanup', 'runSheetCleanup',
-  'getBackendUpdateStatus', 'updateBackend', 'rollbackBackend', 'getSheetCleanupProgress'
+  'getBackendUpdateStatus', 'updateBackend', 'rollbackBackend', 'getSheetCleanupProgress',
+  'listCleanupArchive', 'restoreCleanupArchive'
 ];
 
 function doPost(e) {
@@ -148,6 +149,8 @@ function doPost(e) {
       case 'scanSheetCleanup': return output_(scanSheetCleanup_(p));
       case 'runSheetCleanup': return output_(runSheetCleanup_(p));
       case 'getSheetCleanupProgress': return output_(getSheetCleanupProgress_());
+      case 'listCleanupArchive': return output_(listCleanupArchive_(p));
+      case 'restoreCleanupArchive': return output_(restoreCleanupArchive_(p));
       case 'applyDateFormats': return output_(applySheetDateFormats_(true));
       case 'getBackendUpdateStatus': return output_(getBackendUpdateStatus_(p));
       case 'updateBackend': return output_(updateBackend_(p));
@@ -259,7 +262,7 @@ function videoRootFolderId_() {
   if (!id) id = scriptProps_().getProperty('PARENT_FOLDER_ID') || CONFIG.HARDWIRED_PARENT_FOLDER_ID;
   // Always show the setting in the Branding tab, so the folder can be changed right there.
   if (sh && !hasRow) {
-    try { sh.appendRow(['VideoDriveFolderId', id, new Date(), VIDEO_FOLDER_SETTING_HELP_]); } catch (_) {}
+    try { logAppend_(sh, ['VideoDriveFolderId', id, new Date(), VIDEO_FOLDER_SETTING_HELP_]); } catch (_) {}
   }
   cache.put(VIDEO_ROOT_CACHE_KEY, id, VIDEO_ROOT_CACHE_SECONDS_);
   return id;
@@ -567,15 +570,15 @@ function createBrandingTabOnly() {
   const bVals = sh.getDataRange().getValues();
   const existingKeys = new Set(bVals.map(r => String(r[0] || '').trim()));
   const now = new Date();
-  if (!existingKeys.has('AppName')) sh.appendRow(['AppName', 'VMS 3.0', now, 'Application Display Name']);
-  if (!existingKeys.has('AppSubtitle')) sh.appendRow(['AppSubtitle', 'Order Packing System', now, 'Workstation Subtitle']);
-  if (!existingKeys.has('LogoUrl')) sh.appendRow(['LogoUrl', '', now, 'Logo Image URL or Drive Direct Link']);
-  if (!existingKeys.has('FaviconUrl')) sh.appendRow(['FaviconUrl', '', now, 'Browser Favicon URL or Drive Direct Link']);
-  if (!existingKeys.has('BrandingFolderId')) sh.appendRow(['BrandingFolderId', '', now, 'Google Drive Folder for Brand Assets']);
+  if (!existingKeys.has('AppName')) logAppend_(sh, ['AppName', 'VMS 3.0', now, 'Application Display Name']);
+  if (!existingKeys.has('AppSubtitle')) logAppend_(sh, ['AppSubtitle', 'Order Packing System', now, 'Workstation Subtitle']);
+  if (!existingKeys.has('LogoUrl')) logAppend_(sh, ['LogoUrl', '', now, 'Logo Image URL or Drive Direct Link']);
+  if (!existingKeys.has('FaviconUrl')) logAppend_(sh, ['FaviconUrl', '', now, 'Browser Favicon URL or Drive Direct Link']);
+  if (!existingKeys.has('BrandingFolderId')) logAppend_(sh, ['BrandingFolderId', '', now, 'Google Drive Folder for Brand Assets']);
   if (!existingKeys.has('VideoDriveFolderId') && !existingKeys.has('DriveFolderId')) {
-    sh.appendRow(['VideoDriveFolderId', CONFIG.HARDWIRED_PARENT_FOLDER_ID || '', now, VIDEO_FOLDER_SETTING_HELP_]);
+    logAppend_(sh, ['VideoDriveFolderId', CONFIG.HARDWIRED_PARENT_FOLDER_ID || '', now, VIDEO_FOLDER_SETTING_HELP_]);
   }
-  if (!existingKeys.has('LastBrandingSync')) sh.appendRow(['LastBrandingSync', now.toISOString(), now, 'Last Synchronization Timestamp']);
+  if (!existingKeys.has('LastBrandingSync')) logAppend_(sh, ['LastBrandingSync', now.toISOString(), now, 'Last Synchronization Timestamp']);
 
   SpreadsheetApp.flush();
   Logger.log('==================================================');
@@ -637,15 +640,15 @@ function setupSystem() {
       const bVals = brandSh.getDataRange().getValues();
       const existingKeys = new Set(bVals.map(r => String(r[0] || '').trim()));
       const now = new Date();
-      if (!existingKeys.has('AppName')) brandSh.appendRow(['AppName', 'VMS 3.0', now, 'Application Display Name']);
-      if (!existingKeys.has('AppSubtitle')) brandSh.appendRow(['AppSubtitle', 'Order Packing System', now, 'Workstation Subtitle']);
-      if (!existingKeys.has('LogoUrl')) brandSh.appendRow(['LogoUrl', '', now, 'Logo Image URL or Drive Direct Link']);
-      if (!existingKeys.has('FaviconUrl')) brandSh.appendRow(['FaviconUrl', '', now, 'Browser Favicon URL or Drive Direct Link']);
-      if (!existingKeys.has('BrandingFolderId')) brandSh.appendRow(['BrandingFolderId', '', now, 'Google Drive Folder for Brand Assets']);
+      if (!existingKeys.has('AppName')) logAppend_(brandSh, ['AppName', 'VMS 3.0', now, 'Application Display Name']);
+      if (!existingKeys.has('AppSubtitle')) logAppend_(brandSh, ['AppSubtitle', 'Order Packing System', now, 'Workstation Subtitle']);
+      if (!existingKeys.has('LogoUrl')) logAppend_(brandSh, ['LogoUrl', '', now, 'Logo Image URL or Drive Direct Link']);
+      if (!existingKeys.has('FaviconUrl')) logAppend_(brandSh, ['FaviconUrl', '', now, 'Browser Favicon URL or Drive Direct Link']);
+      if (!existingKeys.has('BrandingFolderId')) logAppend_(brandSh, ['BrandingFolderId', '', now, 'Google Drive Folder for Brand Assets']);
       if (!existingKeys.has('VideoDriveFolderId') && !existingKeys.has('DriveFolderId')) {
-        brandSh.appendRow(['VideoDriveFolderId', CONFIG.HARDWIRED_PARENT_FOLDER_ID || '', now, VIDEO_FOLDER_SETTING_HELP_]);
+        logAppend_(brandSh, ['VideoDriveFolderId', CONFIG.HARDWIRED_PARENT_FOLDER_ID || '', now, VIDEO_FOLDER_SETTING_HELP_]);
       }
-      if (!existingKeys.has('LastBrandingSync')) brandSh.appendRow(['LastBrandingSync', now.toISOString(), now, 'Last Synchronization Timestamp']);
+      if (!existingKeys.has('LastBrandingSync')) logAppend_(brandSh, ['LastBrandingSync', now.toISOString(), now, 'Last Synchronization Timestamp']);
     } catch(bErr) {
       console.warn('Branding setup format notice:', bErr);
     }
@@ -772,7 +775,7 @@ function pruneExpiredSessions_(){
 }
 
 function securityLog_(email,action,result,details){
-  try{sheet_(CONFIG.SECURITY_LOG_SHEET).appendRow([new Date(),email,action,result,details||''])}catch(_){}
+  try{logAppend_(sheet_(CONFIG.SECURITY_LOG_SHEET), [new Date(),email,action,result,details||''])}catch(_){}
 }
 
 /* ---------- User Authentication ---------- */
@@ -862,7 +865,7 @@ function signup_(p){
     // Afterwards new accounts are Pending until an administrator approves them.
     const role=hasAdmin?'User':'Admin';
     const status=hasAdmin?'Pending':'Approved';
-    sh.appendRow([new Date(),name,email,hash_(password),role,status]);
+    logAppend_(sh, [new Date(),name,email,hash_(password),role,status]);
     securityLog_(email,'SIGNUP','SUCCESS','Registered as '+role+' ('+status+')');
     if(status!=='Approved'){
       return {success:true, pending:true, message:'Account created. An administrator must approve it before you can sign in.'};
@@ -901,7 +904,7 @@ function adminCreateUser_(p){
   if(!name||!email||password.length<6)throw new Error('Name, valid email and password (6+) are required.');
   const sh=sheet_(CONFIG.USERS_SHEET), v=sh.getDataRange().getValues();
   if(v.some((r,i)=>i>0&&String(r[2]||'').toLowerCase()===email))throw new Error('Email already exists.');
-  sh.appendRow([new Date(),name,email,hash_(password),p.role==='Admin'?'Admin':'User',p.status||'Approved']);
+  logAppend_(sh, [new Date(),name,email,hash_(password),p.role==='Admin'?'Admin':'User',p.status||'Approved']);
   return {success:true};
 }
 
@@ -1028,38 +1031,95 @@ function applySheetDateFormats_(force) {
   const cache = CacheService.getScriptCache();
   if (!force && cache.get(SHEET_DATE_FORMAT_FLAG_)) return { success: true, skipped: true };
   const ss = ss_();
-  const fixValues = [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET, CONFIG.DOWNLOAD_LOG_SHEET];
-  const formatOnly = [CONFIG.SECURITY_LOG_SHEET, CONFIG.TRASH_LOG_SHEET, CONFIG.PACK_VERIFICATION_LOG_SHEET, CONFIG.USERS_SHEET];
   const report = {};
-  fixValues.concat(formatOnly).forEach(function(name) {
-    const sh = ss.getSheetByName(name);
-    if (!sh) return;
+  // Every tab the app writes, including the cleanup Archive tabs and GTINCatalog.
+  ss.getSheets().forEach(function(sh) {
+    const name = sh.getName();
+    if (!isDateFormattedSheet_(name)) return;
+    if (name === CONFIG.GTIN_CATALOG_SHEET) { try { ensureGtinCatalogHeaders_(sh); } catch (_) {} }
     const last = sh.getLastRow();
+    const width = Math.max(sh.getLastColumn(), 1);
+    const headers = sh.getRange(1, 1, 1, width).getValues()[0];
+    const cols = sheetDateColumns_(name, headers);
     let converted = 0;
-    if (last >= 2 && fixValues.indexOf(name) !== -1) {
-      const range = sh.getRange(2, 1, last - 1, 1);
-      const vals = range.getValues();
-      let changed = false;
-      for (let i = 0; i < vals.length; i++) {
-        const v = vals[i][0];
-        if (v === '' || v === null) continue;
-        const d = rowDate_(v);
-        if (isNaN(d.getTime())) continue;
-        if (!(v instanceof Date) || v.getTime() !== d.getTime()) {
-          vals[i][0] = d;
-          changed = true;
-          converted++;
+    cols.forEach(function(col) {
+      if (last >= 2) {
+        const range = sh.getRange(2, col, last - 1, 1);
+        const vals = range.getValues();
+        let changed = false;
+        for (let i = 0; i < vals.length; i++) {
+          const v = vals[i][0];
+          if (v === '' || v === null) continue;
+          if (typeof v === 'number') continue; // plain numbers are not dates here
+          const d = rowDate_(v);
+          if (isNaN(d.getTime())) continue;
+          if (!(v instanceof Date) || v.getTime() !== d.getTime()) {
+            vals[i][0] = d;
+            changed = true;
+            converted++;
+          }
         }
+        if (changed) range.setValues(vals);
       }
-      if (changed) range.setValues(vals);
-    }
-    try {
-      sh.getRange(2, 1, Math.max(sh.getMaxRows() - 1, 1), 1).setNumberFormat(SHEET_DATE_FORMAT_);
-    } catch (e) {}
+      try { sh.getRange(2, col, Math.max(sh.getMaxRows() - 1, 1), 1).setNumberFormat(SHEET_DATE_FORMAT_); } catch (e) {}
+    });
     report[name] = converted;
   });
-  try { cache.put(SHEET_DATE_FORMAT_FLAG_, '1', 21600); } catch (_) {}
-  return { success: true, converted: report, format: 'DD-MMM-YY hh:mm' };
+  try { cache.put(SHEET_DATE_FORMAT_FLAG_, '1', 3600); } catch (_) {}
+  return { success: true, converted: report, format: 'DD-MMM-YY hh:mm', message: 'Sheet dates set to DD-MMM-YY in ' + Object.keys(report).length + ' tabs.' };
+}
+
+const DATE_FORMATTED_SHEETS_ = function() {
+  return [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET, CONFIG.DOWNLOAD_LOG_SHEET,
+    CONFIG.SECURITY_LOG_SHEET, CONFIG.TRASH_LOG_SHEET, CONFIG.PACK_VERIFICATION_LOG_SHEET, CONFIG.USERS_SHEET,
+    CONFIG.ORDER_MANIFEST_SHEET, CONFIG.GTIN_CATALOG_SHEET, CONFIG.BRANDING_SHEET];
+};
+function isDateFormattedSheet_(name) {
+  return DATE_FORMATTED_SHEETS_().indexOf(name) !== -1 || / Archive$/.test(String(name || ''));
+}
+
+/** 1-based columns that hold dates: column A of every log tab plus any column headed like a time. */
+function sheetDateColumns_(name, headers) {
+  const cols = [];
+  const h = (headers || []).map(function(x) { return String(x || '').trim().toLowerCase(); });
+  if (name !== CONFIG.BRANDING_SHEET) cols.push(1);
+  h.forEach(function(x, i) {
+    if (i === 0) return;
+    if (/^(timestamp|archived at|packed at|last updated|created|created at|updated at|date)$/.test(x)) cols.push(i + 1);
+  });
+  return cols;
+}
+
+/** appendRow, then show any date in the new row as DD-MMM-YY hh:mm (new rows don't inherit the column format). */
+function logAppend_(sh, row) {
+  sh.appendRow(row);
+  try {
+    const r = sh.getLastRow();
+    for (let i = 0; i < row.length; i++) {
+      if (row[i] instanceof Date) sh.getRange(r, i + 1).setNumberFormat(SHEET_DATE_FORMAT_);
+    }
+  } catch (_) {}
+}
+
+/** Format the date columns of rows just written with setValues. */
+function formatDateRows_(sh, startRow, count) {
+  if (!count) return;
+  try {
+    const width = Math.max(sh.getLastColumn(), 1);
+    const headers = sh.getRange(1, 1, 1, width).getValues()[0];
+    sheetDateColumns_(sh.getName(), headers).forEach(function(col) {
+      sh.getRange(startRow, col, count, 1).setNumberFormat(SHEET_DATE_FORMAT_);
+    });
+  } catch (_) {}
+}
+
+const GTIN_CATALOG_HEADERS_ = ['Timestamp','GTIN','SKU','Product Name','Short Name','Category','Image URL','Default Quantity','Notes','Tag'];
+/** Put the GTINCatalog header row back when it is blank (row 1 must never hold a product). */
+function ensureGtinCatalogHeaders_(sh) {
+  const row = sh.getRange(1, 1, 1, 10).getValues()[0];
+  const blank = row.slice(0, 9).every(function(x) { return String(x || '').trim() === ''; });
+  if (blank) sh.getRange(1, 1, 1, 10).setValues([GTIN_CATALOG_HEADERS_]);
+  return blank;
 }
 
 function completedDuplicate_(order,platform,type){
@@ -1922,7 +1982,7 @@ function safeName_(s){return String(s||'').replace(/^#+/, '').replace(/[\\/:*?"<
 
 function logUpload_(row){
   try {
-    sheet_(CONFIG.UPLOAD_LOG_SHEET).appendRow(row);
+    logAppend_(sheet_(CONFIG.UPLOAD_LOG_SHEET), row);
     SpreadsheetApp.flush();
   } catch(e) {
     console.error('Failed to log upload: ', e);
@@ -2241,6 +2301,7 @@ function startUpload_(p){
             uploadSh.getRange(i + 1, 1, 1, 15).setValues([[
               rowTs, order, platform, user.email, name, displaySize, uploadId, 'Session Created', 0, '', 'Started', '', type, source, queueJobId
             ]]);
+            formatDateRows_(uploadSh, i + 1, 1);
             updatedExisting = true;
             break;
           }
@@ -2557,7 +2618,7 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
     if (!alreadyLogged) {
       const formattedSize = formatFileSize_(s.size);
       const originalDate = s.createdAt ? new Date(s.createdAt) : new Date();
-      targetLogSheet.appendRow([
+      logAppend_(targetLogSheet, [
         originalDate,
         s.order,
         s.platform,
@@ -2572,7 +2633,7 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
         'READY'
       ]);
       try {
-        sheet_(CONFIG.DOWNLOAD_LOG_SHEET).appendRow([
+        logAppend_(sheet_(CONFIG.DOWNLOAD_LOG_SHEET), [
           originalDate,
           s.order,
           s.platform,
@@ -3006,7 +3067,7 @@ function uploadLogs_(p){
 
 function downloadLog_(p){
   const u=session_(p.token);
-  sheet_(CONFIG.DOWNLOAD_LOG_SHEET).appendRow([
+  logAppend_(sheet_(CONFIG.DOWNLOAD_LOG_SHEET), [
     new Date(),
     String(p.orderId||''),
     String(p.platform||''),
@@ -3255,7 +3316,7 @@ function deleteLogEntry_(p){
 
       // 7. Log security event for audit tracking
       try {
-        sheet_(CONFIG.SECURITY_LOG_SHEET).appendRow([
+        logAppend_(sheet_(CONFIG.SECURITY_LOG_SHEET), [
           new Date(),
           user.email,
           'DELETE_LOG_ENTRY',
@@ -3627,7 +3688,7 @@ function removeDuplicateRecords_(p) {
       trashSh = ss_().getSheetByName('TrashLog');
       if (!trashSh) {
         trashSh = ss_().insertSheet('TrashLog');
-        trashSh.appendRow([
+        logAppend_(trashSh, [
           'Archived Timestamp',
           'Original Sheet',
           'Order ID',
@@ -3718,7 +3779,7 @@ function removeDuplicateRecords_(p) {
 
                   if (trashSh) {
                     try {
-                      trashSh.appendRow([
+                      logAppend_(trashSh, [
                         new Date(),
                         dup.sheet,
                         grp.orderId,
@@ -3741,7 +3802,7 @@ function removeDuplicateRecords_(p) {
           } else if (trashSh && removeSheetEntries) {
             // Video file was same as keeper or no separate fileId, archive sheet row removal
             try {
-              trashSh.appendRow([
+              logAppend_(trashSh, [
                 new Date(),
                 dup.sheet,
                 grp.orderId,
@@ -3839,7 +3900,7 @@ function removeDuplicateRecords_(p) {
       const sheetDetails = Object.keys(removedBySheet).map(function(s) {
         return s + ': ' + removedBySheet[s];
       }).join(', ');
-      sheet_(CONFIG.SECURITY_LOG_SHEET).appendRow([
+      logAppend_(sheet_(CONFIG.SECURITY_LOG_SHEET), [
         new Date(),
         user.email,
         'DEDUPLICATE_CLEANUP_ALL_TABS',
@@ -4334,7 +4395,7 @@ function saveBrandingConfig_(p) {
       }
     }
     if (!found) {
-      sh.appendRow([key, value, now, desc || '']);
+      logAppend_(sh, [key, value, now, desc || '']);
     }
   }
 
@@ -4865,8 +4926,9 @@ function saveOrderManifest_(p) {
 
   if (targetRow > 0) {
     sh.getRange(targetRow, 1, 1, rowValues.length).setValues([rowValues]);
+    formatDateRows_(sh, targetRow, 1);
   } else {
-    sh.appendRow(rowValues);
+    logAppend_(sh, rowValues);
   }
 
   return { success: true, orderId: orderId, updated: targetRow > 0 };
@@ -5089,7 +5151,7 @@ function logPackVerification_(p) {
     log.videoDriveUrl || ''
   ];
 
-  sh.appendRow(row);
+  logAppend_(sh, row);
   return { success: true, orderId: log.orderId };
 }
 
@@ -5419,8 +5481,9 @@ function saveGtinProduct_(p) {
 
   if (targetRow > 1) {
     sh.getRange(targetRow, 1, 1, rowValues.length).setValues([rowValues]);
+    formatDateRows_(sh, targetRow, 1);
   } else {
-    sh.appendRow(rowValues);
+    logAppend_(sh, rowValues);
   }
 
   return { success: true, gtin: gtin, product: prod };
@@ -5501,6 +5564,7 @@ function saveGtinCatalogBatch_(p) {
   }
 
   var sh = getGtinCatalogSheet_();
+  ensureGtinCatalogHeaders_(sh);
   var data = sh.getDataRange().getValues();
   // Column J holds the product tag so a tag-filtered sync of this tab stays exact.
   if (data.length > 0 && !String(data[0][9] || '').trim()) {
@@ -5555,10 +5619,13 @@ function saveGtinCatalogBatch_(p) {
     var block = [updates[start]];
     while (k + 1 < rows.length && rows[k + 1] === rows[k] + 1) { k++; block.push(updates[rows[k]]); }
     sh.getRange(start + 1, 1, block.length, 10).setValues(block);
+    formatDateRows_(sh, start + 1, block.length);
     k++;
   }
   if (appended.length > 0) {
-    sh.getRange(Math.max(sh.getLastRow(), 1) + 1, 1, appended.length, 10).setValues(appended);
+    var firstNew = Math.max(sh.getLastRow(), 1) + 1;
+    sh.getRange(firstNew, 1, appended.length, 10).setValues(appended);
+    formatDateRows_(sh, firstNew, appended.length);
   }
 
   return { success: true, count: batchAdded };
@@ -6151,7 +6218,9 @@ function runSheetCleanup_(p) {
           while (orig.length < width) orig.push('');
           return [now, x.reason].concat(orig);
         });
-        arch.getRange(arch.getLastRow() + 1, 1, rowsOut.length, width + 2).setValues(rowsOut);
+        const archRow = arch.getLastRow() + 1;
+        arch.getRange(archRow, 1, rowsOut.length, width + 2).setValues(rowsOut);
+        formatDateRows_(arch, archRow, rowsOut.length);
         archived += rowsOut.length;
         entry.sh.deleteRows(run.start, run.items.length);
         done += run.items.length;
@@ -6168,7 +6237,7 @@ function runSheetCleanup_(p) {
     const done = !outOfTime && remaining <= 0;
     progress(done ? 'done' : 'rows', removed);
     try {
-      sheet_(CONFIG.SECURITY_LOG_SHEET).appendRow([new Date(), user.email, 'SHEET_CLEANUP', 'SUCCESS',
+      logAppend_(sheet_(CONFIG.SECURITY_LOG_SHEET), [new Date(), user.email, 'SHEET_CLEANUP', 'SUCCESS',
         'rowsRemoved=' + removed + ' archived=' + archived + ' videosTrashed=' + videosTrashed + ' ' + JSON.stringify(removedBySheet)]);
     } catch (_) {}
     return {
@@ -6432,4 +6501,96 @@ function rollbackBackend_(p) {
   });
   props.deleteProperty(BACKEND_SOURCE_.PROP_SHA);
   return { success: true, versionNumber: prev, previousVersion: current, message: 'The web app now runs version ' + prev + ' again.' };
+}
+
+
+// ---------------------------------------------------------------------------
+// Archived rows (Settings > Archived rows): list what the sheet cleanup moved to the
+// '<Sheet> Archive' tabs and put chosen rows back into their original tab.
+const CLEANUP_ARCHIVE_SOURCES_ = function() { return [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET]; };
+
+function archiveCols_(headers) {
+  const h = (headers || []).map(function(x) { return String(x || '').trim().toLowerCase(); });
+  const find = function(re) { return h.findIndex(function(x) { return re.test(x); }); };
+  return {
+    archivedAt: 0, reason: 1, timestamp: 2,
+    order: find(/^order id$/), platform: find(/^platform$/), type: find(/^recording type$/),
+    size: find(/^(package weight|file size)$/), fileId: find(/^(video drive id|drive file id)$/), packer: find(/^packer email$/)
+  };
+}
+
+function listCleanupArchive_(p) {
+  admin_(p.token);
+  const ss = ss_();
+  const out = [];
+  CLEANUP_ARCHIVE_SOURCES_().forEach(function(src) {
+    const arch = ss.getSheetByName(src + ' Archive');
+    if (!arch || arch.getLastRow() < 2) return;
+    const values = arch.getDataRange().getValues();
+    const c = archiveCols_(values[0]);
+    for (let i = 1; i < values.length && out.length < 5000; i++) {
+      const r = values[i];
+      if (r.every(function(x) { return x === '' || x === null; })) continue;
+      const ts = rowDate_(r[c.timestamp]);
+      const at = rowDate_(r[c.archivedAt]);
+      const size = c.size >= 0 ? String(r[c.size] || '') : '';
+      out.push({
+        sheet: src, archiveRow: i + 1,
+        archivedAt: isNaN(at.getTime()) ? String(r[c.archivedAt] || '') : at.toISOString(),
+        reason: String(r[c.reason] || ''),
+        timestamp: isNaN(ts.getTime()) ? String(r[c.timestamp] || '') : ts.toISOString(),
+        orderId: c.order >= 0 ? String(r[c.order] || '') : '',
+        platform: c.platform >= 0 ? String(r[c.platform] || '') : '',
+        recordingType: c.type >= 0 ? String(r[c.type] || '') : '',
+        size: size, sizeBytes: parseSizeBytes_(size),
+        fileId: c.fileId >= 0 ? String(r[c.fileId] || '') : '',
+        packer: c.packer >= 0 ? String(r[c.packer] || '') : ''
+      });
+    }
+  });
+  return { success: true, rows: out, count: out.length };
+}
+
+function restoreCleanupArchive_(p) {
+  const user = admin_(p.token);
+  const items = Array.isArray(p.items) ? p.items : [];
+  if (!items.length) return { success: false, error: 'Choose at least one row to restore.' };
+  return withScriptLock_(function() {
+    const ss = ss_();
+    const bySheet = {};
+    items.forEach(function(x) {
+      const src = String(x && x.sheet || '');
+      const row = Number(x && x.archiveRow);
+      if (CLEANUP_ARCHIVE_SOURCES_().indexOf(src) === -1 || !(row >= 2)) return;
+      (bySheet[src] = bySheet[src] || {})[row] = true;
+    });
+    const restoredBySheet = {};
+    let restored = 0;
+    Object.keys(bySheet).forEach(function(src) {
+      const arch = ss.getSheetByName(src + ' Archive');
+      const dest = ss.getSheetByName(src);
+      if (!arch || !dest) return;
+      const values = arch.getDataRange().getValues();
+      const destWidth = Math.max(dest.getLastColumn(), 1);
+      const rows = Object.keys(bySheet[src]).map(Number).filter(function(r) { return r <= values.length; }).sort(function(a, b) { return a - b; });
+      const back = rows.map(function(r) {
+        const orig = values[r - 1].slice(2, 2 + destWidth);
+        while (orig.length < destWidth) orig.push('');
+        return orig;
+      }).filter(function(r) { return r.some(function(x) { return x !== '' && x !== null; }); });
+      if (!back.length) return;
+      const first = dest.getLastRow() + 1;
+      dest.getRange(first, 1, back.length, destWidth).setValues(back);
+      formatDateRows_(dest, first, back.length);
+      rows.slice().reverse().forEach(function(r) { arch.deleteRow(r); });
+      restoredBySheet[src] = back.length;
+      restored += back.length;
+    });
+    SpreadsheetApp.flush();
+    try {
+      logAppend_(sheet_(CONFIG.SECURITY_LOG_SHEET), [new Date(), user.email, 'ARCHIVE_RESTORE', 'SUCCESS', 'rowsRestored=' + restored + ' ' + JSON.stringify(restoredBySheet)]);
+    } catch (_) {}
+    return { success: true, restored: restored, restoredBySheet: restoredBySheet,
+      message: restored + ' row(s) put back from the Archive tabs.' };
+  });
 }
