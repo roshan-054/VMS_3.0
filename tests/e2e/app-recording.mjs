@@ -38,6 +38,7 @@ await page.waitForFunction(() => { const v = document.querySelector('video'); re
 
 const orderId = 'E2E-ORDER-0001';
 await page.fill('#orderIdInput', orderId);
+await page.waitForTimeout(500); if (!(await page.locator('#platformSelect').inputValue())) await page.selectOption('#platformSelect', 'Amazon'); // no default platform any more
 const startBtn = page.getByRole('button', { name: /Start Recording/i }).first();
 await startBtn.click();
 await page.waitForSelector('text=/Recording \\(/', { timeout: 10000 });

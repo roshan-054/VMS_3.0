@@ -26,6 +26,7 @@ const startClick = () => page.evaluate(() => document.querySelector('#start-reco
 
 // 1. Stop, then Start hammered while the video is still being saved.
 await page.fill('#orderIdInput', '#OD-9592');
+await page.waitForTimeout(500); if (!(await page.locator('#platformSelect').inputValue())) await page.selectOption('#platformSelect', 'Amazon'); // no default platform any more
 await page.waitForTimeout(800);
 await page.locator('#start-recording-btn').click();
 await page.waitForSelector('#stop-recording-btn');
@@ -41,6 +42,7 @@ check('the one queued video has real footage', q[0] > 64 * 1024, q[0]);
 
 // 2. Same order scanned again on this computer right after.
 await page.fill('#orderIdInput', '#OD-9592');
+await page.waitForTimeout(500); if (!(await page.locator('#platformSelect').inputValue())) await page.selectOption('#platformSelect', 'Amazon'); // no default platform any more
 await page.waitForTimeout(1500);
 await startClick();
 await page.waitForTimeout(1200);
@@ -53,6 +55,7 @@ check('packer can still choose Re-record & Upload Anyway', bypass > 0, bypass);
 
 // 3. A recording stopped right after it started is discarded.
 await page.fill('#orderIdInput', 'SHORT-0001');
+await page.waitForTimeout(500); if (!(await page.locator('#platformSelect').inputValue())) await page.selectOption('#platformSelect', 'Amazon'); // no default platform any more
 await page.waitForTimeout(1500);
 await page.locator('#start-recording-btn').click();
 await page.waitForSelector('#stop-recording-btn');

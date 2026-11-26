@@ -57,6 +57,7 @@ check('picker shows chosen folder', (await page.locator('#local-backup-folder').
 async function recordOrder(orderId, seconds = 3) {
   await page.evaluate(() => (window.__vmsLastLocalSave = null));
   await page.fill('#orderIdInput', orderId);
+  await page.waitForTimeout(500); if (!(await page.locator('#platformSelect').inputValue())) await page.selectOption('#platformSelect', 'Amazon'); // no default platform any more
   await page.getByRole('button', { name: /Start Recording/i }).first().click();
   await page.waitForSelector('text=/Recording \\(/', { timeout: 20000 });
   await page.waitForTimeout(seconds * 1000);
@@ -103,6 +104,7 @@ check('upload to Drive started automatically', started > 0, `${started} startUpl
 await page.evaluate(async () => { window.__vmsLastLocalSave = null; await (await import('/src/lib/localBackup.ts')).setBackupFolder(null); });
 const dl = page.waitForEvent('download', { timeout: 30000 });
 await page.fill('#orderIdInput', 'LOCAL-TEST-002');
+await page.waitForTimeout(500); if (!(await page.locator('#platformSelect').inputValue())) await page.selectOption('#platformSelect', 'Amazon'); // no default platform any more
 await page.getByRole('button', { name: /Start Recording/i }).first().click();
 await page.waitForSelector('text=/Recording \\(/', { timeout: 20000 });
 await page.waitForTimeout(4000);

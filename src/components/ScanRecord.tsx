@@ -39,6 +39,7 @@ import {
   Boxes
 } from 'lucide-react';
 import { PlatformType, RecordingType, QueueItem, OrderManifest, ManifestItem, User } from '../types';
+import { detectPlatformFromOrderId } from '../lib/platformDetect';
 import { syncCloudBranding } from '../lib/branding';
 import { dbPutQueue, dbGetAllQueue, exceedsMaxVideoSize, formatVideoSizeLimit, getStoredVideoBitrate } from '../lib/storage';
 import { normalizeOrderId, checkDuplicate, formatOrderId } from '../lib/api';
@@ -78,7 +79,14 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
 }) => {
   const [orderId, setOrderId] = useState('');
   const [recordingType, setRecordingType] = useState<RecordingType>('Forward');
-  const [platform, setPlatform] = useState<PlatformType>('Amazon');
+  // No platform is preselected: it comes from the scanned order (or its order-list entry), or the
+  // packer picks it. Recording is blocked until there is one, so no video lands under a wrong platform.
+  const [platform, setPlatformState] = useState<PlatformType | ''>('');
+  const platformAutoRef = useRef(false); // true when the current platform was detected, not picked
+  const setPlatform = (p: PlatformType | '', auto = true) => {
+    platformAutoRef.current = auto && p !== '';
+    setPlatformState(p);
+  };
   const [customPlatform, setCustomPlatform] = useState('');
   
   const effectivePlatform = platform === 'Custom' ? customPlatform.trim() || 'Custom' : platform;
@@ -374,7 +382,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   // Debounced duplicate checker that distinguishes Forward from Return
   useEffect(() => {
     const trimmed = orderId.trim();
-    if (!trimmed || trimmed.length < 3) {
+    if (!trimmed || trimmed.length < 3 || !effectivePlatform) {
       setDuplicateStatus(null);
       setIsCheckingDup(false);
       setAllowBypassDuplicate(false);
@@ -578,28 +586,30 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       setRecordingType('Return');
     }
 
-    // Detect Platform based on standard e-commerce barcode standards
-    if (
-      lower.startsWith('amz-') ||
-      /^\d{3}-\d{7}-\d{7}$/.test(clean) ||
-      /^40\d{8,12}$/.test(clean) ||
-      /^17\d{8,12}$/.test(clean) ||
-      lower.startsWith('amazon-')
-    ) {
-      setPlatform('Amazon');
-    } else if (lower.startsWith('jio-') || lower.startsWith('jm-') || lower.startsWith('jiomart-')) {
-      setPlatform('JioMart');
-    } else if (
-      lower.startsWith('#od-') ||
-      lower.startsWith('od-') ||
-      lower.startsWith('d2c-') ||
-      lower.startsWith('w-') ||
-      lower.startsWith('fk-') ||
-      /^\d{12,16}$/.test(clean) // 12-16 digit Delhivery/Shiprocket tracking AWB
-    ) {
-      setPlatform('D2C');
-    }
+    const detected = detectPlatformFromOrderId(clean);
+    if (detected) setPlatform(detected);
+    else if (platformAutoRef.current) setPlatform(''); // the last order's detected platform does not carry over
   };
+
+  // Every new order starts without a platform (it is detected from the next scan or picked again).
+  useEffect(() => {
+    if (isRecordingRef.current) return;
+    if (!orderId.trim()) {
+      if (platform) setPlatform('');
+      return;
+    }
+    // Typed without Enter: still detect from the text once the packer pauses.
+    const t = setTimeout(() => {
+      const detected = detectPlatformFromOrderId(orderId.trim());
+      if (detected) {
+        if (detected !== platform && (platformAutoRef.current || !platform)) setPlatform(detected);
+      } else if (platformAutoRef.current && !getManifestByOrderId(orderId.trim())) {
+        setPlatform('');
+      }
+    }, 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderId]);
 
   // One entry point for every scanned / typed / pasted order code.
   // While a video is recording the order is locked: a stray scan (e.g. a product barcode) can never
@@ -1012,6 +1022,12 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       onShowToast('Scan or enter Order ID to record', 'error');
       return;
     }
+    if (!platform) {
+      setStatusMessage({ text: `Select the e-commerce platform for Order ${orderId.trim()} before recording.`, type: 'error' });
+      onShowToast('Select the e-commerce platform first', 'error');
+      try { document.getElementById('platformSelect')?.focus(); } catch (_) {}
+      return;
+    }
     if (platform === 'Custom' && !customPlatform.trim()) {
       setStatusMessage({ text: 'Please specify the Custom Platform name.', type: 'error' });
       onShowToast('Specify custom platform name', 'error');
@@ -1246,7 +1262,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       if (overLimit) {
         setOrderId('');
         setRecordingType('Forward');
-        setPlatform('Amazon');
+        setPlatform('');
         setIsRecording(false);
         return;
       }
@@ -1946,9 +1962,13 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
               <select
                 id="platformSelect"
                 value={platform}
-                onChange={(e) => setPlatform(e.target.value as PlatformType)}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={isRecording}
+                onChange={(e) => setPlatform(e.target.value as PlatformType | '', false)}
+                className={`w-full px-3 py-2 rounded-lg text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                  platform ? 'bg-slate-50 border border-slate-300 text-slate-900' : 'bg-amber-50 border border-amber-300 text-amber-900'
+                }`}
               >
+                <option value="" disabled>{orderId.trim() ? 'Select platform' : 'Scan an order to detect'}</option>
                 <option value="Amazon">Amazon</option>
                 <option value="D2C">D2C</option>
                 <option value="JioMart">JioMart</option>
@@ -1973,7 +1993,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                 Google Drive Storage Hierarchy
               </div>
               <p className="font-mono text-[11px] text-slate-600 break-all bg-white p-2 rounded border border-slate-200">
-                {backupPathParts(effectivePlatform, recordingType, new Date().toLocaleDateString('en-CA')).join(' / ')} / {orderId ? `${orderId.trim()}_${effectivePlatform}_${recordingType}.mp4` : '[OrderID]_[Platform]_[Type].mp4'}
+                {backupPathParts(effectivePlatform || '[Platform]', recordingType, new Date().toLocaleDateString('en-CA')).join(' / ')} / {orderId ? `${orderId.trim()}_${effectivePlatform || '[Platform]'}_${recordingType}.mp4` : '[OrderID]_[Platform]_[Type].mp4'}
               </p>
               <LocalBackupFolderPicker onShowToast={onShowToast} />
             </div>

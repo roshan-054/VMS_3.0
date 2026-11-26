@@ -352,6 +352,8 @@ export function normalizeOrderId(id: string | null | undefined): string {
   // Strip leading '#' (any number of them), 'no.', 'order#', 'order ', etc.
   s = s.replace(/^(?:order\s*#*|#+|no\.?\s*)/i, '');
   s = s.replace(/^[#\s]+/, '');
+  // Stray punctuation from a scanner or a paste (":408-…", "#OD-1,")
+  s = s.replace(/^[^a-z0-9#]+/, '').replace(/^#+/, '').replace(/[^a-z0-9]+$/, '');
   // Strip trailing .0 or .00 from numeric cell exports
   s = s.replace(/\.0+$/, '');
   // Remove all whitespace
@@ -369,9 +371,11 @@ export function normalizeOrderId(id: string | null | undefined): string {
 export function formatOrderId(id: string | null | undefined, platform?: string | null): string {
   if (id === null || id === undefined) return '';
   let s = String(id).replace(/[\s\u00a0\u200b\ufeff]+/g, '');
+  // Stray punctuation a scanner or paste adds around the ID (":408-3093842-5865165", "#OD-1,")
+  s = s.replace(/^[^A-Za-z0-9#]+/, '').replace(/[^A-Za-z0-9]+$/, '');
   if (!s) return '';
   const hadHash = /^#/.test(s);
-  const bare = s.replace(/^#+/, '');
+  const bare = s.replace(/^#+/, '').replace(/^[^A-Za-z0-9]+/, '');
   if (!bare) return '';
   const pf = String(platform || '').trim().toLowerCase();
   if (pf === 'd2c' || (!pf && /^od-/i.test(bare))) return '#' + bare.toUpperCase();
@@ -1183,6 +1187,7 @@ export interface OrderIdFormatResult {
   sheets: { sheet: string; rows: number }[];
   examples: { sheet: string; row: number; from: string; to: string }[];
   manifestRepeats: number;
+  packerUnresolved?: number;
   message?: string;
   error?: string;
 }
