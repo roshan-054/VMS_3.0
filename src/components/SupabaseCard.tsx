@@ -3,7 +3,7 @@ import { Database, RefreshCw, CheckCircle2, AlertTriangle, Copy, UploadCloud, Do
 import { requestApi } from '../lib/api';
 import { getStoredToken } from '../lib/storage';
 import { fmtDateTime } from '../lib/dateFormat';
-import { getSupabaseConfig, isSupabaseOffHere, setSupabaseOffHere } from '../lib/supabase/client';
+import { getSupabaseConfig, isSupabaseOffHere, setSupabaseOffHere, normalizeSupabaseUrl } from '../lib/supabase/client';
 import { supabaseRouteStatus, resetSupabaseCopy } from '../lib/supabase/router';
 import { downloadBackup, REFERENCE_TABS } from '../lib/supabase/backup';
 
@@ -80,7 +80,7 @@ export const SupabaseCard: React.FC<Props> = ({ onShowToast }) => {
     setNote('');
     try {
       const r: any = await requestApi('saveSupabaseConfig', enabled
-        ? { url: form.url.trim(), anonKey: form.anonKey.trim(), serviceKey: form.serviceKey.trim(), enabled: true }
+        ? { url: normalizeSupabaseUrl(form.url) || form.url.trim(), anonKey: form.anonKey.trim(), serviceKey: form.serviceKey.trim(), enabled: true }
         : { enabled: false });
       setCfg(r as Config);
       setForm((f) => ({ ...f, serviceKey: '' }));
@@ -217,6 +217,9 @@ export const SupabaseCard: React.FC<Props> = ({ onShowToast }) => {
             <label className="space-y-1">
               <span className="font-semibold text-slate-600">Project URL</span>
               <input id="supabase-url" className={input} placeholder="https://abcd1234.supabase.co" value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} />
+              {form.url.trim() && (normalizeSupabaseUrl(form.url)
+                ? (normalizeSupabaseUrl(form.url) !== form.url.trim() && <span id="supabase-url-hint" className="block text-[11px] text-slate-500">Will use {normalizeSupabaseUrl(form.url)}</span>)
+                : <span id="supabase-url-hint" className="block text-[11px] text-red-600">This doesn't look like a Supabase Project URL.</span>)}
             </label>
             <label className="space-y-1">
               <span className="font-semibold text-slate-600">anon / publishable key</span>
