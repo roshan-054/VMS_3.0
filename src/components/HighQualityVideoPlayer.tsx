@@ -417,7 +417,7 @@ export const HighQualityVideoPlayer: React.FC<HighQualityVideoPlayerProps> = ({
           <div className="flex items-center gap-2 min-w-0">
             <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
             <span className="font-bold text-xs text-slate-100 tracking-wide truncate">
-              {title || `Order #${orderId}`}
+              {title || `Order #${String(orderId || '').replace(/^#+/, '')}`}
             </span>
           </div>
 

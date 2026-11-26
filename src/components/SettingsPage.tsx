@@ -3,6 +3,7 @@ import { Eraser, RefreshCw, Archive, AlertTriangle, CheckCircle2 } from 'lucide-
 import { BackendUpdateCard } from './BackendUpdateCard';
 import { SupabaseCard, BackupCard } from './SupabaseCard';
 import { ArchivedRowsCard } from './ArchivedRowsCard';
+import { OrderIdFormatCard } from './OrderIdFormatCard';
 import { scanSheetCleanup, runSheetCleanup, getSheetCleanupProgress, SheetCleanupScan, SheetCleanupResult, SheetCleanupLiveProgress } from '../lib/api';
 
 interface Props {
@@ -261,6 +262,8 @@ export const SettingsPage: React.FC<Props> = ({ onShowToast }) => {
           </div>
         )}
       </section>
+
+      <OrderIdFormatCard onShowToast={onShowToast} />
 
       <ArchivedRowsCard onShowToast={onShowToast} />
 

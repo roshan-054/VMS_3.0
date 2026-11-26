@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { PlatformType, RecordingType, QueueItem } from '../types';
 import { dbPutQueue, getStoredDriveFolderId, manualFileCache, exceedsMaxVideoSize, formatVideoSizeLimit } from '../lib/storage';
-import { checkDuplicate, requestApi } from '../lib/api';
+import { checkDuplicate, requestApi, formatOrderId } from '../lib/api';
 import { triggerUploadWorker } from '../lib/uploadWorker';
 
 interface ManualUploadProps {
@@ -301,7 +301,7 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
 
         const effectivePlatform =
           item.platform === 'Custom' ? item.customPlatform?.trim() || 'Custom' : item.platform;
-        const cleanOrderId = item.orderId.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+        const cleanOrderId = formatOrderId(item.orderId, item.platform === 'Custom' ? item.customPlatform : item.platform).replace(/^#+/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
         const cleanPlatform = effectivePlatform.replace(/[^a-zA-Z0-9_-]/g, '_');
         const extMatch = item.file.name.match(/\.[a-zA-Z0-9]+$/);
         const ext = extMatch ? extMatch[0].toLowerCase() : '.mp4';
@@ -324,7 +324,7 @@ export const ManualUpload: React.FC<ManualUploadProps> = ({ onQueueUpdated, onSh
         const queueItem: QueueItem = {
           id: itemId,
           createdAt: Date.now(),
-          orderId: item.orderId.trim(),
+          orderId: formatOrderId(item.orderId, effectivePlatform),
           platform: effectivePlatform,
           recordingType: item.recordingType,
           fileName: fileName,

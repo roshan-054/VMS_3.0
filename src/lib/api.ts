@@ -68,6 +68,8 @@ const ACTION_TIMEOUT_MS: Record<string, number> = {
   rollbackBackend: 120000,
   scanSheetCleanup: 120000,
   runSheetCleanup: 300000,
+  scanOrderIdFormat: 120000,
+  fixOrderIdFormat: 300000,
   listCleanupArchive: 120000,
   restoreCleanupArchive: 120000,
   setup: 120000,
@@ -347,12 +349,39 @@ export async function checkBackendHealth(customUrl?: string): Promise<{
 export function normalizeOrderId(id: string | null | undefined): string {
   if (!id) return '';
   let s = String(id).trim().toLowerCase();
-  // Strip leading '#', 'no.', 'order#', 'order ', etc.
-  s = s.replace(/^(?:order\s*#?|#|no\.?\s*)/i, '');
+  // Strip leading '#' (any number of them), 'no.', 'order#', 'order ', etc.
+  s = s.replace(/^(?:order\s*#*|#+|no\.?\s*)/i, '');
+  s = s.replace(/^[#\s]+/, '');
   // Strip trailing .0 or .00 from numeric cell exports
   s = s.replace(/\.0+$/, '');
   // Remove all whitespace
   return s.replace(/\s+/g, '');
+}
+
+/**
+ * The one way an order ID is written anywhere (Sheet, Supabase, file names).
+ * - Every space is removed (leading, trailing and in the middle).
+ * - D2C orders always carry exactly one leading '#': "OD-10063", "##OD-10063", " # OD-10063 " -> "#OD-10063".
+ *   When the platform is unknown, an "OD-" order is treated as D2C.
+ * - Other platforms keep what was typed, except a run of leading '#' becomes one.
+ * Keep in step with canonicalOrderId_ in backend/Code.gs.
+ */
+export function formatOrderId(id: string | null | undefined, platform?: string | null): string {
+  if (id === null || id === undefined) return '';
+  let s = String(id).replace(/[\s\u00a0\u200b\ufeff]+/g, '');
+  if (!s) return '';
+  const hadHash = /^#/.test(s);
+  const bare = s.replace(/^#+/, '');
+  if (!bare) return '';
+  const pf = String(platform || '').trim().toLowerCase();
+  if (pf === 'd2c' || (!pf && /^od-/i.test(bare))) return '#' + bare.toUpperCase();
+  return (hadHash ? '#' : '') + bare;
+}
+
+/** Order ID for labels such as "Order #OD-10063": never shows two '#'. */
+export function orderLabel(id: string | null | undefined): string {
+  const bare = String(id || '').trim().replace(/^#+/, '');
+  return bare ? '#' + bare : '';
 }
 
 export async function checkDuplicate(meta: {
@@ -1145,6 +1174,31 @@ export interface SheetCleanupResult {
   videosTrashedCount: number;
   videosFailedCount: number;
   done: boolean;
+}
+
+export interface OrderIdFormatResult {
+  success: boolean;
+  total: number;
+  fixed?: number;
+  sheets: { sheet: string; rows: number }[];
+  examples: { sheet: string; row: number; from: string; to: string }[];
+  manifestRepeats: number;
+  message?: string;
+  error?: string;
+}
+
+/** Settings: how many order IDs are not in the standard format (#OD-10063 for D2C, no spaces). */
+export async function scanOrderIdFormat(): Promise<OrderIdFormatResult> {
+  const res: any = await requestApi<OrderIdFormatResult>('scanOrderIdFormat', {});
+  if (!res || res.success === false) throw new Error(res?.error || 'Could not check order IDs.');
+  return res as OrderIdFormatResult;
+}
+
+/** Settings: rewrite those order ID cells in place. Never adds or removes rows. */
+export async function fixOrderIdFormat(): Promise<OrderIdFormatResult> {
+  const res: any = await requestApi<OrderIdFormatResult>('fixOrderIdFormat', {});
+  if (!res || res.success === false) throw new Error(res?.error || 'Could not fix order IDs.');
+  return res as OrderIdFormatResult;
 }
 
 export async function scanSheetCleanup(): Promise<SheetCleanupScan> {

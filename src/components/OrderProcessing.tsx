@@ -72,7 +72,7 @@ import {
   ReconciledVideoMatch
 } from '../lib/manifestStorage';
 import { getDirectImageUrl } from '../lib/branding';
-import { requestApi } from '../lib/api';
+import { requestApi, formatOrderId } from '../lib/api';
 import { isAdmin, isMasterAdmin } from '../lib/permissions';
 import { SmartProductImage } from './SmartProductImage';
 import { fmtDate, fmtTime, fmtDateTime } from '../lib/dateFormat';
@@ -413,7 +413,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
     const newManifest: OrderManifest = {
       id: 'manifest-' + Date.now(),
-      orderId: orderId.trim().toUpperCase(),
+      orderId: formatOrderId(orderId, effectivePlatform).toUpperCase(),
       platform: effectivePlatform as PlatformType,
       assignedPackerName: assignedName,
       assignedPackerEmail: assignedPackerEmail.trim().toLowerCase(),
@@ -656,7 +656,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     e.preventDefault();
     if (!editingManifest) return;
 
-    const trimmedOrderId = editingManifest.orderId.trim();
+    const trimmedOrderId = formatOrderId(editingManifest.orderId, editingManifest.platform).toUpperCase();
     if (!trimmedOrderId) {
       onShowToast('Order ID cannot be empty', 'error');
       return;
@@ -1684,6 +1684,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                   required
                   value={orderId}
                   onChange={(e) => setOrderId(e.target.value)}
+                  onBlur={() => setOrderId((v) => formatOrderId(v, platform === 'Custom' ? customPlatform : platform).toUpperCase())}
                   placeholder="e.g. 402-1234567-8901234"
                   className="w-full pl-3.5 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-mono font-bold text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500 transition shadow-inner"
                 />
@@ -1701,7 +1702,11 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                   <button
                     key={p}
                     type="button"
-                    onClick={() => setPlatform(p)}
+                    onClick={() => {
+                      setPlatform(p);
+                      // Picking D2C after typing the ID still gives it its single '#'.
+                      setOrderId((v) => (v.trim() ? formatOrderId(v, p === 'Custom' ? customPlatform : p).toUpperCase() : v));
+                    }}
                     className={`py-2 text-xs font-bold rounded-xl border transition cursor-pointer text-center ${
                       platform === p
                         ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
