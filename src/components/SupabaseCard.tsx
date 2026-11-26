@@ -192,7 +192,19 @@ export const SupabaseCard: React.FC<Props> = ({ onShowToast }) => {
       {cfg && connected && Number(cfg.status?.schemaVersion || 0) < 2 && (
         <div id="supabase-schema-old" className="flex gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
           <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-          <div>The database script has a newer version. Click <b>Copy database script</b>, paste it in the Supabase SQL Editor and click <b>Run</b> to turn on live station status. Your data is kept.</div>
+          <div className="space-y-2">
+            <div>The database script has a newer version. Copy it, paste it in the Supabase SQL Editor and click <b>Run</b> to turn on live station status. Your data is kept.</div>
+            <div className="flex flex-wrap gap-2">
+              <button id="supabase-copy-sql-note" type="button" onClick={copySql} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-600 text-white font-semibold hover:bg-amber-700 cursor-pointer">
+                <Copy className="w-3 h-3" /> Copy database script
+              </button>
+              {projectRef && (
+                <a href={`https://supabase.com/dashboard/project/${projectRef}/sql/new`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-amber-300 bg-white text-amber-900 font-semibold hover:bg-amber-100">
+                  <ExternalLink className="w-3 h-3" /> Open SQL Editor
+                </a>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
