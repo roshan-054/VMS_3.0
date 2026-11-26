@@ -1,6 +1,7 @@
 // E2E: in Night Mode, every visible piece of text on every tab is readable against what is
 // behind it (WCAG contrast >= 3), and no large light panels are left over.
 // Dev server on :5179, then node tests/e2e/dark-mode-contrast.mjs  (SHOTS=dir to save screenshots)
+// MODE=light checks the light theme the same way (text contrast only).
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
@@ -8,18 +9,19 @@ const { createMockBackend, attach, login } = require('./mockBackend.cjs');
 
 const BASE = process.env.APP_URL || 'http://localhost:5179/';
 const SHOTS = process.env.SHOTS || '';
+const NIGHT = process.env.MODE !== 'light';
 const backend = createMockBackend({ manifests: 80 });
 const ul = backend.rt.sheets.get('UploadLog');
 for (let i = 0; i < 6; i++) ul.appendRow([new Date(), `DM-${i}`, 'Amazon', 'admin@test.local', `DM-${i}.mp4`, '2 MB', `up-${i}`, i % 2 ? 'Upload failed' : 'Uploaded to Google Drive', i % 2 ? 20 : 100, i % 2 ? '' : `FILE_DM_${i}`, i % 2 ? 'Failed' : 'Completed', i % 2 ? 'Network lost' : '', 'Forward', 'UploadLog', `job-dm-${i}`]);
 
-const TABS = ['Scan & Record', 'Order Processing', 'Upload Queue', 'Upload Logs', 'Search Videos', 'Reports', 'Analytics', 'Health & Diagnostics', 'Admin & Users'];
+const TABS = ['Scan & Record', 'Order Processing', 'Upload Queue', 'Upload Logs', 'Search Videos', 'Reports', 'Analytics', 'Health & Diagnostics', 'Admin & Users', 'Settings'];
 const browser = await chromium.launch({ args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
 await attach(page, backend);
-await page.addInitScript(() => localStorage.setItem('vms_night_mode', 'true'));
+await page.addInitScript((n) => localStorage.setItem('vms_night_mode', n ? 'true' : 'false'), NIGHT);
 await login(page, BASE, backend);
 
-const scan = () => page.evaluate(() => {
+const scan = () => page.evaluate((NIGHT) => {
   // Tailwind 4 uses oklch(); let a canvas turn any CSS colour into sRGB.
   const cv = document.createElement('canvas'); cv.width = cv.height = 1;
   const cx = cv.getContext('2d', { willReadFrequently: true });
@@ -43,7 +45,7 @@ const scan = () => page.evaluate(() => {
       const c = parse(cs.backgroundColor);
       if (c && c.a > 0) { layers.push(c); if (c.a >= 0.99) break; }
     }
-    let out = { r: 11, g: 15, b: 25, a: 1 };
+    let out = NIGHT ? { r: 11, g: 15, b: 25, a: 1 } : { r: 255, g: 255, b: 255, a: 1 };
     for (let i = layers.length - 1; i >= 0; i--) out = blend(layers[i], out);
     return out;
   };
@@ -72,12 +74,12 @@ const scan = () => page.evaluate(() => {
       }
     }
     const own = parse(cs.backgroundColor);
-    if (own && own.a > 0.5 && lum(own) > 0.5 && r.width * r.height > 4000 && !el.matches('button, a, [role="button"]') ) {
+    if (NIGHT && own && own.a > 0.5 && lum(own) > 0.5 && r.width * r.height > 4000 && !el.matches('button, a, [role="button"]') ) {
       light.push({ cls: String(el.className).slice(0, 140), bg: cs.backgroundColor, size: `${Math.round(r.width)}x${Math.round(r.height)}`, text: (el.textContent || '').trim().slice(0, 40) });
     }
   }
   return { bad, light };
-});
+}, NIGHT);
 
 const report = {};
 for (const tab of TABS) {

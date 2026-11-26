@@ -11,13 +11,16 @@ const backend = createMockBackend({ manifests: 40 });
 const ul = backend.rt.sheets.get('UploadLog');
 for (let i = 0; i < 6; i++) ul.appendRow([new Date(), `DM-${i}`, 'Amazon', 'admin@test.local', `DM-${i}.mp4`, '2 MB', `up-${i}`, 'Uploaded to Google Drive', 100, `FILE_DM_${i}`, 'Completed', '', 'Forward', 'UploadLog', `job-dm-${i}`]);
 
-const TABS = ['record', 'processing', 'queue', 'logs', 'search', 'reports', 'analytics', 'health', 'admin'];
+const TABS = ['record', 'processing', 'queue', 'logs', 'search', 'reports', 'analytics', 'health', 'admin', 'settings'];
 const browser = await chromium.launch({ args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] });
 const texts = {};
 for (const mode of (process.env.MODES || 'light,dark').split(',')) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   await attach(page, backend);
   await page.addInitScript((m) => localStorage.setItem('vms_night_mode', m === 'dark' ? 'true' : 'false'), mode);
+  await page.goto(BASE);
+  await page.waitForTimeout(1500);
+  await page.screenshot({ path: `${SHOTS}/${mode}-login.png` });
   await login(page, BASE, backend);
   for (const t of TABS) {
     const nav = page.locator(`#nav-item-${t}`);
@@ -28,7 +31,9 @@ for (const mode of (process.env.MODES || 'light,dark').split(',')) {
     texts[t] = await page.locator('main').innerText().catch(() => '');
     if (t === 'admin') {
       for (const sub of ['branding', 'settings']) {
-        await page.locator(`#admin-tab-${sub}-btn`).click();
+        const btn = page.locator(`#admin-tab-${sub}-btn`);
+        if (!(await btn.count())) continue;
+        await btn.click();
         await page.waitForTimeout(800);
         await page.screenshot({ path: `${SHOTS}/${mode}-admin-${sub}.png`, fullPage: true });
       }

@@ -1377,7 +1377,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
             </span>
             <CheckCircle2 className={`w-4 h-4 ${statusFilter === 'completed' ? 'text-emerald-200' : 'text-emerald-600'}`} />
           </div>
-          <div className="text-2xl font-bold mt-1 tracking-tight text-emerald-950 dark:text-white">{stats.completed}</div>
+          <div className="text-2xl font-bold mt-1 tracking-tight text-emerald-950">{stats.completed}</div>
           <div className={`text-[11px] mt-1 font-medium ${statusFilter === 'completed' ? 'text-emerald-100' : 'text-emerald-600'}`}>
             {stats.successRate}% in Google Drive
           </div>
@@ -1398,7 +1398,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
             </span>
             <Loader2 className={`w-4 h-4 ${statusFilter === 'processing' ? 'text-blue-200' : 'text-blue-600'} ${stats.processing > 0 ? 'animate-spin' : ''}`} />
           </div>
-          <div className="text-2xl font-bold mt-1 tracking-tight text-blue-950 dark:text-white">{stats.processing}</div>
+          <div className="text-2xl font-bold mt-1 tracking-tight text-blue-950">{stats.processing}</div>
           <div className={`text-[11px] mt-1 font-medium ${statusFilter === 'processing' ? 'text-blue-100' : 'text-blue-600'}`}>
             Active chunk streams
           </div>
@@ -1419,7 +1419,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
             </span>
             <Clock className={`w-4 h-4 ${statusFilter === 'pending' ? 'text-amber-200' : 'text-amber-600'}`} />
           </div>
-          <div className="text-2xl font-bold mt-1 tracking-tight text-amber-950 dark:text-white">{stats.pending}</div>
+          <div className="text-2xl font-bold mt-1 tracking-tight text-amber-950">{stats.pending}</div>
           <div className={`text-[11px] mt-1 font-medium ${statusFilter === 'pending' ? 'text-amber-100' : 'text-amber-600'}`}>
             Waiting in queue
           </div>
@@ -1440,7 +1440,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
             </span>
             <AlertTriangle className={`w-4 h-4 ${statusFilter === 'failed' ? 'text-rose-200' : 'text-rose-600'}`} />
           </div>
-          <div className="text-2xl font-bold mt-1 tracking-tight text-rose-950 dark:text-white">{stats.failed}</div>
+          <div className="text-2xl font-bold mt-1 tracking-tight text-rose-950">{stats.failed}</div>
           <div className={`text-[11px] mt-1 font-medium ${statusFilter === 'failed' ? 'text-rose-100' : 'text-rose-600'}`}>
             Ready to retry
           </div>
