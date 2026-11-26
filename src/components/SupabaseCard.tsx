@@ -180,7 +180,7 @@ export const SupabaseCard: React.FC<Props> = ({ onShowToast }) => {
           </div>
           <div className="rounded-xl bg-slate-50 border border-slate-100 p-3">
             <dt className="text-slate-500 font-semibold">Sheet last updated</dt>
-            <dd className="mt-1 font-semibold text-slate-800">{lastSync ? fmtDateTime(lastSync) : '—'}</dd>
+            <dd className="mt-1 font-semibold text-slate-800">{lastSync ? fmtDateTime(lastSync) : Number(cfg.status.pendingSheetWrites || 0) === 0 ? 'Up to date' : '—'}</dd>
           </div>
           <div className="rounded-xl bg-slate-50 border border-slate-100 p-3">
             <dt className="text-slate-500 font-semibold">First copy</dt>
@@ -193,7 +193,7 @@ export const SupabaseCard: React.FC<Props> = ({ onShowToast }) => {
         <div id="supabase-schema-old" className="flex gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
           <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
           <div className="space-y-2">
-            <div>The database script has a newer version. Copy it, paste it in the Supabase SQL Editor and click <b>Run</b> to turn on live station status. Your data is kept.</div>
+            <div>The database script has a newer version (Supabase has version {Number(cfg.status?.schemaVersion || 1)}, this app needs version 2). Copy it, paste it in the Supabase SQL Editor as a new query, click <b>Run</b> and wait for <b>Success</b>, then click <b>Check</b> above. Your data is kept.</div>
             <div className="flex flex-wrap gap-2">
               <button id="supabase-copy-sql-note" type="button" onClick={copySql} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-600 text-white font-semibold hover:bg-amber-700 cursor-pointer">
                 <Copy className="w-3 h-3" /> Copy database script
