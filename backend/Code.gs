@@ -7123,10 +7123,27 @@ function getSupabaseConfig_() {
   return out;
 }
 
+/**
+ * Accepts the Project URL in the forms people paste: with or without https://, a trailing slash,
+ * /rest/v1, spaces or quotes, a dashboard link (supabase.com/dashboard/project/<ref>/...), or just
+ * the project ref. Returns https://<host> or '' when nothing usable is found.
+ */
+function sbNormalizeUrl_(raw) {
+  let s = String(raw == null ? '' : raw).replace(/[\s"'<>]/g, '');
+  if (!s) return '';
+  const dash = s.match(/supabase\.com\/dashboard\/project\/([a-z0-9]{10,40})/i);
+  if (dash) return 'https://' + dash[1].toLowerCase() + '.supabase.co';
+  if (/^[a-z0-9]{10,40}$/i.test(s) && !/\./.test(s)) return 'https://' + s.toLowerCase() + '.supabase.co';
+  s = s.replace(/^[a-z]+:\/\//i, '');
+  const host = s.split(/[\/?#]/)[0].replace(/:443$/, '').toLowerCase();
+  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(host)) return '';
+  return 'https://' + host;
+}
+
 function saveSupabaseConfig_(p) {
   const props = scriptProps_();
   const old = sbConfig_();
-  const url = String(p.url !== undefined ? p.url : old.url).trim().replace(/\/+$/, '');
+  const url = p.url !== undefined ? sbNormalizeUrl_(p.url) : old.url;
   const anonKey = String(p.anonKey !== undefined ? p.anonKey : old.anonKey).trim();
   const serviceKey = String(p.serviceKey || '').trim() || old.serviceKey;
   const enabled = p.enabled === undefined ? true : !!p.enabled;

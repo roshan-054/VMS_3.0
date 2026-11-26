@@ -101,3 +101,16 @@ export async function sbRpc<T = any>(fn: string, args: Record<string, unknown>, 
   }
   return body as T;
 }
+
+/** Same rules as sbNormalizeUrl_ in Code.gs: accepts the Project URL in the forms people paste. */
+export function normalizeSupabaseUrl(raw: string): string {
+  let s = String(raw ?? '').replace(/[\s"'<>]/g, '');
+  if (!s) return '';
+  const dash = s.match(/supabase\.com\/dashboard\/project\/([a-z0-9]{10,40})/i);
+  if (dash) return 'https://' + dash[1].toLowerCase() + '.supabase.co';
+  if (/^[a-z0-9]{10,40}$/i.test(s) && !/\./.test(s)) return 'https://' + s.toLowerCase() + '.supabase.co';
+  s = s.replace(/^[a-z]+:\/\//i, '');
+  const host = s.split(/[/?#]/)[0].replace(/:443$/, '').toLowerCase();
+  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(host)) return '';
+  return 'https://' + host;
+}
