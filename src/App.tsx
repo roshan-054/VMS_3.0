@@ -27,7 +27,8 @@ import {
   Smartphone,
   QrCode,
   PackagePlus,
-  Settings
+  Settings,
+  Users
 } from 'lucide-react';
 import { User, QueueItem } from './types';
 import { getStoredToken, setStoredToken, dbGetAllQueue, getStoredAutoRefreshInterval, getStoredNightMode, setStoredNightMode, clearUserCache } from './lib/storage';
@@ -59,6 +60,7 @@ const Reports = lazyNamed(() => import('./components/Reports'), 'Reports');
 const Analytics = lazyNamed(() => import('./components/Analytics'), 'Analytics');
 const SystemHealth = lazyNamed(() => import('./components/SystemHealth'), 'SystemHealth');
 const AdminPanel = lazyNamed(() => import('./components/AdminPanel'), 'AdminPanel');
+const LiveTeam = lazyNamed(() => import('./components/LiveTeam'), 'LiveTeam');
 const SettingsPage = lazyNamed(() => import('./components/SettingsPage'), 'SettingsPage');
 
 const TabLoading = () => (
@@ -75,8 +77,10 @@ import {
   canUserAccessAnalytics,
   canUserAccessHealth,
   canUserAccessAdminPanel,
-  canUserAccessSettingsPage
+  canUserAccessSettingsPage,
+  isAdmin
 } from './lib/permissions';
+import { setActivityPage } from './lib/stationActivity';
 
 export function App() {
   const [branding, setBranding] = useState<BrandingConfig>(getStoredBranding());
@@ -106,7 +110,7 @@ export function App() {
   };
 
   const [activeTab, setActiveTab] = useState<
-    'record' | 'processing' | 'queue' | 'logs' | 'search' | 'reports' | 'analytics' | 'health' | 'admin' | 'settings'
+    'record' | 'processing' | 'queue' | 'logs' | 'search' | 'reports' | 'analytics' | 'health' | 'team' | 'admin' | 'settings'
   >('record');
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -343,6 +347,7 @@ export function App() {
     ...(canUserAccessSearch(currentUser) ? [{ id: 'search', label: 'Search Videos', icon: Search }] : []),
     ...(canUserAccessReports(currentUser) ? [{ id: 'reports', label: 'Reports', icon: FileSpreadsheet }] : []),
     ...(canUserAccessAnalytics(currentUser) ? [{ id: 'analytics', label: 'Analytics', icon: BarChart3 }] : []),
+    ...(isAdmin(currentUser) ? [{ id: 'team', label: 'Live Team', icon: Users }] : []),
     ...(canUserAccessHealth(currentUser) ? [{ id: 'health', label: 'Health & Diagnostics', icon: Activity }] : []),
     ...(canUserAccessAdminPanel(currentUser) ? [{ id: 'admin', label: 'Admin & Users', icon: Shield }] : []),
     ...(canUserAccessSettingsPage(currentUser) ? [{ id: 'settings', label: 'Settings', icon: Settings }] : []),
@@ -350,6 +355,10 @@ export function App() {
   // A page this user may not see is never shown, even if it was open when access changed.
   const allowedTabs = navItems.map((n) => n.id);
   const shownTab = allowedTabs.includes(activeTab) ? activeTab : (allowedTabs[0] as typeof activeTab | undefined);
+  const shownLabel = navItems.find((n) => n.id === shownTab)?.label || '';
+  // Live Team page: which page this user has open. (Plain call, not a hook: this runs after the
+  // signed-out early return. It only notifies when the page actually changes.)
+  setActivityPage(shownLabel);
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col md:flex-row text-slate-800">
@@ -674,6 +683,8 @@ export function App() {
           {shownTab === 'analytics' && <Analytics onShowToast={showToast} userKey={currentUser?.email} />}
 
           {shownTab === 'health' && <SystemHealth onShowToast={showToast} />}
+
+          {shownTab === 'team' && <LiveTeam onShowToast={showToast} />}
 
           {shownTab === 'admin' && (
             <AdminPanel onShowToast={showToast} currentUser={currentUser} />

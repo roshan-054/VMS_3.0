@@ -6,6 +6,7 @@
 import { requestApi, requestAppsScript } from './api';
 import { dbGetAllQueue, getStoredToken } from './storage';
 import { reportStationToSupabase, stationSupabaseUsable } from './supabase/stations';
+import { ACTIVITY_EVENT, getStationActivity, noteAction } from './stationActivity';
 import { getRecordingInProgress, getWorkerStatus, subscribeWorkerStatus } from './uploadWorker';
 import type { QueueItem } from '../types';
 
@@ -73,6 +74,7 @@ async function sendNow(): Promise<void> {
       recording: getRecordingInProgress(),
       online: typeof navigator === 'undefined' ? true : navigator.onLine,
       worker: getWorkerStatus().activeStage || '',
+      activity: getStationActivity(),
     };
     const key = JSON.stringify(payload);
     if (key === lastPayload && Date.now() - lastSentAt < HEARTBEAT_MS) return;
@@ -105,6 +107,12 @@ export function startStationReporter(): () => void {
   const onChange = () => schedule(Math.max(0, (stationSupabaseUsable() ? MIN_GAP_SUPABASE_MS : MIN_GAP_MS) - (Date.now() - lastSentAt)));
   window.addEventListener('ops_queue_updated', onChange);
   window.addEventListener('ops_upload_finished', onChange);
+  window.addEventListener(ACTIVITY_EVENT, onChange);
+  const onUploaded = (e: Event) => {
+    const id = (e as CustomEvent).detail?.orderId;
+    if (id) noteAction('Uploaded video ' + id);
+  };
+  window.addEventListener('ops_upload_finished', onUploaded);
   const unsub = subscribeWorkerStatus(onChange);
   schedule(1000);
   return () => {
@@ -113,6 +121,8 @@ export function startStationReporter(): () => void {
     timer = null;
     window.removeEventListener('ops_queue_updated', onChange);
     window.removeEventListener('ops_upload_finished', onChange);
+    window.removeEventListener(ACTIVITY_EVENT, onChange);
+    window.removeEventListener('ops_upload_finished', onUploaded);
     unsub();
   };
 }

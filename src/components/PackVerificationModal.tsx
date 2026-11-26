@@ -1,3 +1,4 @@
+import { setActivityOrder } from '../lib/stationActivity';
 import { closeOnBackdrop } from '../lib/backdrop';
 import React, { useState, useEffect, useRef } from 'react';
 import {
@@ -139,6 +140,12 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
     manifest.assignedPackerEmail.toLowerCase().trim() === currentUser.email.toLowerCase().trim();
 
   const isAssignedToCurrent = isDirectlyAssigned || adminOverride;
+
+  // Live Team page: this user is packing (checking items of) this order.
+  useEffect(() => {
+    setActivityOrder(manifest.orderId, 'packing');
+    return () => setActivityOrder('', '');
+  }, [manifest.orderId]);
 
   // Keep input focused so USB scanner keystrokes land automatically
   useEffect(() => {

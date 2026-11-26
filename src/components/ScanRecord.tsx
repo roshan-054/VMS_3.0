@@ -1,3 +1,5 @@
+import { setActivityOrder, noteAction } from '../lib/stationActivity';
+import { isStationRecording } from '../lib/recordingState';
 import { closeOnBackdrop } from '../lib/backdrop';
 import React, { useState, useRef, useEffect } from 'react';
 import {
@@ -78,6 +80,10 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   onClearInitialOrderId,
 }) => {
   const [orderId, setOrderId] = useState('');
+  // Live Team page: the order on screen while this user scans (recording sets its own state).
+  useEffect(() => {
+    if (!isStationRecording()) setActivityOrder(orderId, 'scanning');
+  }, [orderId]);
   const [recordingType, setRecordingType] = useState<RecordingType>('Forward');
   // No platform is preselected: it comes from the scanned order (or its order-list entry), or the
   // packer picks it. Recording is blocked until there is one, so no video lands under a wrong platform.
@@ -1093,6 +1099,8 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
 
     // Pause background Drive upload chunk encoding while recording so main thread & IndexedDB stay 100% dedicated to video capture
     setRecordingInProgress(true);
+    setActivityOrder(orderId, 'recording');
+    noteAction('Started recording ' + orderId.trim());
 
     // Request Screen Wake Lock so the OS/browser does not dim or throttle timers during long packing recordings
     try {
@@ -1306,6 +1314,8 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       bypassDuplicateRef.current = false;
 
       await dbPutQueue(queueItem);
+      noteAction('Saved video ' + meta.orderId);
+      setActivityOrder('', '');
       // Resume background uploads now that recording has completed and the new file is safely persisted
       setRecordingInProgress(false);
 

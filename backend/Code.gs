@@ -75,7 +75,7 @@ const ADMIN_ACTIONS = [
   'scanDuplicates', 'scanDuplicateRecords', 'cleanDuplicates', 'removeDuplicates', 'removeDuplicateRecords',
   'scanOlder', 'scanOlderVideos', 'deleteOlder', 'deleteOlderVideos',
   'applyConditionalFormatting', 'saveBranding', 'uploadBrandingImage', 'checkDriveFolder',
-  'getStationQueues', 'getDriveStorage', 'applyDateFormats',
+  'getStationQueues', 'getTeamActivity', 'getDriveStorage', 'applyDateFormats',
   'scanSheetCleanup', 'runSheetCleanup', 'scanOrderIdFormat', 'fixOrderIdFormat',
   'getBackendUpdateStatus', 'updateBackend', 'rollbackBackend', 'getSheetCleanupProgress',
   'listCleanupArchive', 'restoreCleanupArchive',
@@ -153,6 +153,7 @@ function doPost(e) {
       case 'getVideoChunk': return output_(getVideoChunk_(p));
       case 'reportStationQueue': return output_(reportStationQueue_(p));
       case 'getStationQueues': return output_(getStationQueues_(p));
+      case 'getTeamActivity': return output_(getTeamActivity_(p));
       case 'getDriveStorage': return output_(getDriveStorage_(p));
       case 'scanSheetCleanup': return output_(scanSheetCleanup_(p));
       case 'runSheetCleanup': return output_(runSheetCleanup_(p));
@@ -836,7 +837,7 @@ const ACTION_PERMISSIONS_ = {
   scanSheetCleanup: 'canManageSettings', runSheetCleanup: 'canManageSettings', getSheetCleanupProgress: 'canManageSettings',
   listCleanupArchive: 'canManageSettings', restoreCleanupArchive: 'canManageSettings',
   getBackendUpdateStatus: 'canManageSettings', updateBackend: 'canManageSettings', rollbackBackend: 'canManageSettings',
-  getStationQueues: 'admin'
+  getStationQueues: 'admin', getTeamActivity: 'admin'
 };
 
 function roleDefaultPermissions_(role){
@@ -4881,6 +4882,93 @@ function cleanQueueItem_(it) {
   };
 }
 
+/** What the user is doing right now (page, order on screen, last action): short text only. */
+function cleanActivity_(a) {
+  if (!a || typeof a !== 'object') return null;
+  const str = function(v, n) { return String(v == null ? '' : v).slice(0, n); };
+  const state = str(a.state, 20);
+  return {
+    page: str(a.page, 40), orderId: str(a.orderId, 80),
+    state: ['scanning', 'recording', 'packing'].indexOf(state) !== -1 ? state : '',
+    lastAction: str(a.lastAction, 160), lastActionAt: Number(a.lastActionAt) || 0
+  };
+}
+
+/**
+ * Admins: every approved user's work today (recordings, uploads, packed orders) and their last
+ * logged action, for the Live Team page. Reads only the newest rows of each log.
+ */
+function getTeamActivity_(p) {
+  admin_(p.token);
+  const tz = Session.getScriptTimeZone();
+  const now = new Date();
+  const today = Utilities.formatDate(now, tz, 'yyyy-MM-dd');
+  const dayOf = function(v) {
+    const d = rowDate_(v);
+    return d instanceof Date && !isNaN(d.getTime()) ? Utilities.formatDate(d, tz, 'yyyy-MM-dd') : '';
+  };
+  const users = {};
+  const userRows = ss_().getSheetByName(CONFIG.USERS_SHEET || 'Users');
+  if (userRows) {
+    userRows.getDataRange().getValues().slice(1).forEach(function(r) {
+      const email = normalize_(r[2]);
+      if (!email || String(r[5] || '').toLowerCase() !== 'approved') return;
+      users[email] = { email: String(r[2]).trim(), name: String(r[1] || '').trim() || String(r[2]).trim(), role: String(r[4] || 'User'),
+        today: { recorded: 0, returns: 0, uploaded: 0, uploadFailed: 0, packed: 0 }, lastAction: '', lastActionAt: 0 };
+    });
+  }
+  const touch = function(email, at, text) {
+    const u = users[normalize_(email)];
+    if (!u || !at) return null;
+    const t = at.getTime();
+    if (t > u.lastActionAt) { u.lastActionAt = t; u.lastAction = text; }
+    return u;
+  };
+  const MAX_ROWS = 6000;
+  const scan = function(name, fn) {
+    const sh = ss_().getSheetByName(name);
+    if (!sh) return;
+    const last = sh.getLastRow();
+    if (last < 2) return;
+    const start = Math.max(2, last - MAX_ROWS + 1);
+    const width = Math.max(1, sh.getLastColumn());
+    sh.getRange(start, 1, last - start + 1, width).getValues().forEach(fn);
+  };
+  [['OrderLog', 'recorded'], ['ReturnLog', 'returns']].forEach(function(t) {
+    scan(t[0], function(r) {
+      const at = rowDate_(r[0]);
+      if (!(at instanceof Date) || isNaN(at.getTime())) return;
+      const u = touch(r[3], at, 'Recorded ' + (t[1] === 'returns' ? 'return ' : '') + String(r[1] || ''));
+      if (u && dayOf(at) === today) u.today[t[1]]++;
+    });
+  });
+  scan('UploadLog', function(r) {
+    const at = rowDate_(r[0]);
+    if (!(at instanceof Date) || isNaN(at.getTime())) return;
+    const st = String(r[10] || '').toLowerCase();
+    const u = touch(r[3], at, (st === 'completed' ? 'Uploaded ' : st === 'failed' ? 'Upload failed ' : 'Uploading ') + String(r[1] || ''));
+    if (u && dayOf(at) === today) {
+      if (st === 'completed') u.today.uploaded++;
+      else if (st === 'failed') u.today.uploadFailed++;
+    }
+  });
+  scan('PackVerificationLog', function(r) {
+    const at = rowDate_(r[0]);
+    if (!(at instanceof Date) || isNaN(at.getTime())) return;
+    const st = String(r[7] || '').toUpperCase();
+    const u = touch(r[5], at, (st === 'MATCHED' ? 'Packed ' : 'Pack check ' + st.toLowerCase() + ' ') + String(r[1] || ''));
+    if (u && st === 'MATCHED' && dayOf(at) === today) u.today.packed++;
+  });
+  scan('SecurityLog', function(r) {
+    const at = rowDate_(r[0]);
+    if (!(at instanceof Date) || isNaN(at.getTime())) return;
+    if (String(r[2] || '').toUpperCase() === 'LOGIN' && String(r[3] || '').toUpperCase() === 'SUCCESS') touch(r[1], at, 'Signed in');
+  });
+  const list = Object.keys(users).map(function(k) { return users[k]; })
+    .sort(function(a, b) { return String(a.name).localeCompare(String(b.name)); });
+  return { success: true, date: today, users: list, serverTime: now.getTime() };
+}
+
 /** The station's own totals (whole queue), so admins see the same numbers as the packer. */
 function cleanQueueCounts_(c) {
   if (!c || typeof c !== 'object') return null;
@@ -4906,6 +4994,7 @@ function reportStationQueue_(p) {
     worker: String(p.worker || '').slice(0, 200),
     items: items,
     counts: cleanQueueCounts_(p.counts),
+    activity: cleanActivity_(p.activity),
     reportedAt: now
   };
   const cache = CacheService.getScriptCache();

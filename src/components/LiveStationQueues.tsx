@@ -3,6 +3,7 @@ import { Radio, Upload, Clock, AlertTriangle, CheckCircle2, Video, WifiOff } fro
 import { requestApi, requestAppsScript } from '../lib/api';
 import { getStoredToken } from '../lib/storage';
 import type { StationQueueItem, StationQueueCounts } from '../lib/stationReporter';
+import type { StationActivity } from '../lib/stationActivity';
 import { listStationsFromSupabase, mergeStationReports, stationSupabaseUsable } from '../lib/supabase/stations';
 
 export interface StationReport {
@@ -15,6 +16,7 @@ export interface StationReport {
   worker: string;
   items: StationQueueItem[];
   counts?: StationQueueCounts | null;
+  activity?: StationActivity | null;
   reportedAt?: number;
 }
 
@@ -78,17 +80,15 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 /**
- * Admin view of every packing station's own upload queue, refreshed every 5 seconds: what is
- * uploading right now (with progress), what is waiting, and what failed (with the reason).
+ * Every station's latest report, kept fresh: Supabase checked every second when set up, Apps
+ * Script every 5 s otherwise (and every 15 s alongside Supabase for stations that fell back).
  */
-export const LiveStationQueues: React.FC<{ onStations?: (stations: StationReport[]) => void }> = ({ onStations }) => {
+export function useStationReports(onStations?: (stations: StationReport[]) => void) {
   const [stations, setStations] = useState<StationReport[] | null>(null);
   const [error, setError] = useState('');
-  const [showDone, setShowDone] = useState(false);
+  const [viaSupabase, setViaSupabase] = useState(false);
   const onStationsRef = useRef(onStations);
   onStationsRef.current = onStations;
-
-  const [viaSupabase, setViaSupabase] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -147,6 +147,17 @@ export const LiveStationQueues: React.FC<{ onStations?: (stations: StationReport
       clearTimeout(timer);
     };
   }, []);
+  return { stations, error, viaSupabase };
+}
+
+/**
+ * Admin view of every packing station's own upload queue, refreshed every 5 seconds: what is
+ * uploading right now (with progress), what is waiting, and what failed (with the reason).
+ */
+export const LiveStationQueues: React.FC<{ onStations?: (stations: StationReport[]) => void }> = ({ onStations }) => {
+  const { stations, error, viaSupabase } = useStationReports(onStations);
+  const [showDone, setShowDone] = useState(false);
+
 
   const totals = (stations || []).map(stationCounts).reduce(
     (t, c) => ({ waiting: t.waiting + c.waiting, uploading: t.uploading + c.uploading, failed: t.failed + c.failed }),
