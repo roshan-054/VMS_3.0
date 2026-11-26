@@ -1354,10 +1354,10 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
             id="camera-status-chip"
             className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border whitespace-nowrap shrink-0 transition ${
               isRecording
-                ? 'bg-red-50 text-red-700 border-red-200 animate-pulse dark:bg-red-950/80 dark:text-red-300 dark:border-red-800'
+                ? 'bg-red-50 text-red-700 border-red-200 animate-pulse'
                 : isCameraActive
-                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/80 dark:text-emerald-300 dark:border-emerald-800'
-                : 'bg-slate-100 text-slate-600 border border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'
+                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                : 'bg-slate-100 text-slate-600 border border-slate-200'
             }`}
           >
             <span
