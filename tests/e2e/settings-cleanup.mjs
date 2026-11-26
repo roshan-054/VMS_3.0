@@ -94,7 +94,8 @@ for (const mode of ['light', 'dark']) {
   check('extra copies moved to Drive Trash, kept videos untouched', trashed.size === ORDERS * 3 && ![...trashed].some((id) => /^FILE_\d+_0_/.test(id)), trashed.size);
   check('rescan shows nothing left', /Rows to remove\s*0/.test(await page.locator('#sheet-cleanup-preview').innerText()), '');
   await page.screenshot({ path: SHOT + '/settings-cleanup-done.png', fullPage: true });
-  // Archived rows: list, pick the real videos, put them back.
+  // Archived rows: nothing shown until Refresh; then list, pick the real videos, put them back.
+  check('archived rows hidden until Refresh', await page.locator('#archived-rows-hidden').isVisible() && (await page.locator('#archived-rows-table').count()) === 0, '');
   await page.locator('#archived-rows-refresh').click();
   await page.waitForFunction(() => document.querySelectorAll('#archived-rows-table tbody tr').length > 0, null, { timeout: 30000 }).catch(() => {});
   const listed = await page.locator('#archived-rows-table tbody tr').count();
@@ -110,6 +111,8 @@ for (const mode of ['light', 'dark']) {
   check('restore put the video rows back', back === EXPECT - 1, back);
   check('restored rows left the Archive tab', rt.sheets.get('UploadLog Archive').rows.length === 2, rt.sheets.get('UploadLog Archive').rows.length);
   await page.locator('#archived-rows-card').screenshot({ path: SHOT + '/archived-rows.png' });
+  await page.locator('#archived-rows-hide').click();
+  check('Hide clears the list', (await page.locator('#archived-rows-table').count()) === 0 && await page.locator('#archived-rows-hidden').isVisible(), '');
   await page.close();
 }
 await browser.close();

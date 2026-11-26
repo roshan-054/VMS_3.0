@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArchiveRestore, RefreshCw } from 'lucide-react';
+import React, { useCallback, useMemo, useState } from 'react';
+import { ArchiveRestore, EyeOff, RefreshCw } from 'lucide-react';
 import { requestApi } from '../lib/api';
 import { fmtDateTime } from '../lib/dateFormat';
 
@@ -51,7 +51,8 @@ export const ArchivedRowsCard: React.FC<Props> = ({ onShowToast }) => {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  // Nothing is read until Refresh is clicked, so Settings opens fast and the list stays out of the way.
+  const hide = () => { setRows(null); setSelected(new Set()); setConfirming(false); setDone(''); setError(''); setSheet('All'); };
 
   const shown = useMemo(() => (rows || []).filter((r) => sheet === 'All' || r.sheet === sheet), [rows, sheet]);
   const sheets = useMemo(() => Array.from(new Set((rows || []).map((r) => r.sheet))), [rows]);
@@ -85,14 +86,20 @@ export const ArchivedRowsCard: React.FC<Props> = ({ onShowToast }) => {
           {rows && <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">{rows.length.toLocaleString()}</span>}
         </div>
         <div className="flex items-center gap-2">
-          <select value={sheet} onChange={(e) => setSheet(e.target.value)} className="text-xs border border-slate-200 rounded-lg px-2 py-2 bg-white">
+          {rows && <select value={sheet} onChange={(e) => setSheet(e.target.value)} className="text-xs border border-slate-200 rounded-lg px-2 py-2 bg-white">
             <option value="All">All tabs</option>
             {sheets.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
+          </select>}
           <button id="archived-rows-refresh" type="button" onClick={load} disabled={loading || restoring}
             className={`${btn} border border-slate-200 text-slate-700 hover:bg-slate-50`}>
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> {rows ? 'Refresh' : 'Refresh to show'}
           </button>
+          {rows && (
+            <button id="archived-rows-hide" type="button" onClick={hide} disabled={loading || restoring}
+              className={`${btn} border border-slate-200 text-slate-700 hover:bg-slate-50`}>
+              <EyeOff className="w-3.5 h-3.5" /> Hide
+            </button>
+          )}
         </div>
       </div>
       <p className="text-xs text-slate-600">Rows removed by the cleanup are kept in the Archive tabs. Tick rows and restore them to their original tab.</p>
@@ -154,6 +161,7 @@ export const ArchivedRowsCard: React.FC<Props> = ({ onShowToast }) => {
           </div>
         </>
       )}
+      {!rows && !loading && !error && <p id="archived-rows-hidden" className="text-xs text-slate-500">Hidden. Click Refresh to show the archived rows.</p>}
       {rows && rows.length === 0 && <p className="text-xs text-slate-500">No archived rows.</p>}
       {done && <div id="archived-restore-result" className="text-xs text-emerald-700 font-medium">{done}</div>}
       {error && <div className="text-xs text-red-700">{error}</div>}
