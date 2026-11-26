@@ -38,7 +38,6 @@ import {
 import { HighQualityVideoPlayer } from './HighQualityVideoPlayer';
 import { LiveStationQueues, type StationReport } from './LiveStationQueues';
 import { User, UploadLogItem, QueueItem, PlatformType, RecordingType } from '../types';
-import { CleanDuplicatesModal } from './CleanDuplicatesModal';
 import { fetchUploadLogs, deleteLogEntry, formatFileSize, fetchDriveFileSize, normalizeOrderId, orderLabel } from '../lib/api';
 import { dbGetAllQueue, dbPutQueue, dbDeleteQueueItem, getStoredDriveFolderId, getStoredAutoRefreshInterval, manualFileCache } from '../lib/storage';
 import { canUserDeleteData } from '../lib/permissions';
@@ -209,7 +208,6 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
   const [selectedLog, setSelectedLog] = useState<UploadLogItem | null>(null);
   const [isResolvingSize, setIsResolvingSize] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [showCleanDuplicatesModal, setShowCleanDuplicatesModal] = useState(false);
   const canDelete = currentUser ? canUserDeleteData(currentUser) : true;
   const isAdminViewer = currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin';
 
@@ -1298,18 +1296,6 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
             <Download className="w-3.5 h-3.5 text-slate-600" />
             Export CSV
           </button>
-
-          {canDelete && (
-            <button
-              id="clean-duplicates-btn"
-              onClick={() => setShowCleanDuplicatesModal(true)}
-              className="px-3.5 py-2 bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 rounded-xl text-xs font-semibold transition inline-flex items-center gap-1.5 shadow-2xs cursor-pointer"
-              title="Remove duplicate videos from Drive (safe date-series Trash folder) and duplicate entries from Sheet"
-            >
-              <Trash2 className="w-3.5 h-3.5 text-purple-600" />
-              Clean Duplicates
-            </button>
-          )}
 
           <button
             id="refresh-logs-btn"
@@ -2583,14 +2569,6 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
           </div>
         </div>
       )}
-
-      {/* Dedicated Clean Duplicates Modal */}
-      <CleanDuplicatesModal
-        isOpen={showCleanDuplicatesModal}
-        onClose={() => setShowCleanDuplicatesModal(false)}
-        onShowToast={onShowToast}
-        onCleanSuccess={() => loadData(true)}
-      />
 
       {/* In-App Confirmation Modal: Purge Interrupted / Stale Upload Rows */}
       {showPurgeModal && (
