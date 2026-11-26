@@ -1,3 +1,4 @@
+import { queueCounts } from '../lib/queueCounts';
 import { closeOnBackdrop } from '../lib/backdrop';
 import React, { useState, useEffect } from 'react';
 import {
@@ -418,6 +419,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
   ).length;
   const pendingCount = queue.filter((i) => i.status === 'pending' || i.status === 'uploading').length;
   const completedCount = queue.filter((i) => i.status === 'completed').length;
+  const ownCounts = queueCounts(queue);
 
   return (
     <div id="upload-queue-container" className="space-y-6">
@@ -586,6 +588,14 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
           </div>
         </div>
       )}
+
+      {/* Same numbers the admin sees for this station (Upload Logs > Live packer stations). */}
+      <div id="station-own-counts" className="flex flex-wrap items-center gap-1.5 text-[11px] font-semibold" data-station-counts={`${ownCounts.waiting}/${ownCounts.uploading}/${ownCounts.failed}`}>
+        <span className="text-slate-500 font-medium">This station:</span>
+        <span className="px-2 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-200">{ownCounts.waiting} waiting</span>
+        <span className="px-2 py-0.5 rounded-full border bg-blue-50 text-blue-700 border-blue-200">{ownCounts.uploading} uploading</span>
+        <span className="px-2 py-0.5 rounded-full border bg-rose-50 text-rose-700 border-rose-200">{ownCounts.failed} failed</span>
+      </div>
 
       {/* Filter Tabs & Queue Statistics Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">

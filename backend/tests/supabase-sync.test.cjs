@@ -83,7 +83,7 @@ test('Supabase sync with the Google Sheet', async (t) => {
   rt.props.set('SUPABASE_SERVICE_KEY', sb.serviceKey); rt.props.set('SUPABASE_ENABLED', 'true');
   const cfg = rt.call('getSupabaseConfig', { token: login0.token });
   assert.equal(cfg.connected, true, JSON.stringify(cfg));
-  assert.equal(cfg.status.schemaVersion, 1);
+  assert.equal(cfg.status.schemaVersion, 2);
 
   // --- branding tells every station where Supabase is (anon key only)
   const br = rt.call('getBranding', {});
@@ -190,6 +190,32 @@ test('Supabase sync with the Google Sheet', async (t) => {
   rt.sandbox.sbSyncTick();
   pull = await rpc(sb, 'vms_pull', { p_token: login.token, p_tabs: ['DownloadLog'] });
   assert.ok(pull.rows.some((r) => r.v[1] === 'ORD-2'));
+
+  // --- live station status: a packer writes its own report, only admins can read the reports
+  const ptoken = 'packer-token-for-station-test';
+  const phash = require('crypto').createHash('sha256').update(ptoken).digest('hex');
+  await rpc(sb, 'vms_session_put', { p_token_hash: phash, p_email: 'Vineet@vms.test', p_name: 'Vineet', p_role: 'User', p_expires_at: new Date(Date.now() + 3600e3).toISOString() }, sb.serviceKey);
+  const report = { email: 'someone-else@vms.test', items: [{ id: 'q1', orderId: 'A-1', status: 'uploading', progress: 40 }], counts: { waiting: 10, uploading: 2, failed: 1, duplicate: 0, completed: 3, total: 16 }, recording: false, online: true, worker: '' };
+  const put = await rpc(sb, 'vms_station_report', { p_token: ptoken, p_report: report });
+  assert.ok(put.version > 0 && put.reportedAt > 0);
+  await assert.rejects(rpc(sb, 'vms_station_list', { p_token: ptoken }), /VMS_FORBIDDEN/, 'packers cannot read other stations');
+  await assert.rejects(rpc(sb, 'vms_station_report', { p_token: 'nope', p_report: report }), /VMS_AUTH/);
+  await assert.rejects(rpc(sb, 'vms_station_report', { p_token: ptoken, p_report: [1] }), /VMS_BAD_REQUEST/);
+  let list = await rpc(sb, 'vms_station_list', { p_token: login.token, p_since: 0 });
+  assert.equal(list.changed, true);
+  assert.equal(list.stations.length, 1);
+  assert.equal(list.stations[0].email, 'vineet@vms.test', 'stored under the signed-in email, not the one in the report');
+  assert.equal(list.stations[0].name, 'Vineet');
+  assert.deepEqual(list.stations[0].counts, report.counts);
+  const same = await rpc(sb, 'vms_station_list', { p_token: login.token, p_since: list.version });
+  assert.equal(same.changed, false);
+  assert.equal(same.stations, undefined, 'nothing sent again when nothing changed');
+  await rpc(sb, 'vms_station_report', { p_token: ptoken, p_report: { ...report, counts: { ...report.counts, uploading: 1, completed: 4 } } });
+  list = await rpc(sb, 'vms_station_list', { p_token: login.token, p_since: list.version });
+  assert.equal(list.changed, true);
+  assert.equal(list.stations.length, 1, 'one row per station');
+  assert.equal(list.stations[0].counts.uploading, 1);
+  await assert.rejects(rpc(sb, 'vms_station_list', { p_token: login.token }, 'wrong-key'), (e) => e.status === 401 || e.status === 403);
 
   // --- signing out removes the Supabase copy of the session
   rt.call('logout', { token: login.token });

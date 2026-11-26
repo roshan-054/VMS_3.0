@@ -77,11 +77,22 @@ create table if not exists vms_private.state (
   updated_at timestamptz not null default clock_timestamp()
 );
 
+-- Live status of each packing station's upload queue (one row per signed-in packer).
+create sequence if not exists vms_private.station_seq;
+create table if not exists vms_private.stations (
+  email       text primary key,
+  name        text not null default '',
+  report      jsonb not null default '{}'::jsonb,
+  reported_at timestamptz not null default clock_timestamp(),
+  version     bigint not null default nextval('vms_private.station_seq')
+);
+
 alter table vms_private.tabs     enable row level security;
 alter table vms_private.rows     enable row level security;
 alter table vms_private.sessions enable row level security;
 alter table vms_private.outbox   enable row level security;
 alter table vms_private.state    enable row level security;
+alter table vms_private.stations enable row level security;
 revoke all on all tables in schema vms_private from public;
 revoke all on all sequences in schema vms_private from public;
 do $$ begin
@@ -365,7 +376,7 @@ end $$;
 create or replace function vms_private.status_json() returns jsonb
 language sql stable security definer set search_path = vms_private, public as $$
   select jsonb_build_object(
-    'schemaVersion', 1,
+    'schemaVersion', 2,
     'now', now(),
     'tabs', coalesce((select jsonb_object_agg(tab, n) from (select tab, count(*) n from vms_private.rows where deleted_at is null group by tab) x), '{}'::jsonb),
     'pendingSheetWrites', (select count(*) from vms_private.outbox),
@@ -560,6 +571,42 @@ begin
     'total', (select count(*) from vms_private.rows where tab = p_tab and deleted_at is null), 'now', now());
 end $$;
 
+-- A station reports its own upload queue (any signed-in user; always stored under their own email).
+create or replace function public.vms_station_report(p_token text, p_report jsonb)
+returns jsonb
+language plpgsql volatile security definer set search_path = vms_private, public as $$
+declare u vms_private.sessions; v bigint;
+begin
+  u := vms_private.auth_session(p_token);
+  if p_report is null or jsonb_typeof(p_report) <> 'object' then raise exception 'VMS_BAD_REQUEST: report must be an object'; end if;
+  if octet_length(p_report::text) > 400000 then raise exception 'VMS_BAD_REQUEST: report too large'; end if;
+  v := nextval('vms_private.station_seq');
+  insert into vms_private.stations as s (email, name, report, reported_at, version)
+  values (lower(u.email), coalesce(nullif(u.name, ''), u.email), p_report, clock_timestamp(), v)
+  on conflict (email) do update set name = excluded.name, report = excluded.report,
+    reported_at = excluded.reported_at, version = excluded.version;
+  return jsonb_build_object('reportedAt', (extract(epoch from clock_timestamp()) * 1000)::bigint, 'version', v);
+end $$;
+
+-- Administrators: every station's latest report. Cheap when nothing changed since p_since.
+create or replace function public.vms_station_list(p_token text, p_since bigint default 0)
+returns jsonb
+language plpgsql stable security definer set search_path = vms_private, public as $$
+declare u vms_private.sessions; v bigint; nowms bigint;
+begin
+  u := vms_private.auth_session(p_token);
+  if not vms_private.is_admin(u.role) then raise exception 'VMS_FORBIDDEN: Administrator permission required.'; end if;
+  nowms := (extract(epoch from clock_timestamp()) * 1000)::bigint;
+  select coalesce(max(version), 0) into v from vms_private.stations where reported_at > now() - interval '6 hours';
+  if v = coalesce(p_since, 0) then
+    return jsonb_build_object('version', v, 'changed', false, 'serverTime', nowms);
+  end if;
+  return jsonb_build_object('version', v, 'changed', true, 'serverTime', nowms, 'stations', coalesce((
+    select jsonb_agg(s.report || jsonb_build_object('email', s.email, 'name', s.name,
+             'reportedAt', (extract(epoch from s.reported_at) * 1000)::bigint) order by s.email)
+      from vms_private.stations s where s.reported_at > now() - interval '6 hours'), '[]'::jsonb));
+end $$;
+
 create or replace function public.vms_now()
 returns timestamptz language sql stable as $$ select now() $$;
 
@@ -585,6 +632,8 @@ begin
     execute 'grant execute on function public.vms_export(text, text, double precision, int) to anon';
     execute 'grant execute on function public.vms_status(text) to anon';
     execute 'grant execute on function public.vms_now() to anon';
+    execute 'grant execute on function public.vms_station_report(text, jsonb) to anon';
+    execute 'grant execute on function public.vms_station_list(text, bigint) to anon';
   end if;
 
   -- ... and Apps Script (service_role / secret key) gets the sync functions.
