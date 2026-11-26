@@ -76,7 +76,7 @@ const ADMIN_ACTIONS = [
   'scanOlder', 'scanOlderVideos', 'deleteOlder', 'deleteOlderVideos',
   'applyConditionalFormatting', 'saveBranding', 'uploadBrandingImage', 'checkDriveFolder',
   'getStationQueues', 'getDriveStorage', 'applyDateFormats',
-  'scanSheetCleanup', 'runSheetCleanup',
+  'scanSheetCleanup', 'runSheetCleanup', 'scanOrderIdFormat', 'fixOrderIdFormat',
   'getBackendUpdateStatus', 'updateBackend', 'rollbackBackend', 'getSheetCleanupProgress',
   'listCleanupArchive', 'restoreCleanupArchive',
   'getSupabaseConfig', 'saveSupabaseConfig', 'supabaseImport', 'supabaseSweep', 'setUserPermissions'
@@ -156,6 +156,8 @@ function doPost(e) {
       case 'getDriveStorage': return output_(getDriveStorage_(p));
       case 'scanSheetCleanup': return output_(scanSheetCleanup_(p));
       case 'runSheetCleanup': return output_(runSheetCleanup_(p));
+      case 'scanOrderIdFormat': return output_(fixOrderIdFormat_(p, false));
+      case 'fixOrderIdFormat': return output_(fixOrderIdFormat_(p, true));
       case 'getSheetCleanupProgress': return output_(getSheetCleanupProgress_());
       case 'listCleanupArchive': return output_(listCleanupArchive_(p));
       case 'restoreCleanupArchive': return output_(restoreCleanupArchive_(p));
@@ -1254,12 +1256,32 @@ function normalize_(v){return String(v||'').trim().toLowerCase()}
 function normalizeOrderId_(v){
   if(v===null||v===undefined)return '';
   let s = String(v).trim().toLowerCase();
-  // Strip leading '#', 'no.', 'order#', 'order ', etc.
-  s = s.replace(/^(?:order\s*#?|#|no\.?\s*)/i, '');
+  // Strip leading '#' (any number of them), 'no.', 'order#', 'order ', etc.
+  s = s.replace(/^(?:order\s*#*|#+|no\.?\s*)/i, '');
+  s = s.replace(/^[#\s]+/, '');
   // Strip trailing .0 or .00 from numeric cell exports
   s = s.replace(/\.0+$/, '');
   // Remove all whitespace
   return s.replace(/\s+/g, '');
+}
+/**
+ * The one way an order ID is written to any tab.
+ * - Every space is removed (leading, trailing and in the middle).
+ * - D2C orders always carry exactly one leading '#': "OD-10063", "##OD-10063", " # OD-10063 " -> "#OD-10063".
+ *   When the platform is unknown, an "OD-" order is treated as D2C.
+ * - Other platforms keep what was typed, except a run of leading '#' becomes one.
+ * Keep in step with formatOrderId in src/lib/api.ts.
+ */
+function canonicalOrderId_(v, platform){
+  if(v===null||v===undefined)return '';
+  let s = String(v).replace(/[\s\u00a0\u200b\ufeff]+/g, '');
+  if(!s)return '';
+  const hadHash = /^#/.test(s);
+  const bare = s.replace(/^#+/, '');
+  if(!bare)return '';
+  const pf = String(platform||'').trim().toLowerCase();
+  if(pf==='d2c' || (!pf && /^od-/i.test(bare))) return '#' + bare.toUpperCase();
+  return (hadHash ? '#' : '') + bare;
 }
 function key_(order,platform,type){return [normalizeOrderId_(order),normalize_(platform),normalize_(type||'Forward')].join('||')}
 
@@ -1545,7 +1567,7 @@ function completedDuplicate_(order,platform,type){
 }
 
 function checkDuplicateOrder_(p){
-  const order = String(p.orderId || '').trim();
+  const order = canonicalOrderId_(p.orderId, p.platform);
   const platform = String(p.platform || '').trim();
   const type = String(p.recordingType || 'Forward').trim();
   if (!order) return { success: true, isDuplicate: false };
@@ -2461,8 +2483,8 @@ function releaseGlobalUploadSlot_(uploadId) {
 /* ---------- Start Upload Session ---------- */
 function startUpload_(p){
   const user = session_(p.token);
-  const order = String(p.orderId||'').trim();
   const platform = String(p.platform||'').trim();
+  const order = canonicalOrderId_(p.orderId, platform);
   const type = String(p.recordingType||'Forward').trim();
   const size = Number(p.fileSize||0);
   // The video folder is decided centrally (Admin > Drive location), never by the uploading station.
@@ -3025,7 +3047,7 @@ function finishUpload_(p) {
   let s = raw ? JSON.parse(raw) : null;
   if (!s) {
     s = {
-      order: String(p.orderId || '').trim(),
+      order: canonicalOrderId_(p.orderId, p.platform),
       platform: String(p.platform || '').trim(),
       type: String(p.recordingType || 'Forward').trim(),
       name: String(p.fileName || ''),
@@ -3371,7 +3393,7 @@ function downloadLog_(p){
   const u=session_(p.token);
   logAppend_(sheet_(CONFIG.DOWNLOAD_LOG_SHEET), [
     new Date(),
-    String(p.orderId||''),
+    canonicalOrderId_(p.orderId, p.platform),
     String(p.platform||''),
     u.email,
     String(p.fileName||''),
@@ -5191,12 +5213,15 @@ function saveOrderManifest_(p) {
     return { success: false, error: 'Order ID is required' };
   }
   var sh = getManifestSheet_();
-  var orderId = String(manifest.orderId).trim().toUpperCase();
+  var orderId = canonicalOrderId_(manifest.orderId, manifest.platform).toUpperCase();
+  if (!orderId) return { success: false, error: 'Order ID is required' };
+  var orderKey = normalizeOrderId_(orderId);
   var data = sh.getDataRange().getValues();
   var targetRow = -1;
 
+  // "OD-10063", "#OD-10063" and "# OD-10063" are the same order: update that row, never add a second one.
   for (var i = 1; i < data.length; i++) {
-    if (String(data[i][1] || '').trim().toUpperCase() === orderId) {
+    if (normalizeOrderId_(data[i][1]) === orderKey) {
       targetRow = i + 1;
       break;
     }
@@ -5341,13 +5366,31 @@ function getOrderManifests_(p) {
     var sh = getManifestSheet_();
     var data = sh.getDataRange().getValues();
     var manifests = [];
+    var byKey = {};
 
     for (var i = 1; i < data.length; i++) {
       var r = data[i];
-      var orderId = String(r[1] || '').trim();
+      var orderId = canonicalOrderId_(r[1], r[2]);
       if (!orderId) continue;
 
       var items = parseItemsList_(r[8]);
+
+      // Older rows may hold the same order twice ("OD-10063" and "#OD-10063"). Return it once,
+      // keeping the product list and the packed details from whichever row has them.
+      var okey = normalizeOrderId_(orderId);
+      if (byKey[okey] !== undefined) {
+        var prev = manifests[byKey[okey]];
+        if (!prev.items.length && items.length) { prev.items = items; prev.processedAt = safeIsoDate_(r[0]) || prev.processedAt; }
+        if (String(r[9] || '') === 'Packed') prev.status = 'Packed';
+        prev.assignedPackerName = prev.assignedPackerName || r[3] || '';
+        prev.assignedPackerEmail = prev.assignedPackerEmail || r[4] || '';
+        prev.packedAt = prev.packedAt || safeIsoDate_(r[11]);
+        prev.packedByName = prev.packedByName || r[12] || '';
+        prev.videoDriveUrl = prev.videoDriveUrl || r[13] || '';
+        prev.notes = prev.notes || r[10] || '';
+        continue;
+      }
+      byKey[okey] = manifests.length;
 
       manifests.push({
         id: 'm-' + i,
@@ -5376,15 +5419,17 @@ function getOrderManifests_(p) {
 function updateManifestStatus_(p) {
   var orderId = String(p.orderId || '').trim().toUpperCase();
   if (!orderId) return { success: false, error: 'Order ID is required' };
+  var orderKey = normalizeOrderId_(orderId);
 
   var sh = getManifestSheet_();
   var data = sh.getDataRange().getValues();
   var targetRow = -1;
 
+  // Prefer the row that holds the product list when the same order was written twice in the past.
   for (var i = 1; i < data.length; i++) {
-    if (String(data[i][1] || '').trim().toUpperCase() === orderId) {
-      targetRow = i + 1;
-      break;
+    if (normalizeOrderId_(data[i][1]) === orderKey) {
+      if (targetRow < 0) targetRow = i + 1;
+      if (String(data[i][8] || '').trim()) { targetRow = i + 1; break; }
     }
   }
 
@@ -5422,20 +5467,25 @@ function deleteOrderManifest_(p) {
   var orderId = String(p.orderId || '').trim().toUpperCase();
   if (!orderId) return { success: false, error: 'Order ID required' };
 
+  var orderKey = normalizeOrderId_(orderId);
   var sh = getManifestSheet_();
   var data = sh.getDataRange().getValues();
-  for (var i = 1; i < data.length; i++) {
-    if (String(data[i][1] || '').trim().toUpperCase() === orderId) {
+  // Remove every copy of this order ("OD-10063" and "#OD-10063" are the same order), bottom up.
+  var removed = 0;
+  for (var i = data.length - 1; i >= 1; i--) {
+    if (normalizeOrderId_(data[i][1]) === orderKey) {
       sh.deleteRow(i + 1);
-      return { success: true, orderId: orderId };
+      removed++;
     }
   }
+  if (removed) return { success: true, orderId: orderId, removed: removed };
   return { success: false, error: 'Order not found' };
 }
 
 function logPackVerification_(p) {
   var log = p.log || {};
   if (!log.orderId) return { success: false, error: 'Order ID is required' };
+  log.orderId = canonicalOrderId_(log.orderId, log.platform);
 
   var sh = getVerificationLogSheet_();
   var now = new Date();
@@ -6432,6 +6482,86 @@ function sheetCleanupSummary_(plan) {
   };
 }
 
+/* ---------- Order ID format fix (Settings) ----------
+ * Rewrites the Order ID cell (column B) of every row whose ID is not in the standard format:
+ * D2C orders get exactly one leading '#' and no spaces ("OD-10063", "##OD-10063", " #OD-10063 "
+ * -> "#OD-10063"); other platforms only lose stray spaces and extra '#'. Only that one cell
+ * changes: no row is added, moved or removed. The Supabase copy follows (SB_ACTION_TABS_).
+ */
+const ORDER_ID_FIX_TABS_ = ['ORDER_LOG_SHEET', 'RETURN_LOG_SHEET', 'UPLOAD_LOG_SHEET', 'DOWNLOAD_LOG_SHEET',
+  'TRASH_LOG_SHEET', 'ORDER_MANIFEST_SHEET', 'PACK_VERIFICATION_LOG_SHEET'];
+
+function planOrderIdFix_() {
+  const ss = ss_();
+  const plan = { tabs: [], total: 0, examples: [], manifestRepeats: 0 };
+  ORDER_ID_FIX_TABS_.forEach(function(k) {
+    const name = CONFIG[k];
+    const sh = ss.getSheetByName(name);
+    if (!sh || sh.getLastRow() < 2) return;
+    const values = sh.getRange(2, 1, sh.getLastRow() - 1, 3).getValues();
+    const changes = [];
+    const seen = {};
+    for (let i = 0; i < values.length; i++) {
+      const raw = values[i][1];
+      if (raw === '' || raw === null || raw === undefined || raw instanceof Date || typeof raw === 'number') continue;
+      let fixed = canonicalOrderId_(raw, values[i][2]);
+      if (k === 'ORDER_MANIFEST_SHEET') {
+        fixed = fixed.toUpperCase();
+        const key = normalizeOrderId_(fixed);
+        if (key) { if (seen[key]) plan.manifestRepeats++; seen[key] = true; }
+      }
+      if (fixed && fixed !== String(raw)) {
+        changes.push({ row: i + 2, from: String(raw), to: fixed });
+        if (plan.examples.length < 10) plan.examples.push({ sheet: name, row: i + 2, from: String(raw), to: fixed });
+      }
+    }
+    plan.tabs.push({ name: name, sh: sh, changes: changes });
+    plan.total += changes.length;
+  });
+  return plan;
+}
+
+function fixOrderIdFormat_(p, apply) {
+  admin_(p.token);
+  const summary = function(plan) {
+    return {
+      success: true,
+      total: plan.total,
+      sheets: plan.tabs.map(function(t) { return { sheet: t.name, rows: t.changes.length }; }).filter(function(t) { return t.rows > 0; }),
+      examples: plan.examples,
+      manifestRepeats: plan.manifestRepeats
+    };
+  };
+  if (!apply) {
+    const out = summary(planOrderIdFix_());
+    out.message = out.total ? out.total + ' order ID(s) need fixing.' : 'Every order ID is already in the right format.';
+    return out;
+  }
+  // Bring in app changes still waiting in Supabase first, so the fix sees every row.
+  try { sbDrain_(20000); } catch (e) { console.warn('Supabase drain before order ID fix:', e); }
+  return withScriptLock_(function() {
+    const plan = planOrderIdFix_();
+    plan.tabs.forEach(function(t) {
+      // Contiguous runs of changed rows are written in one call; untouched rows are never rewritten.
+      let i = 0;
+      while (i < t.changes.length) {
+        let j = i;
+        while (j + 1 < t.changes.length && t.changes[j + 1].row === t.changes[j].row + 1) j++;
+        const run = t.changes.slice(i, j + 1);
+        t.sh.getRange(run[0].row, 2, run.length, 1).setValues(run.map(function(c) { return [c.to]; }));
+        i = j + 1;
+      }
+    });
+    SpreadsheetApp.flush();
+    bumpManifestVersion_();
+    try { bumpAnalyticsVersion_(); } catch (_) {}
+    const out = summary(plan);
+    out.fixed = plan.total;
+    out.message = plan.total ? 'Fixed ' + plan.total + ' order ID(s). No rows were removed.' : 'Every order ID is already in the right format.';
+    return out;
+  });
+}
+
 function scanSheetCleanup_(p) {
   session_(p.token);
   const out = sheetCleanupSummary_(planSheetCleanup_());
@@ -6939,6 +7069,8 @@ const SB_ACTION_TABS_ = {
   deleteOlderVideos: [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET, CONFIG.TRASH_LOG_SHEET],
   saveBranding: [CONFIG.BRANDING_SHEET], uploadBrandingImage: [CONFIG.BRANDING_SHEET],
   runSheetCleanup: SB_TABS_, restoreCleanupArchive: SB_TABS_,
+  fixOrderIdFormat: [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET, CONFIG.DOWNLOAD_LOG_SHEET,
+    CONFIG.TRASH_LOG_SHEET, CONFIG.ORDER_MANIFEST_SHEET, CONFIG.PACK_VERIFICATION_LOG_SHEET],
   saveOrderManifest: [CONFIG.ORDER_MANIFEST_SHEET], saveOrderManifestsBatch: [CONFIG.ORDER_MANIFEST_SHEET],
   updateManifestStatus: [CONFIG.ORDER_MANIFEST_SHEET], deleteOrderManifest: [CONFIG.ORDER_MANIFEST_SHEET],
   saveGtinProduct: [CONFIG.GTIN_CATALOG_SHEET], deleteGtinProduct: [CONFIG.GTIN_CATALOG_SHEET],

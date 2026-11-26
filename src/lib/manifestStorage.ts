@@ -1,6 +1,9 @@
 import { OrderManifest, ManifestItem, GtinCatalogProduct, PackVerificationLog, VideoRecord } from '../types';
 import { hasStationServer } from './serverFeatures';
-import { requestApi, normalizeOrderId, checkDuplicate } from './api';
+import { requestApi, normalizeOrderId, checkDuplicate, formatOrderId } from './api';
+
+/** One key per order: '#OD-10063', 'OD-10063' and ' od-10063 ' are the same order. */
+const mKey = (id: unknown): string => normalizeOrderId(String(id ?? ''));
 import { dbGetAllQueue } from './storage';
 import { getDirectImageUrl } from './branding';
 import { isStationRecording } from './recordingState';
@@ -55,14 +58,14 @@ export function getDeletedManifestIds(): Set<string> {
     const raw = localStorage.getItem(STORAGE_KEY_DELETED_MANIFESTS);
     if (!raw) return new Set();
     const arr = JSON.parse(raw);
-    return new Set(Array.isArray(arr) ? arr.map((x: string) => String(x).toLowerCase().trim()) : []);
+    return new Set(Array.isArray(arr) ? arr.map((x: string) => mKey(x)).filter(Boolean) : []);
   } catch {
     return new Set();
   }
 }
 
 export function recordDeletedManifestId(orderId: string): void {
-  const clean = String(orderId || '').toLowerCase().trim();
+  const clean = mKey(orderId);
   if (!clean) return;
   const set = getDeletedManifestIds();
   set.add(clean);
@@ -145,7 +148,7 @@ function readStoredManifests(): OrderManifest[] {
     const deletedSet = getDeletedManifestIds();
     const result = parsed
       .filter((m) => {
-        const id = String(m.orderId || '').toLowerCase().trim();
+        const id = mKey(m.orderId);
         // Drop the demo orders older versions wrote on first start (OD-5035 etc.).
         return id && !deletedSet.has(id) && !String(m.id || '').startsWith('manifest-seed-');
       })
@@ -174,7 +177,7 @@ export function saveStoredManifests(manifests: OrderManifest[]): void {
   try {
     const deletedSet = getDeletedManifestIds();
     const cleaned = manifests.filter((m) => {
-      const id = String(m.orderId || '').toLowerCase().trim();
+      const id = mKey(m.orderId);
       return id && !deletedSet.has(id);
     });
     localStorage.setItem(STORAGE_KEY_MANIFESTS, JSON.stringify(cleaned));
@@ -191,7 +194,8 @@ export function saveStoredManifests(manifests: OrderManifest[]): void {
 
 export function getManifestByOrderId(orderId: string): OrderManifest | null {
   if (!orderId) return null;
-  const clean = orderId.trim().toLowerCase();
+  const clean = mKey(orderId);
+  if (!clean) return null;
   const deletedSet = getDeletedManifestIds();
   if (deletedSet.has(clean)) return null;
 
@@ -199,8 +203,12 @@ export function getManifestByOrderId(orderId: string): OrderManifest | null {
   if (!c.byId) {
     c.byId = new Map();
     for (const m of c.value) {
-      const id = String(m.orderId || '').trim().toLowerCase();
-      if (id && !c.byId.has(id)) c.byId.set(id, m);
+      const id = mKey(m.orderId);
+      if (!id) continue;
+      const prev = c.byId.get(id);
+      // The same order can sit in the list twice (e.g. "OD-10063" and "#OD-10063" from older
+      // entries). Prefer the copy that carries the product items.
+      if (!prev || (!(prev.items && prev.items.length) && m.items && m.items.length)) c.byId.set(id, m);
     }
   }
   return c.byId.get(clean) || null;
@@ -208,23 +216,28 @@ export function getManifestByOrderId(orderId: string): OrderManifest | null {
 
 export async function saveOrderManifest(manifest: OrderManifest): Promise<void> {
   const list = getStoredManifests();
-  const cleanId = manifest.orderId.trim();
+  const cleanId = formatOrderId(manifest.orderId, manifest.platform);
+  const key = mKey(cleanId);
 
   // Clear any past deletion tombstone for this orderId so new entry saves clean
   const deletedSet = getDeletedManifestIds();
-  if (deletedSet.has(cleanId.toLowerCase())) {
-    deletedSet.delete(cleanId.toLowerCase());
+  if (deletedSet.has(key)) {
+    deletedSet.delete(key);
     try {
       localStorage.setItem(STORAGE_KEY_DELETED_MANIFESTS, JSON.stringify(Array.from(deletedSet)));
     } catch {}
   }
 
-  const index = list.findIndex((m) => m.orderId.trim().toLowerCase() === cleanId.toLowerCase());
+  const index = list.findIndex((m) => mKey(m.orderId) === key);
 
   if (index >= 0) {
     list[index] = { ...manifest, orderId: cleanId };
   } else {
     list.unshift({ ...manifest, orderId: cleanId });
+  }
+  // Drop any other copy of the same order written in a different format.
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].orderId !== cleanId && mKey(list[i].orderId) === key) list.splice(i, 1);
   }
 
   saveStoredManifests(list);
@@ -243,17 +256,20 @@ export async function saveOrderManifest(manifest: OrderManifest): Promise<void> 
 export async function saveMultipleManifests(manifests: OrderManifest[]): Promise<number> {
   const list = getStoredManifests();
   const map = new Map<string, OrderManifest>();
-  list.forEach((m) => map.set(m.orderId.trim().toLowerCase(), m));
+  list.forEach((m) => map.set(mKey(m.orderId), m));
 
   const deletedSet = getDeletedManifestIds();
   let addedCount = 0;
 
+  const cleanedBatch: OrderManifest[] = [];
   for (const item of manifests) {
-    const cleanId = item.orderId.trim();
+    const cleanId = formatOrderId(item.orderId, item.platform);
     if (!cleanId) continue;
-    const lower = cleanId.toLowerCase();
-    deletedSet.delete(lower);
-    map.set(lower, { ...item, orderId: cleanId });
+    const key = mKey(cleanId);
+    deletedSet.delete(key);
+    const cleaned = { ...item, orderId: cleanId };
+    map.set(key, cleaned);
+    cleanedBatch.push(cleaned);
     addedCount++;
   }
 
@@ -266,7 +282,7 @@ export async function saveMultipleManifests(manifests: OrderManifest[]): Promise
 
   // Sync batch
   try {
-    requestApi('saveOrderManifestsBatch', { manifests }).then(() => {
+    requestApi('saveOrderManifestsBatch', { manifests: cleanedBatch }).then(() => {
       syncManifestsWithCloud().catch(() => {});
     }).catch(() => {});
   } catch (_) {}
@@ -292,8 +308,9 @@ export async function updateManifestStatus(
   packerDetails?: { name?: string; email?: string; videoDriveUrl?: string; packedAt?: string }
 ): Promise<void> {
   const list = getStoredManifests();
-  const cleanId = orderId.trim();
-  const target = list.find((m) => m.orderId.trim().toLowerCase() === cleanId.toLowerCase());
+  const key = mKey(orderId);
+  const target = list.find((m) => mKey(m.orderId) === key);
+  const cleanId = target ? target.orderId : orderId.trim();
 
   if (target) {
     target.status = status;
@@ -480,7 +497,8 @@ export function deleteManifest(orderId: string): void {
   if (!cleanId) return;
 
   recordDeletedManifestId(cleanId);
-  const list = getStoredManifests().filter((m) => m.orderId.trim().toLowerCase() !== cleanId.toLowerCase());
+  const key = mKey(cleanId);
+  const list = getStoredManifests().filter((m) => mKey(m.orderId) !== key);
   saveStoredManifests(list);
 
   try {
@@ -1410,17 +1428,42 @@ export async function syncManifestsWithCloud(
       lastFullManifestReadAt = Date.now();
       const deletedSet = getDeletedManifestIds();
       
-      const cloudManifests = res.manifests.filter((m) => m.orderId && !deletedSet.has(m.orderId.toLowerCase().trim()));
+      // One entry per order: if the Sheet holds the same order twice ("OD-10063" and "#OD-10063"),
+      // keep the copy with product items and merge the rest into it.
+      const cloudByKey = new Map<string, OrderManifest>();
+      res.manifests.forEach((m) => {
+        const k = mKey(m.orderId);
+        if (!k || deletedSet.has(k)) return;
+        const prev = cloudByKey.get(k);
+        if (!prev) { cloudByKey.set(k, m); return; }
+        const withItems = prev.items && prev.items.length ? prev : m;
+        const other = withItems === prev ? m : prev;
+        cloudByKey.set(k, {
+          ...other,
+          ...withItems,
+          status: prev.status === 'Packed' || m.status === 'Packed' ? 'Packed' : withItems.status,
+          packedAt: withItems.packedAt || other.packedAt,
+          packedByName: withItems.packedByName || other.packedByName,
+          videoDriveUrl: withItems.videoDriveUrl || other.videoDriveUrl,
+          assignedPackerName: withItems.assignedPackerName || other.assignedPackerName,
+          assignedPackerEmail: withItems.assignedPackerEmail || other.assignedPackerEmail,
+        });
+      });
+      const cloudManifests = Array.from(cloudByKey.values());
       
       const local = getStoredManifests();
       const localMap = new Map<string, OrderManifest>();
-      local.forEach((m) => localMap.set(m.orderId.toLowerCase().trim(), m));
+      local.forEach((m) => {
+        const k = mKey(m.orderId);
+        const prev = localMap.get(k);
+        if (!prev || (!(prev.items && prev.items.length) && m.items && m.items.length)) localMap.set(k, m);
+      });
 
       const map = new Map<string, OrderManifest>();
 
       // Merge Cloud manifests with Local overrides if local has unsynced updates (e.g. status Packed or assigned packer)
       cloudManifests.forEach((cloudItem) => {
-        const id = cloudItem.orderId.toLowerCase().trim();
+        const id = mKey(cloudItem.orderId);
         const localItem = localMap.get(id);
 
         if (localItem) {
@@ -1450,7 +1493,7 @@ export async function syncManifestsWithCloud(
       // Keep brand-new local entries added in the last 5 minutes that haven't landed in cloud yet
       const fiveMinsAgo = Date.now() - 5 * 60 * 1000;
       local.forEach((m) => {
-        const id = m.orderId.toLowerCase().trim();
+        const id = mKey(m.orderId);
         if (!map.has(id) && !deletedSet.has(id)) {
           const createdAt = m.processedAt ? new Date(m.processedAt).getTime() : 0;
           if (createdAt > fiveMinsAgo) {
