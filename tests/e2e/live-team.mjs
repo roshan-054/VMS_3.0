@@ -51,6 +51,7 @@ rt.sheets.get('OrderLog').rows.push([ago(24 * 60 + 30), 'YDAY-1', 'Amazon', PACK
 rt.sheets.get('UploadLog').rows.push([ago(2 * 24 * 60), 'UP-OLD', 'Amazon', PACKER.email, 'o.mp4', '1 MB', 'uo', 'Error', 0, '', 'Failed', 'Network', 'Forward', 'Recorder', 'jo']);
 rt.sheets.get('OrderManifest').rows[0] = ['Timestamp','Order ID','Platform','Assigned Packer Name','Assigned Packer Email','Processed By Name','Processed By Email','Total Items Count','Items List','Status','Notes','Packed At','Packed By Name','Video Drive Link'];
 rt.sheets.get('OrderManifest').rows.push([ago(3 * 24 * 60), 'OLD-PEND-1', 'Amazon', PACKER.name, PACKER.email, 'Admin', 'admin@test.local', 1, '[]', 'Pending', '', '', '', '']);
+for (let i = 0; i < 6; i++) rt.sheets.get('OrderManifest').rows.push([ago(2 * 24 * 60 - i * 60), 'MORE-PEND-' + i, i % 2 ? 'D2C' : 'JioMart', PACKER.name, PACKER.email, 'Admin', 'admin@test.local', 1, '[]', 'Pending', '', '', '', '']);
 rt.sheets.get('OrderManifest').rows.push([ago(3 * 24 * 60), 'OLD-PACKED', 'Amazon', PACKER.name, PACKER.email, 'Admin', 'admin@test.local', 1, '[]', 'Packed', '', '', '', '']);
 rt.props.set('SUPABASE_URL', sb.url);
 rt.props.set('SUPABASE_ANON_KEY', sb.anonKey);
@@ -110,13 +111,40 @@ try {
   check('upload queue matches the packer (waiting/uploading/failed)', q, `packer ${pc} · admin ${await card(PACKER.email).locator('[data-station-counts]').getAttribute('data-station-counts').catch(() => '')}`);
   // Backlog from earlier days, whatever the range.
   const bl = () => card(PACKER.email).locator('[data-backlog]');
-  const hasBacklog = await waitFor(async () => (await bl().getAttribute('data-backlog-orders').catch(() => '')) === '1');
+  const hasBacklog = await waitFor(async () => (await bl().getAttribute('data-backlog-orders').catch(() => '')) === '7');
   check('pending order from 3 days ago shows on the card', hasBacklog && /OLD-PEND-1 · 3 d/.test(await bl().innerText()), await bl().innerText().catch(() => ''));
   check('packed orders are not in the backlog', !/OLD-PACKED/.test(await bl().innerText()));
   const upText = await bl().innerText();
   check('failed upload from 2 days ago shows with its age', /UP-OLD · failed · 2 d/.test(upText) || /\+\d+ more/.test(upText), upText.replace(/\s+/g, ' '));
   check('backlog counts the queue plus the old Sheet upload', Number(await bl().getAttribute('data-backlog-uploads')) === 6, await bl().getAttribute('data-backlog-uploads'));
-  check('header shows pending orders', (await admin.locator('#team-pending').innerText()) === '1', await admin.locator('#team-pending').innerText());
+  check('header shows pending orders', (await admin.locator('#team-pending').innerText()) === '7', await admin.locator('#team-pending').innerText());
+
+  // "+3 more" opens every pending order; an outside click closes it.
+  const more = card(PACKER.email).locator('[data-more-orders]');
+  check('"+N more" is a button', (await more.innerText()) === '+3 more', await more.innerText().catch(() => 'missing'));
+  await more.click();
+  const list = admin.locator('#live-team-open-list');
+  await list.waitFor({ timeout: 5000 });
+  await admin.screenshot({ path: process.env.SHOT2 || '/tmp/claude-0/live-team-list.png' });
+  const rowsShown = await list.locator('[data-open-row]').count();
+  check('list shows all 7 pending orders', rowsShown === 7, rowsShown);
+  const firstRow = (await list.locator('[data-open-row]').first().innerText()).replace(/\s+/g, ' ');
+  check('rows have order, platform, assigned date and age (oldest first)', /OLD-PEND-1 Amazon \d{2}-[A-Z][a-z]{2}-\d{2} \d{2}:\d{2} 3 d/.test(firstRow), firstRow);
+  check('a JioMart order is listed', /MORE-PEND-0\s+JioMart/.test(await list.innerText()));
+  await list.locator('[data-filter]').fill('more-pend-5');
+  check('find box filters the list', (await list.locator('[data-open-row]').count()) === 1);
+  await admin.mouse.click(10, 10); // outside the list
+  check('outside click closes the list', (await list.count()) === 0);
+  await card(PACKER.email).locator('[data-open-orders]').click();
+  await list.waitFor({ timeout: 5000 });
+  check('clicking the pending count opens the list too', (await list.getAttribute('data-kind')) === 'orders');
+  await list.locator('[data-close]').click();
+  check('close button closes it', (await list.count()) === 0);
+  await card(PACKER.email).locator('[data-more-uploads]').click();
+  await list.waitFor({ timeout: 5000 });
+  check('"+N more" on uploads lists every unfinished upload', (await list.getAttribute('data-kind')) === 'uploads' && (await list.locator('[data-open-row]').count()) === 6, await list.locator('[data-open-row]').count());
+  await admin.keyboard.press('Escape');
+  check('Esc closes the list', (await list.count()) === 0);
 
   // Date range: Yesterday, Last 7 days, Custom, back to Today.
   const todayAttr = () => card(PACKER.email).locator('[data-today]').getAttribute('data-today').catch(() => '');
@@ -126,7 +154,7 @@ try {
   const rangeText = await admin.locator('#live-team-range-text').innerText();
   check('range shown as DD-MMM-YY', /\d{2}-[A-Z][a-z]{2}-\d{2}/.test(rangeText), rangeText);
   check('labels follow the range', /yesterday/i.test(await admin.locator('#team-recorded').locator('..').innerText()), await admin.locator('#team-recorded').locator('..').innerText());
-  check('backlog stays on Yesterday', (await bl().getAttribute('data-backlog-orders')) === '1');
+  check('backlog stays on Yesterday', (await bl().getAttribute('data-backlog-orders')) === '7');
   await admin.locator('#live-team-range [data-preset="LAST_7_DAYS"]').click();
   const w = await waitFor(async () => ((await todayAttr()) === '4/2/0' ? 'ok' : ''));
   check('Last 7 days adds up', w, await todayAttr());

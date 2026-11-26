@@ -4460,8 +4460,8 @@ function getTeamActivity_(p) {
     u.openUploads.sort(function(a, b) { return a.at - b.at; });
     u.pendingOrderCount = u.pendingOrders.length;
     u.openUploadCount = u.openUploads.length;
-    u.pendingOrders = u.pendingOrders.slice(0, 20);
-    u.openUploads = u.openUploads.slice(0, 20);
+    u.pendingOrders = u.pendingOrders.slice(0, 500);
+    u.openUploads = u.openUploads.slice(0, 200);
     return u;
   }).sort(function(a, b) { return String(a.name).localeCompare(String(b.name)); });
   return { success: true, date: today, from: from, to: to, users: list, serverTime: now.getTime() };
