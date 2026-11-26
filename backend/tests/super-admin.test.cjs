@@ -49,7 +49,7 @@ test('existing Admins keep every admin tool, except Supabase settings and permis
   const rt = createRuntime({ users: base() });
   const { token } = login(rt, 'alice@example.com');
   assert.equal(rt.call('getUsers', { token }).success, true);
-  assert.equal(rt.call('scanDuplicateRecords', { token }).success !== false, true);
+  assert.equal(rt.call('scanSheetCleanup', { token }).success, true);
   assert.equal(rt.call('adminCreateUser', { token, name: 'N', email: 'n@example.com', password: 'secret12', role: 'User' }).success, true);
   for (const a of ['getSupabaseConfig', 'saveSupabaseConfig', 'supabaseImport', 'supabaseSweep', 'setUserPermissions']) {
     const r = rt.call(a, { token, email: 'pat@example.com', permissions: {} });
@@ -74,7 +74,7 @@ test('Super Admin gives a User extra pages and actions; the backend honours them
   let me = rt.call('getMyAccess', { token: pat });
   assert.equal(me.user.permissions.canAccessReports, false);
   assert.equal(me.user.permissions.canAccessRecord, true);
-  assert.equal(rt.call('scanDuplicateRecords', { token: pat }).success, false);
+  assert.equal(rt.call('scanOlderVideos', { token: pat, days: 30 }).success, false);
 
   const set = rt.call('setUserPermissions', { token: su, email: 'pat@example.com', permissions: { canAccessReports: true, canDeleteData: true } });
   assert.equal(set.success, true, set.error);
@@ -84,8 +84,8 @@ test('Super Admin gives a User extra pages and actions; the backend honours them
 
   me = rt.call('getMyAccess', { token: pat });
   assert.equal(me.user.permissions.canAccessReports, true);
-  assert.notEqual(rt.call('scanDuplicateRecords', { token: pat }).error, 'You do not have permission to do this. Ask the Super Admin to allow it.');
-  assert.equal(rt.call('scanDuplicateRecords', { token: pat }).success !== false, true);
+  assert.notEqual(rt.call('scanOlderVideos', { token: pat, days: 30 }).error, 'You do not have permission to do this. Ask the Super Admin to allow it.');
+  assert.equal(rt.call('scanOlderVideos', { token: pat, days: 30 }).success !== false, true);
   // Still not allowed to manage users.
   assert.match(rt.call('adminCreateUser', { token: pat, name: 'X', email: 'x@example.com', password: 'secret12' }).error, /do not have permission/);
 
@@ -138,7 +138,7 @@ test('a disabled or demoted user loses access on the next request, without signi
   const pat = login(rt, 'pat@example.com').token;
   const ar = rowOf(rt, 'alice@example.com');
   assert.equal(rt.call('adminManageUser', { token: su, row: ar, role: 'User', status: 'Approved', expectedEmail: 'alice@example.com' }).success, true);
-  assert.match(rt.call('scanDuplicateRecords', { token: alice }).error, /do not have permission/);
+  assert.match(rt.call('scanOlderVideos', { token: alice, days: 30 }).error, /do not have permission/);
   assert.match(rt.call('getStationQueues', { token: alice }).error, /do not have permission/);
 
   const pr = rowOf(rt, 'pat@example.com');

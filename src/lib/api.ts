@@ -59,8 +59,6 @@ const ACTION_TIMEOUT_MS: Record<string, number> = {
   saveOrderManifestsBatch: 60000,
   uploadBrandingImage: 120000,
   cleanupStuckUploads: 90000,
-  scanDuplicateRecords: 120000,
-  removeDuplicateRecords: 120000,
   scanOlderVideos: 120000,
   deleteOlderVideos: 300000,
   getBackendUpdateStatus: 60000,
@@ -579,105 +577,6 @@ export async function deleteLogEntry(params: {
     }
     throw err;
   }
-}
-
-export interface DuplicateEntryDetail {
-  sheet: string;
-  row: number;
-  timestamp: string;
-  packerEmail: string;
-  fileId: string;
-  fileName?: string;
-  playbackUrl: string;
-  status: string;
-  willMoveFileToTrash?: boolean;
-}
-
-export interface DuplicateGroupItem {
-  orderId: string;
-  platform: string;
-  recordingType: string;
-  totalEntries: number;
-  keeper: DuplicateEntryDetail;
-  duplicates: DuplicateEntryDetail[];
-}
-
-export interface ScanDuplicatesResult {
-  success: boolean;
-  totalDuplicateOrders: number;
-  totalDuplicateSheetRows: number;
-  totalDuplicateDriveVideos: number;
-  groups: DuplicateGroupItem[];
-  scannedTabs?: string[];
-  tabSummary?: Record<string, number>;
-  message?: string;
-  error?: string;
-}
-
-export interface RemoveDuplicatesResult {
-  success: boolean;
-  cleanedOrdersCount: number;
-  removedSheetRowsCount: number;
-  movedDriveVideosCount: number;
-  archivedCount: number;
-  removedBySheet?: Record<string, number>;
-  scannedTabs?: string[];
-  movedFiles?: Array<{
-    fileId: string;
-    fileName: string;
-    orderId: string;
-    trashFolderName: string;
-    parentFolderName: string;
-    trashFolderUrl?: string;
-  }>;
-  message?: string;
-  error?: string;
-}
-
-export async function scanDuplicateRecords(params?: {
-  orderId?: string;
-  driveFolderId?: string;
-  keepPolicy?: 'latest' | 'first';
-}): Promise<ScanDuplicatesResult> {
-  const res = await requestApi<ScanDuplicatesResult>('scanDuplicates', params || {});
-  return {
-    success: true,
-    totalDuplicateOrders: res.totalDuplicateOrders || 0,
-    totalDuplicateSheetRows: res.totalDuplicateSheetRows || 0,
-    totalDuplicateDriveVideos: res.totalDuplicateDriveVideos || 0,
-    groups: res.groups || [],
-    scannedTabs: res.scannedTabs || [],
-    tabSummary: res.tabSummary || {},
-    message: res.message,
-  };
-}
-
-export async function removeDuplicateRecords(params: {
-  keepPolicy?: 'latest' | 'first';
-  moveDriveVideosToTrash?: boolean;
-  moveDriveVideosToTrashFolder?: boolean;
-  removeSheetEntries?: boolean;
-  orderId?: string;
-  driveFolderId?: string;
-}): Promise<RemoveDuplicatesResult> {
-  const res = await requestApi<RemoveDuplicatesResult>('removeDuplicates', {
-    keepPolicy: params.keepPolicy || 'latest',
-    moveDriveVideosToTrashFolder: params.moveDriveVideosToTrashFolder !== false,
-    removeSheetEntries: params.removeSheetEntries !== false,
-    orderId: params.orderId || '',
-    driveFolderId: params.driveFolderId || '',
-  });
-  return {
-    success: true,
-    cleanedOrdersCount: res.cleanedOrdersCount || 0,
-    removedSheetRowsCount: res.removedSheetRowsCount || 0,
-    movedDriveVideosCount: res.movedDriveVideosCount || 0,
-    archivedCount: res.archivedCount || 0,
-    removedBySheet: res.removedBySheet || {},
-    scannedTabs: res.scannedTabs || [],
-    movedFiles: res.movedFiles || [],
-    message: res.message,
-  };
 }
 
 export interface OlderVideoItem {
