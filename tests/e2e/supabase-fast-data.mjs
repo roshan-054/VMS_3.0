@@ -24,6 +24,7 @@ const cleanup = async () => { try { sb.kill(); } catch {} try { await db.drop();
 
 try {
   const backend = createMockBackend({ latencyMs: 1500 });
+  backend.rt.sheets.get('Users').rows[1][4] = 'Super Admin'; // Supabase settings are Super Admin only
   const { rt } = backend;
   // Apps Script side: real HTTP to the Supabase stand-in.
   rt.sandbox.UrlFetchApp = {
@@ -140,11 +141,12 @@ try {
 
   // ---- Settings: status + backup
   await page.locator('#nav-item-settings').click();
+  await page.locator('#settings-section-database').click();
   await page.waitForSelector('#supabase-status', { timeout: 20000 });
   await page.waitForFunction(() => document.querySelector('#supabase-status')?.textContent === 'Connected', null, { timeout: 20000 });
   check('Settings shows Supabase connected', true, (await page.textContent('#supabase-rows')) + ' rows');
   await page.screenshot({ path: 'tests/e2e/out-supabase-settings.png', fullPage: false });
-  const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 60000 }), page.click('#backup-download')]);
+  const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 60000 }), page.click('#settings-section-data').then(() => page.click('#backup-download'))]);
   const file = await dl.path();
   const wb = XLSX.read(fs.readFileSync(file), { cellDates: true, cellNF: true });
   const olSheet = XLSX.utils.sheet_to_json(wb.Sheets.OrderLog, { header: 1 });
@@ -158,7 +160,7 @@ try {
   const day = (d) => new Date(now - d * 86400000).toISOString().slice(0, 10);
   await page.fill('#backup-from', day(2));
   await page.fill('#backup-to', day(0));
-  const [dl2] = await Promise.all([page.waitForEvent('download', { timeout: 60000 }), page.click('#backup-download')]);
+  const [dl2] = await Promise.all([page.waitForEvent('download', { timeout: 60000 }), page.click('#settings-section-data').then(() => page.click('#backup-download'))]);
   const wb2 = XLSX.read(fs.readFileSync(await dl2.path()), { cellDates: true });
   const ol2 = XLSX.utils.sheet_to_json(wb2.Sheets.OrderLog, { header: 1 }).length - 1;
   const gc2 = XLSX.utils.sheet_to_json(wb2.Sheets.GTINCatalog, { header: 1 }).length - 1;

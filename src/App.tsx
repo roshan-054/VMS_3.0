@@ -1,3 +1,4 @@
+import { closeOnBackdrop } from './lib/backdrop';
 import React, { useState, useEffect, lazy, Suspense } from 'react';
 import {
   Camera,
@@ -691,7 +692,7 @@ export function App() {
 
       {/* Clear Cache Confirmation & Action Modal */}
       {isCacheClearModalOpen && (
-        <div
+        <div {...closeOnBackdrop(() => setIsCacheClearModalOpen(false))}
           id="cache-clear-modal"
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4"
         >

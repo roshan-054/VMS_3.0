@@ -60,6 +60,7 @@ for (const mode of ['light', 'dark']) {
   await attach(page, backend);
   await login(page, BASE, backend);
   await page.locator('#nav-item-settings').click();
+  await page.locator('#settings-section-data').click();
   await page.locator('#sheet-cleanup-scan').click();
   await page.locator('#sheet-cleanup-preview').waitFor();
   if (mode === 'dark') {

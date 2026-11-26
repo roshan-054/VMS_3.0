@@ -1,3 +1,4 @@
+import { closeOnBackdrop } from '../lib/backdrop';
 import React, { useState, useEffect } from 'react';
 import {
   UploadCloud,
@@ -1018,7 +1019,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
 
       {/* Delete Confirmation Modal with option to delete from Google Sheet Logs */}
       {isDeleteModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+        <div {...closeOnBackdrop(() => { setIsDeleteModalOpen(false); setItemToDelete(null); setIsBulkDeleting(false); }, isProcessingDelete)} className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-4 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center gap-3 text-rose-600">
               <div className="w-10 h-10 rounded-xl bg-rose-50 flex items-center justify-center border border-rose-200 shrink-0">

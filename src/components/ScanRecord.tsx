@@ -1,3 +1,4 @@
+import { closeOnBackdrop } from '../lib/backdrop';
 import React, { useState, useRef, useEffect } from 'react';
 import {
   Camera,
@@ -2013,7 +2014,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
 
       {/* Unregistered Order Warning Modal (if order is not in manifest) */}
       {unregisteredOrderWarning && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-fade-in select-none">
+        <div {...closeOnBackdrop(() => { setUnregisteredOrderWarning(null); setOrderId(''); })} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-fade-in select-none">
           <div className="w-full max-w-md bg-slate-900 border-2 border-amber-500 rounded-3xl p-6 text-white space-y-4 shadow-2xl">
             <div className="w-14 h-14 rounded-2xl bg-amber-500/20 border border-amber-500 text-amber-400 flex items-center justify-center mx-auto">
               <AlertTriangle className="w-7 h-7" />

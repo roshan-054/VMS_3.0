@@ -26,7 +26,8 @@ for (const dark of [false, true]) {
   const page = await browser.newPage({ viewport: { width: dark ? 390 : 1280, height: 900 }, colorScheme: dark ? 'dark' : 'light' });
   await attach(page, backend);
   await login(page, BASE, backend);
-  await page.locator('#nav-item-admin').evaluate((el) => el.click());
+  await page.locator('#nav-item-settings').evaluate((el) => el.click());
+  await page.locator('#settings-section-app').click();
   const card = page.locator('#drive-storage-card');
   await card.locator('#drive-storage-used').waitFor();
   if (!dark) {

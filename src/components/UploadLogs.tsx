@@ -1,3 +1,4 @@
+import { closeOnBackdrop } from '../lib/backdrop';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   FileClock,
@@ -2092,7 +2093,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
 
       {/* In-Portal High-Quality Video Playback Modal */}
       {playbackLog && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-3 sm:p-5 animate-in fade-in duration-200">
+        <div {...closeOnBackdrop(handleClosePlayback)} className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-3 sm:p-5 animate-in fade-in duration-200">
           <div className="bg-slate-900 border border-slate-700/80 rounded-2xl max-w-4xl w-full overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
             {/* Modal Header */}
             <div className="p-4 border-b border-slate-800 bg-slate-950 flex flex-wrap items-center justify-between gap-3 text-white shrink-0">
@@ -2198,7 +2199,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
 
       {/* Delete / Remove Confirmation Modal */}
       {logToDelete && (
-        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
+        <div {...closeOnBackdrop(() => setLogToDelete(null))} className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
           <div className="bg-white rounded-2xl max-w-md w-full border border-slate-200 shadow-2xl overflow-hidden">
             <div className="p-4 border-b border-slate-100 bg-rose-50/75 flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
@@ -2333,7 +2334,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
 
       {/* Detail Metadata Modal */}
       {selectedLog && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+        <div {...closeOnBackdrop(() => setSelectedLog(null))} className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full border border-slate-200 shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
             <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
               <div className="flex items-center gap-2">
@@ -2593,7 +2594,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
 
       {/* In-App Confirmation Modal: Purge Interrupted / Stale Upload Rows */}
       {showPurgeModal && (
-        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+        <div {...closeOnBackdrop(() => setShowPurgeModal(false))} className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
           <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl overflow-hidden border border-rose-100">
             <div className="bg-gradient-to-r from-rose-600 to-rose-700 p-5 text-white flex items-center justify-between">
               <div className="flex items-center gap-2.5">

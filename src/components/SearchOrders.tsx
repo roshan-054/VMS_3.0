@@ -1,3 +1,4 @@
+import { closeOnBackdrop } from '../lib/backdrop';
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   Search,
@@ -714,7 +715,7 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast, current
 
       {/* ALL DETAILS & VIDEO PLAYBACK MODAL */}
       {selectedRecord && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5">
+        <div {...closeOnBackdrop(() => setSelectedRecord(null))} className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5">
           <div className="bg-white rounded-2xl max-w-4xl w-full overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
             {/* Modal Header */}
             <div className="p-4 sm:p-5 bg-slate-900 text-white flex items-center justify-between shrink-0">
@@ -1039,7 +1040,7 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast, current
 
       {/* CONFIRM DELETE MODAL */}
       {recordToDelete && (
-        <div className="fixed inset-0 z-60 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+        <div {...closeOnBackdrop(() => setRecordToDelete(null))} className="fixed inset-0 z-60 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-slate-200 animate-in fade-in zoom-in duration-150">
             <div className="w-12 h-12 rounded-2xl bg-red-50 text-red-600 flex items-center justify-center mx-auto border border-red-100 shadow-inner">
               <AlertTriangle className="w-6 h-6" />

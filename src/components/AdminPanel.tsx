@@ -1,3 +1,4 @@
+import { closeOnBackdrop } from '../lib/backdrop';
 import React, { useState, useEffect, useRef } from 'react';
 import { loadBackendCode } from '../lib/backendCode';
 import {
@@ -102,18 +103,22 @@ import { fmtDate } from '../lib/dateFormat';
 interface AdminPanelProps {
   onShowToast: (msg: string, type: 'info' | 'success' | 'error') => void;
   currentUser: { name: string; email: string; role: string } | null;
+  /**
+   * 'users': the Admin & Users page (Users & Roles only).
+   * 'branding' / 'settings': one settings section, shown inside the Settings page.
+   */
+  section?: 'users' | 'branding' | 'settings';
 }
 
-export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser }) => {
+export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser, section = 'users' }) => {
   const disableSettings = !canUserManageSettings(currentUser as User);
   const disableBranding = !canUserManageBranding(currentUser as User);
   const disableUsers = !canUserManageUsers(currentUser as User);
   // Only the Super Admin can set permissions or give the Super Admin role.
   const iAmSuperAdmin = isSuperAdmin(currentUser as User);
 
-  const [adminTab, setAdminTab] = useState<'users' | 'branding' | 'settings'>(
-    disableUsers ? (disableBranding ? 'settings' : 'branding') : 'users'
-  );
+  // The page or Settings section decides what is shown (Settings and Logo & Favicon live in the Settings page).
+  const adminTab = section;
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -504,8 +509,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
   };
 
   useEffect(() => {
-    fetchUsers();
-  }, []);
+    if (section === 'users') fetchUsers();
+  }, [section]);
 
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -862,59 +867,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
 
   return (
     <div id="admin-panel-container" className="space-y-6">
-      {/* Top Admin Navigation Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
-              <Shield className="w-5 h-5 text-blue-600" />
-              Admin
-            </h2>
-          </div>
+      {section === 'users' && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
+          <h2 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+            <Users className="w-5 h-5 text-blue-600" />
+            Users &amp; Roles ({users.length})
+          </h2>
+          <p className="text-xs text-slate-500">App settings, logo and Drive options are in the Settings page.</p>
         </div>
+      )}
 
-        {/* Sub-tab Navigation Switcher */}
-        <div className="flex flex-wrap items-center bg-slate-200/80 p-1 rounded-xl gap-1">
-          <button
-            id="admin-tab-users-btn"
-            onClick={() => setAdminTab('users')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition cursor-pointer ${
-              adminTab === 'users'
-                ? 'bg-white text-slate-900 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <Users className="w-3.5 h-3.5" />
-            Users & Roles ({users.length})
-          </button>
-          <button
-            id="admin-tab-branding-btn"
-            onClick={() => setAdminTab('branding')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition cursor-pointer ${
-              adminTab === 'branding'
-                ? 'bg-white text-blue-700 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <Palette className="w-3.5 h-3.5 text-blue-600" />
-            Logo & Favicon
-          </button>
-          <button
-            id="admin-tab-settings-btn"
-            onClick={() => setAdminTab('settings')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition cursor-pointer ${
-              adminTab === 'settings'
-                ? 'bg-white text-purple-700 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <HardDrive className="w-3.5 h-3.5 text-purple-600" />
-            Apps Script & Drive Settings
-          </button>
-        </div>
-      </div>
-
-      <DriveStorageCard />
+      {section === 'settings' && <DriveStorageCard />}
 
       {/* SETTINGS & DRIVE INTEGRATION TAB */}
       {adminTab === 'settings' && (
@@ -2273,7 +2236,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
 
       {/* Create User Modal */}
       {isCreateOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+        <div {...closeOnBackdrop(() => setIsCreateOpen(false))} className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="text-base font-semibold text-slate-800">Create New User Account</h3>
@@ -2378,7 +2341,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
 
       {/* Reset Password Modal with View Password Option */}
       {resetModalUser && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+        <div {...closeOnBackdrop(() => setResetModalUser(null))} className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
@@ -2448,7 +2411,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
 
       {/* Permissions Modal (Super Admin only) */}
       {permissionsModalUser && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+        <div {...closeOnBackdrop(() => setPermissionsModalUser(null), savingPermissions)} className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
@@ -2534,7 +2497,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
 
       {/* Edit User Modal */}
       {editModalUser && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+        <div {...closeOnBackdrop(() => setEditModalUser(null))} className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
@@ -2663,7 +2626,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
 
       {/* Delete User Confirmation Modal */}
       {deleteModalUser && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+        <div {...closeOnBackdrop(() => setDeleteModalUser(null))} className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-red-50 text-red-600 flex items-center justify-center shrink-0">
@@ -2709,7 +2672,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
       )}
       {/* Full Code.gs Viewer & Copy Modal */}
       {showCodeModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+        <div {...closeOnBackdrop(() => setShowCodeModal(false))} className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-4xl w-full h-[85vh] flex flex-col shadow-2xl overflow-hidden border border-slate-200">
             {/* Modal Header */}
             <div className="p-4 sm:p-5 bg-slate-900 text-white flex items-center justify-between shrink-0 border-b border-slate-800">

@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
+import { HardDrive, Palette, Database, Code2, Eraser as EraserIcon } from 'lucide-react';
+import { AdminPanel } from './AdminPanel';
 import { Eraser, RefreshCw, Archive, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { BackendUpdateCard } from './BackendUpdateCard';
 import { SupabaseCard, BackupCard } from './SupabaseCard';
 import { ArchivedRowsCard } from './ArchivedRowsCard';
 import { OrderIdFormatCard } from './OrderIdFormatCard';
-import { canUserSeeSupabaseSettings } from '../lib/permissions';
+import { canUserSeeSupabaseSettings, canUserManageSettings, canUserManageBranding } from '../lib/permissions';
 import type { User } from '../types';
 import { scanSheetCleanup, runSheetCleanup, getSheetCleanupProgress, SheetCleanupScan, SheetCleanupResult, SheetCleanupLiveProgress } from '../lib/api';
 
@@ -16,8 +18,28 @@ interface Props {
 const card = 'bg-white rounded-2xl border border-slate-200 shadow-xs p-5 space-y-4';
 const btn = 'inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold disabled:opacity-50 cursor-pointer';
 
-/** Settings: maintenance tools for the Google Sheet. */
+type SectionId = 'app' | 'branding' | 'data' | 'database' | 'backend';
+const SECTION_KEY = 'vms_settings_section';
+
+/** Settings: every app setting in one place, grouped into sections. */
 export const SettingsPage: React.FC<Props> = ({ onShowToast, currentUser }) => {
+  const sections: { id: SectionId; label: string; icon: any; show: boolean }[] = [
+    { id: 'app' as SectionId, label: 'App & Drive', icon: HardDrive, show: canUserManageSettings(currentUser) },
+    { id: 'branding' as SectionId, label: 'Logo & Favicon', icon: Palette, show: canUserManageBranding(currentUser) },
+    { id: 'data' as SectionId, label: 'Data & Cleanup', icon: EraserIcon, show: canUserManageSettings(currentUser) },
+    // Supabase keys and tools: Super Admin only (the backend refuses everyone else too).
+    { id: 'database' as SectionId, label: 'Supabase', icon: Database, show: canUserSeeSupabaseSettings(currentUser) },
+    { id: 'backend' as SectionId, label: 'Backend update', icon: Code2, show: canUserManageSettings(currentUser) },
+  ].filter((x) => x.show);
+  const [picked, setPicked] = useState<SectionId>(() => {
+    try { return (localStorage.getItem(SECTION_KEY) as SectionId) || 'app'; } catch (_) { return 'app'; }
+  });
+  const section: SectionId | undefined = sections.some((x) => x.id === picked) ? picked : sections[0]?.id;
+  const pick = (id: SectionId) => {
+    setPicked(id);
+    try { localStorage.setItem(SECTION_KEY, id); } catch (_) {}
+  };
+
   const [scan, setScan] = useState<SheetCleanupScan | null>(null);
   const [scanning, setScanning] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -80,12 +102,32 @@ export const SettingsPage: React.FC<Props> = ({ onShowToast, currentUser }) => {
   };
 
   return (
-    <div className="max-w-5xl mx-auto space-y-5">
-      <h2 className="text-xl font-bold text-slate-900">Settings</h2>
+    <div className="max-w-7xl mx-auto space-y-5">
+      <div className="flex flex-col gap-3 pb-4 border-b border-slate-200">
+        <h2 className="text-xl font-bold text-slate-900">Settings</h2>
+        <div id="settings-sections" role="tablist" className="flex flex-wrap items-center bg-slate-200/80 p-1 rounded-xl gap-1 self-start">
+          {sections.map((x) => {
+            const Icon = x.icon;
+            return (
+              <button key={x.id} id={`settings-section-${x.id}`} role="tab" aria-selected={section === x.id} type="button"
+                onClick={() => pick(x.id)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition cursor-pointer ${section === x.id ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}>
+                <Icon className="w-3.5 h-3.5" /> {x.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
-      {/* Supabase keys and tools: Super Admin only (the backend refuses everyone else too). */}
-      {canUserSeeSupabaseSettings(currentUser) && <SupabaseCard onShowToast={onShowToast} />}
+      {(section === 'app' || section === 'branding') && (
+        <AdminPanel onShowToast={onShowToast} currentUser={currentUser as any} section={section === 'app' ? 'settings' : 'branding'} />
+      )}
 
+      {section === 'database' && <SupabaseCard onShowToast={onShowToast} />}
+
+      {section === 'backend' && <BackendUpdateCard onShowToast={onShowToast} />}
+
+      {section === 'data' && (<>
       <BackupCard onShowToast={onShowToast} />
 
       <section id="sheet-cleanup-card" className={card}>
@@ -270,8 +312,7 @@ export const SettingsPage: React.FC<Props> = ({ onShowToast, currentUser }) => {
       <OrderIdFormatCard onShowToast={onShowToast} />
 
       <ArchivedRowsCard onShowToast={onShowToast} />
-
-      <BackendUpdateCard onShowToast={onShowToast} />
+      </>)}
     </div>
   );
 };

@@ -1,3 +1,4 @@
+import { closeOnBackdrop } from '../lib/backdrop';
 import React, { useState, useEffect, useMemo } from 'react';
 import { productHasTag } from '../lib/catalogTags';
 import {
@@ -3510,7 +3511,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
       {/* MODAL 1: SYNC & CONFIGURE GOOGLE SHEET */}
       {isSyncModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in">
+        <div {...closeOnBackdrop(() => setIsSyncModalOpen(false))} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in">
           <div className="w-full max-w-lg bg-white border border-slate-200 rounded-3xl p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2.5">
@@ -3689,7 +3690,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
       {/* MODAL 3: EDIT PRODUCT */}
       {editingProduct && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in">
+        <div {...closeOnBackdrop(() => setEditingProduct(null))} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in">
           <form
             onSubmit={handleSaveEditedProduct}
             className="w-full max-w-md bg-white border border-slate-200 rounded-3xl p-6 shadow-2xl space-y-4"
@@ -3805,7 +3806,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
       {/* MODAL 5: EDIT MANIFEST ORDER (Admin Only) */}
       {isEditManifestModalOpen && editingManifest && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in overflow-y-auto">
+        <div {...closeOnBackdrop(() => { setIsEditManifestModalOpen(false); setEditingManifest(null); })} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in overflow-y-auto">
           <form
             onSubmit={handleSaveEditedManifest}
             className="w-full max-w-3xl bg-white border border-slate-200 rounded-3xl p-6 shadow-2xl space-y-5 my-8 max-h-[90vh] flex flex-col"
@@ -4182,7 +4183,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
 
       {/* RESOLVE ORDER ISSUE / VIDEO RECONCILIATION MODAL */}
       {isResolveModalOpen && resolvingManifest && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+        <div {...closeOnBackdrop(() => { setIsResolveModalOpen(false); setResolvingManifest(null); })} className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
           <div className="bg-white rounded-3xl shadow-2xl max-w-xl w-full max-h-[92vh] flex flex-col overflow-hidden border border-slate-200">
             {/* Modal Header */}
             <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-amber-50/70 via-indigo-50/40 to-white">
