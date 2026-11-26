@@ -5511,10 +5511,60 @@ function logPackVerification_(p) {
   return { success: true, orderId: log.orderId };
 }
 
+/**
+ * Order -> Drive link of its packing (Forward) video. A pack check is logged before the video is
+ * recorded, so its own "Drive Video URL" cell is normally empty: the link comes from OrderLog
+ * (newest recording wins), then UploadLog, then the order list. Keys ignore '#' and spaces.
+ */
+function packVideoLinksByOrder_() {
+  var links = {};
+  var ss = ss_();
+  var put = function(order, url, overwrite) {
+    var k = normalizeOrderId_(order);
+    if (!k || !url) return;
+    if (overwrite || !links[k]) links[k] = url;
+  };
+  var fileLink = function(fid) {
+    fid = String(fid || '').trim();
+    return /^[a-zA-Z0-9_-]{10,}$/.test(fid) ? 'https://drive.google.com/file/d/' + fid + '/view' : '';
+  };
+  try {
+    var ol = ss.getSheetByName(CONFIG.ORDER_LOG_SHEET);
+    if (ol && ol.getLastRow() > 1) {
+      var v = ol.getDataRange().getValues();
+      // Headers: Timestamp, Order ID, Platform, Packer Email, Video Drive ID, Video Playback URL, ..., Recording Type (I)
+      for (var i = 1; i < v.length; i++) {
+        if (String(v[i][8] || 'Forward').toLowerCase() === 'return') continue;
+        put(v[i][1], fileLink(v[i][4]) || String(v[i][5] || '').trim(), true);
+      }
+    }
+  } catch (e) { console.warn('Pack video links (OrderLog):', e); }
+  try {
+    var ul = ss.getSheetByName(CONFIG.UPLOAD_LOG_SHEET);
+    if (ul && ul.getLastRow() > 1) {
+      var u = ul.getDataRange().getValues();
+      // Headers: ..., Drive File ID (J), Status (K), Error, Recording Type (M)
+      for (var j = 1; j < u.length; j++) {
+        if (String(u[j][12] || 'Forward').toLowerCase() === 'return') continue;
+        put(u[j][1], fileLink(u[j][9]), false);
+      }
+    }
+  } catch (e) { console.warn('Pack video links (UploadLog):', e); }
+  try {
+    var ms = getManifestSheet_();
+    if (ms && ms.getLastRow() > 1) {
+      var m = ms.getDataRange().getValues();
+      for (var k = 1; k < m.length; k++) put(m[k][1], String(m[k][13] || '').trim(), false);
+    }
+  } catch (e) { console.warn('Pack video links (OrderManifest):', e); }
+  return links;
+}
+
 function getPackVerificationLogs_(p) {
   var sh = getVerificationLogSheet_();
   var data = sh.getDataRange().getValues();
   var logs = [];
+  var videoLinks = packVideoLinksByOrder_();
 
   for (var i = data.length - 1; i >= 1; i--) {
     var r = data[i];
@@ -5538,7 +5588,7 @@ function getPackVerificationLogs_(p) {
       itemsSummary: r[10] || '',
       scannedGtinsLog: scannedLog,
       durationSeconds: Number(r[12] || 0),
-      videoDriveUrl: r[13] || ''
+      videoDriveUrl: String(r[13] || '').trim() || videoLinks[normalizeOrderId_(r[1])] || ''
     });
   }
 
