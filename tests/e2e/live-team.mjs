@@ -89,6 +89,8 @@ try {
   check("today's totals from the Sheet (recorded/uploaded/packed)", today === '3/2/0', today || (await card(PACKER.email).locator('[data-today]').getAttribute('data-today').catch(() => 'no card')));
   const online = await waitFor(async () => (await card(PACKER.email).getAttribute('data-state').catch(() => '')) === 'online');
   check('packer shows Online', online, await card(PACKER.email).getAttribute('data-state').catch(() => ''));
+  check('only packer accounts: the admin has no card', (await admin.locator(`[data-user="${backend.ADMIN.email}"]`).count()) === 0 && (await admin.locator('[data-user]').count()) === 2, await admin.locator('[data-user]').count() + ' cards');
+  check('online count is packers only', (await admin.locator('#team-online').innerText()) === '1', await admin.locator('#team-online').innerText());
   check('user who is not signed in shows Offline', (await card('ravi@test.local').getAttribute('data-state').catch(() => '')) === 'offline');
   const packerCounts = () => packer.evaluate(async () => {
     const { dbGetAllQueue } = await import('/src/lib/storage.ts');

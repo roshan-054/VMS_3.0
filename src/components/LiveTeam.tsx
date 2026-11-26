@@ -30,6 +30,11 @@ interface Row {
 const TEAM_POLL_SUPABASE_MS = 10000; // answered from this computer's Supabase copy
 const TEAM_POLL_GAS_MS = 30000; // Apps Script reads the Sheet, so less often
 
+function isAdminRoleName(role: string): boolean {
+  const r = String(role || '').toLowerCase().replace(/[\s_-]/g, '');
+  return r === 'admin' || r === 'administrator' || r === 'superadmin' || r === 'masteradmin';
+}
+
 function ago(ms: number): string {
   if (ms < 0) ms = 0;
   const s = Math.round(ms / 1000);
@@ -111,6 +116,11 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
       }
       by.set(k, row);
     }
+    // Only packer accounts (role User): Admin and Super Admin are not shown, and a station is
+    // shown only once the user list confirms it belongs to a packer.
+    for (const [k, row] of by) {
+      if (!row.team || isAdminRoleName(row.role)) by.delete(k);
+    }
     const rank = (r: Row) => (r.state === 'recording' ? 0 : r.state === 'packing' ? 1 : r.online ? 2 : 3);
     return Array.from(by.values()).sort((a, b) => rank(a) - rank(b) || (b.lastActionAt - a.lastActionAt) || a.name.localeCompare(b.name));
   }, [team, stations]);
@@ -149,7 +159,7 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
               <Users className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-lg font-bold text-slate-900">Live Team</h2>
+              <h2 className="text-lg font-bold text-slate-900">Live Team <span className="text-xs font-semibold text-slate-500">· packers</span></h2>
               <p className="text-xs text-slate-500 flex items-center gap-1">
                 <Radio className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
                 <span id="live-team-mode">{viaSupabase ? 'Live' : 'Updates every 5 s'}</span>
@@ -185,7 +195,7 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
       </div>
 
       {team === null && stations === null && <p className="text-sm text-slate-500 px-1">Loading the team…</p>}
-      {team !== null && shown.length === 0 && <p className="text-sm text-slate-500 px-1">No one matches.</p>}
+      {team !== null && shown.length === 0 && <p className="text-sm text-slate-500 px-1">{rows.length ? 'No packer matches.' : 'No packer accounts yet.'}</p>}
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {shown.map((r) => {

@@ -61,9 +61,17 @@ let lastSentAt = 0;
 let lastPayload = '';
 let sending = false;
 let stopped = true;
+let changedWhileSending = false;
 
 async function sendNow(): Promise<void> {
-  if (sending || stopped) return;
+  if (stopped) return;
+  if (sending) {
+    // A change came in while the previous report was on its way: send again right after it,
+    // instead of waiting for the next 20 s heartbeat.
+    changedWhileSending = true;
+    return;
+  }
+  changedWhileSending = false;
   sending = true;
   try {
     const all = await dbGetAllQueue();
@@ -87,6 +95,10 @@ async function sendNow(): Promise<void> {
     /* offline or old backend: try again on the next tick */
   } finally {
     sending = false;
+    if (changedWhileSending && !stopped) {
+      changedWhileSending = false;
+      schedule(stationSupabaseUsable() ? MIN_GAP_SUPABASE_MS : MIN_GAP_MS);
+    }
   }
 }
 
