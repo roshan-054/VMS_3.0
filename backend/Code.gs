@@ -6973,34 +6973,55 @@ function sbDrain_(maxMs) {
         keys.forEach(function(k, i) { if (k && !where[k]) where[k] = i + 1; });
         const width = Math.max(sh.getLastColumn(), (values[0] || []).length, 1);
         const appends = [];
-        const deletes = [];
-        list.forEach(function(it) {
+        const updates = {};
+        const deletes = {};
+        // Removals first, so a row deleted and re-added under the same key ends up present.
+        list.slice().sort(function(a, b) { return (a.live ? 1 : 0) - (b.live ? 1 : 0); }).forEach(function(it) {
           let r = 0;
           const cand = [it.key].concat(it.keys || []);
           for (let c = 0; c < cand.length && !r; c++) if (cand[c] && where[cand[c]]) r = where[cand[c]];
           if (it.live) {
-            if (r) { sbWriteRow_(sh, r, it.vals || [], width); formatDateRows_(sh, r, 1); written++; }
+            if (r) { updates[r] = it.vals || []; delete deletes[r]; }
             else appends.push(it);
           } else if (r) {
-            deletes.push(r);
+            deletes[r] = true; delete updates[r];
           }
         });
-        if (appends.length) {
-          appends.sort(function(a, b) { return Number(a.seq) - Number(b.seq); });
-          const w = Math.max(width, appends.reduce(function(m, it) { return Math.max(m, (it.vals || []).length); }, 1));
-          const block = appends.map(function(it) {
-            const row = (it.vals || []).map(sbDecodeCell_);
-            while (row.length < w) row.push('');
-            return row;
-          });
-          const first = sh.getLastRow() + 1;
-          sh.getRange(first, 1, block.length, w).setValues(block);
-          formatDateRows_(sh, first, block.length);
-          appended += block.length;
-        }
-        if (deletes.length) {
-          deletes.sort(function(a, b) { return b - a; }).filter(function(r, i, a) { return i === 0 || a[i - 1] !== r; })
-            .forEach(function(r) { sh.deleteRow(r); removed++; });
+        appends.sort(function(a, b) { return Number(a.seq) - Number(b.seq); });
+        const updRows = Object.keys(updates).map(Number);
+        const delRows = Object.keys(deletes).map(Number);
+        const decodeRow = function(vals, w) {
+          const row = (vals || []).map(sbDecodeCell_);
+          while (row.length < w) row.push('');
+          return row.slice(0, Math.max(w, row.length));
+        };
+        if (updRows.length + delRows.length > 20) {
+          // Many changes (for example a catalog sync): rewrite the tab in one go instead of row by row.
+          const w = Math.max(width, appends.reduce(function(m, it) { return Math.max(m, (it.vals || []).length); }, 1),
+            updRows.reduce(function(m, r) { return Math.max(m, updates[r].length); }, 1));
+          const finalRows = [];
+          for (let i = 0; i < values.length; i++) {
+            const r = i + 1;
+            if (deletes[r]) continue;
+            if (updates[r]) finalRows.push(decodeRow(updates[r], w));
+            else { const row = values[i].slice(); while (row.length < w) row.push(''); finalRows.push(row.slice(0, w)); }
+          }
+          appends.forEach(function(it) { finalRows.push(decodeRow(it.vals, w)); });
+          if (finalRows.length) sh.getRange(1, 1, finalRows.length, w).setValues(finalRows);
+          if (values.length > finalRows.length) sh.deleteRows(finalRows.length + 1, values.length - finalRows.length);
+          if (finalRows.length > 1) formatDateRows_(sh, 2, finalRows.length - 1);
+          written += updRows.length; appended += appends.length; removed += delRows.length;
+        } else {
+          updRows.forEach(function(r) { sbWriteRow_(sh, r, updates[r], width); formatDateRows_(sh, r, 1); written++; });
+          if (appends.length) {
+            const w = Math.max(width, appends.reduce(function(m, it) { return Math.max(m, (it.vals || []).length); }, 1));
+            const block = appends.map(function(it) { return decodeRow(it.vals, w); });
+            const first = sh.getLastRow() + 1;
+            sh.getRange(first, 1, block.length, w).setValues(block);
+            formatDateRows_(sh, first, block.length);
+            appended += block.length;
+          }
+          delRows.sort(function(a, b) { return b - a; }).forEach(function(r) { sh.deleteRow(r); removed++; });
         }
       });
       SpreadsheetApp.flush();
