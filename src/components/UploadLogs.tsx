@@ -210,7 +210,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [showCleanDuplicatesModal, setShowCleanDuplicatesModal] = useState(false);
   const canDelete = currentUser ? canUserDeleteData(currentUser) : true;
-  const isAdminViewer = currentUser?.role === 'Admin' || currentUser?.role === 'Master Admin';
+  const isAdminViewer = currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin';
 
   // Lookup associated Manifest & Product Items for Selected Log
   const selectedLogManifest = useMemo(() => {

@@ -228,7 +228,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   // Filter registered users: ONLY user/packer role accounts (no Admin accounts in packer dropdown)
   const availablePackers = useMemo(() => {
     const list = registeredUsers.filter((u) => {
-      const isAdm = isAdmin(u) || isMasterAdmin(u) || u.role === 'Admin' || u.role === 'Master Admin';
+      const isAdm = isAdmin(u) || isMasterAdmin(u) || u.role === 'Admin' || u.role === 'Super Admin';
       return !isAdm && (u.status === 'Approved' || !u.status);
     });
     if (list.length === 0 && currentUser) {

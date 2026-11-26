@@ -419,7 +419,7 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
             </button>
 
             {/* Admin Override to re-pack / re-verify */}
-            {(currentUser?.role === 'Admin' || currentUser?.role === 'Master Admin') && (
+            {(currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin') && (
               <button
                 type="button"
                 onClick={() => setAdminOverride(true)}
@@ -447,7 +447,7 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
   // CASE 1: UNAUTHORIZED ORDER ASSIGNMENT SCREEN
   // ==========================================
   if (!isAssignedToCurrent) {
-    const isUserAdmin = currentUser?.role === 'Admin' || currentUser?.role === 'Master Admin';
+    const isUserAdmin = currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin';
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in select-none">

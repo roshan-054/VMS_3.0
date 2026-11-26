@@ -30,7 +30,7 @@ async function rpc(sb, fn, args, key) {
 }
 
 function setup(sb) {
-  const rt = createRuntime({ users: [[new Date(), 'Admin One', 'admin@vms.test', null, 'Admin', 'Approved']] });
+  const rt = createRuntime({ users: [[new Date(), 'Admin One', 'admin@vms.test', null, 'Super Admin', 'Approved']] });
   rt.sheets.get('Users').rows[1][3] = rt.hash('Secret123!');
   const triggers = [];
   rt.sandbox.UrlFetchApp = { fetch: curlFetch };
@@ -96,7 +96,7 @@ test('Supabase sync with the Google Sheet', async (t) => {
   const login = rt.call('login', { email: 'admin@vms.test', password: 'Secret123!' });
   const me = await rpc(sb, 'vms_whoami', { p_token: login.token });
   assert.equal(me.email, 'admin@vms.test');
-  assert.equal(me.role, 'Admin');
+  assert.equal(me.role, 'Super Admin');
 
   // --- first copy of the Sheet
   const imp = rt.call('supabaseImport', { token: login.token });

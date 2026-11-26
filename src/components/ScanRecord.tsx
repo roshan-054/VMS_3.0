@@ -197,7 +197,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
             !currentUser?.email ||
             manifest.assignedPackerEmail.toLowerCase().trim() === currentUser.email.toLowerCase().trim() ||
             currentUser.role === 'Admin' ||
-            currentUser.role === 'Master Admin';
+            currentUser.role === 'Super Admin';
 
           if (!isAssigned) {
             const assignedName = manifest.assignedPackerName || manifest.assignedPackerEmail;
@@ -279,7 +279,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
         !currentUser?.email ||
         manifest.assignedPackerEmail.toLowerCase().trim() === currentUser.email.toLowerCase().trim() ||
         currentUser.role === 'Admin' ||
-        currentUser.role === 'Master Admin';
+        currentUser.role === 'Super Admin';
 
       if (!isAssigned) {
         const assignedName = manifest.assignedPackerName || manifest.assignedPackerEmail;
