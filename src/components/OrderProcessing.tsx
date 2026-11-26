@@ -43,6 +43,7 @@ import {
 import { PlatformType, User, OrderManifest, ManifestItem, GtinCatalogProduct, PackVerificationLog } from '../types';
 import {
   getStoredManifests,
+  getManifestByOrderId,
   saveOrderManifest,
   saveMultipleManifests,
   deleteManifest,
@@ -3486,9 +3487,13 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                         {Array.isArray(log.scannedGtinsLog) ? log.scannedGtinsLog.join(', ') : ''}
                       </td>
                       <td className="p-3 whitespace-nowrap">
-                        {log.videoDriveUrl ? (
+                        {(() => {
+                          // The pack check is logged before the video exists; the link comes from the
+                          // uploaded recording (server side) or, failing that, from the order itself.
+                          const url = log.videoDriveUrl || getManifestByOrderId(log.orderId)?.videoDriveUrl || '';
+                          return url ? (
                           <a
-                            href={log.videoDriveUrl}
+                            href={url}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-blue-600 hover:underline flex items-center gap-1 font-medium"
@@ -3497,8 +3502,9 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                             <ExternalLink className="w-3 h-3" />
                           </a>
                         ) : (
-                          <span className="text-slate-400">Recording</span>
-                        )}
+                          <span className="text-slate-400" title="No uploaded packing video found for this order yet">No video yet</span>
+                        );
+                        })()}
                       </td>
                     </tr>
                   ))}
