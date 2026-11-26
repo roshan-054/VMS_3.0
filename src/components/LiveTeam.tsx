@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Users, Radio, Video, PackageCheck, ScanLine, WifiOff, Search, RefreshCw, Clock } from 'lucide-react';
+import { Users, Radio, Video, PackageCheck, ScanLine, WifiOff, Search, RefreshCw, Clock, X } from 'lucide-react';
 import { requestApi } from '../lib/api';
 import { fmtDate, fmtDateTime } from '../lib/dateFormat';
 import { useStationReports, stationCounts, type StationReport } from './LiveStationQueues';
@@ -71,6 +71,94 @@ export function backlogUploads(station: StationReport | null, team: TeamUser | n
   return Array.from(out.values()).sort((a, b) => (a.at || 0) - (b.at || 0));
 }
 
+/** Every open order or unfinished upload of one packer, in a list that closes on an outside click. */
+const OpenList: React.FC<{
+  kind: 'orders' | 'uploads';
+  name: string;
+  orders: NonNullable<TeamUser['pendingOrders']>;
+  orderTotal: number;
+  uploads: BacklogUpload[];
+  onClose: () => void;
+}> = ({ kind, name, orders, orderTotal, uploads, onClose }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  const [filter, setFilter] = useState('');
+  useEffect(() => {
+    const down = (e: MouseEvent | TouchEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    // Next tick, so the click that opened the list does not close it.
+    const t = setTimeout(() => {
+      document.addEventListener('mousedown', down);
+      document.addEventListener('touchstart', down);
+    }, 0);
+    document.addEventListener('keydown', key);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener('mousedown', down);
+      document.removeEventListener('touchstart', down);
+      document.removeEventListener('keydown', key);
+    };
+  }, [onClose]);
+  const f = filter.trim().toLowerCase();
+  const now = Date.now();
+  const DAY = 86400000;
+  const orderRows = orders.filter((o) => !f || o.orderId.toLowerCase().includes(f) || o.platform.toLowerCase().includes(f));
+  const uploadRows = uploads.filter((u) => !f || u.orderId.toLowerCase().includes(f) || u.status.includes(f));
+  const total = kind === 'orders' ? orderTotal : uploads.length;
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-900/30 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+    <div ref={ref} id="live-team-open-list" data-kind={kind} role="dialog" aria-label={kind === 'orders' ? 'Pending orders' : 'Unfinished uploads'}
+      className="w-full max-w-lg bg-white rounded-2xl border border-slate-200 shadow-xl p-4 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-sm font-bold text-slate-900 truncate">
+          {name} · {total} {kind === 'orders' ? `pending order${total === 1 ? '' : 's'}` : `upload${total === 1 ? '' : 's'} not finished`}
+        </div>
+        <button type="button" onClick={onClose} className="p-1 rounded-md text-slate-500 hover:bg-slate-100 cursor-pointer" aria-label="Close" data-close>
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+      <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Find an order" data-filter
+        className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-lg" />
+      <div className="max-h-[60vh] overflow-y-auto overflow-x-hidden">
+        <table className="w-full text-xs">
+          <thead className="sticky top-0 bg-white text-slate-500">
+            {kind === 'orders' ? (
+              <tr><th className="text-left py-1 font-semibold">Order ID</th><th className="text-left font-semibold">Platform</th><th className="text-left font-semibold">Assigned</th><th className="text-right font-semibold">Age</th></tr>
+            ) : (
+              <tr><th className="text-left py-1 font-semibold">Order ID</th><th className="text-left font-semibold">Status</th><th className="text-left font-semibold">Since</th><th className="text-right font-semibold">Age</th></tr>
+            )}
+          </thead>
+          <tbody>
+            {kind === 'orders'
+              ? orderRows.map((o) => (
+                  <tr key={o.orderId} data-open-row={o.orderId} className={`border-t border-slate-100 ${o.at && now - o.at > DAY ? 'text-orange-800' : 'text-slate-700'}`}>
+                    <td className="py-1 font-mono break-all pr-2">{o.orderId}</td>
+                    <td className="pr-2">{o.platform || '—'}</td>
+                    <td className="pr-2 whitespace-nowrap">{o.at ? fmtDateTime(new Date(o.at)) : '—'}</td>
+                    <td className="text-right whitespace-nowrap">{o.at ? ageShort(now - o.at) : '—'}</td>
+                  </tr>
+                ))
+              : uploadRows.map((u) => (
+                  <tr key={u.orderId} data-open-row={u.orderId} title={u.error || ''} className={`border-t border-slate-100 ${u.status === 'failed' ? 'text-rose-700' : u.at && now - u.at > DAY ? 'text-orange-800' : 'text-slate-700'}`}>
+                    <td className="py-1 font-mono break-all pr-2">{u.orderId}</td>
+                    <td className="pr-2">{u.status}{u.where === 'sheet' ? ' (Sheet)' : ''}</td>
+                    <td className="pr-2 whitespace-nowrap">{u.at ? fmtDateTime(new Date(u.at)) : '—'}</td>
+                    <td className="text-right whitespace-nowrap">{u.at ? ageShort(now - u.at) : '—'}</td>
+                  </tr>
+                ))}
+          </tbody>
+        </table>
+        {(kind === 'orders' ? orderRows : uploadRows).length === 0 && <div className="text-xs text-slate-500 py-2">No order matches.</div>}
+      </div>
+      {kind === 'orders' && orderTotal > orders.length && (
+        <div className="text-[10px] text-slate-500">Showing the oldest {orders.length} of {orderTotal}.</div>
+      )}
+    </div>
+    </div>
+  );
+};
+
 interface Row {
   key: string;
   name: string;
@@ -121,6 +209,12 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
   const [teamLoading, setTeamLoading] = useState(false);
   const [query, setQuery] = useState('');
   const [onlyOnline, setOnlyOnline] = useState(false);
+  const [openList, setOpenList] = useState<{ email: string; kind: 'orders' | 'uploads' } | null>(null);
+  const closeList = React.useCallback(() => setOpenList(null), []);
+  // The buttons that open the list toggle it themselves; they must not count as an outside click.
+  const keepOpen = (e: React.SyntheticEvent) => e.stopPropagation();
+  const toggleList = (email: string, kind: 'orders' | 'uploads') =>
+    setOpenList((o) => (o && o.email === email && o.kind === kind ? null : { email, kind }));
   const [, setTick] = useState(0);
   const [preset, setPreset] = useState<Preset>('TODAY');
   const [customFrom, setCustomFrom] = useState(() => dayKey(new Date()));
@@ -374,6 +468,7 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
                 </div>
               )}
 
+              <div className="relative">
               <div className="rounded-xl border border-orange-100 bg-orange-50/40 px-3 py-2 space-y-1.5 text-[11px]" data-backlog
                 data-backlog-orders={pendCount} data-backlog-uploads={ups.length}>
                 <div className="flex items-center gap-1 font-semibold text-slate-700">
@@ -386,7 +481,10 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
                   <>
                     {pendCount > 0 && (
                       <div data-backlog-pending>
-                        <span className="text-slate-600">{pendCount} pending order{pendCount === 1 ? '' : 's'}</span>
+                        <button type="button" data-open-orders onMouseDown={keepOpen} onTouchStart={keepOpen} onClick={() => toggleList(r.key, 'orders')} title="See every pending order"
+                          className="text-slate-700 font-semibold underline decoration-dotted underline-offset-2 hover:text-indigo-700 cursor-pointer">
+                          {pendCount} pending order{pendCount === 1 ? '' : 's'}
+                        </button>
                         {pend[0]?.at > 0 && <span className="text-slate-500"> · oldest {ageShort(Date.now() - pend[0].at)}</span>}
                         <div className="flex flex-wrap gap-1 mt-1">
                           {pend.slice(0, 4).map((o) => {
@@ -398,13 +496,21 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
                               </span>
                             );
                           })}
-                          {pendCount > 4 && <span className="text-slate-500">+{pendCount - 4} more</span>}
+                          {pendCount > 4 && (
+                            <button type="button" data-more-orders onMouseDown={keepOpen} onTouchStart={keepOpen} onClick={() => toggleList(r.key, 'orders')}
+                              className="px-1.5 py-0.5 rounded border border-indigo-200 bg-indigo-50 text-indigo-700 font-semibold hover:bg-indigo-100 cursor-pointer">
+                              +{pendCount - 4} more
+                            </button>
+                          )}
                         </div>
                       </div>
                     )}
                     {ups.length > 0 && (
                       <div data-backlog-upload-list>
-                        <span className="text-slate-600">{ups.length} upload{ups.length === 1 ? '' : 's'} not finished</span>
+                        <button type="button" data-open-uploads onMouseDown={keepOpen} onTouchStart={keepOpen} onClick={() => toggleList(r.key, 'uploads')} title="See every unfinished upload"
+                          className="text-slate-700 font-semibold underline decoration-dotted underline-offset-2 hover:text-indigo-700 cursor-pointer">
+                          {ups.length} upload{ups.length === 1 ? '' : 's'} not finished
+                        </button>
                         {ups[0]?.at > 0 && <span className="text-slate-500"> · oldest {ageShort(Date.now() - ups[0].at)}</span>}
                         <div className="flex flex-wrap gap-1 mt-1">
                           {ups.slice(0, 4).map((u) => {
@@ -418,12 +524,21 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
                               </span>
                             );
                           })}
-                          {ups.length > 4 && <span className="text-slate-500">+{ups.length - 4} more</span>}
+                          {ups.length > 4 && (
+                            <button type="button" data-more-uploads onMouseDown={keepOpen} onTouchStart={keepOpen} onClick={() => toggleList(r.key, 'uploads')}
+                              className="px-1.5 py-0.5 rounded border border-indigo-200 bg-indigo-50 text-indigo-700 font-semibold hover:bg-indigo-100 cursor-pointer">
+                              +{ups.length - 4} more
+                            </button>
+                          )}
                         </div>
                       </div>
                     )}
                   </>
                 )}
+              </div>
+              {openList?.email === r.key && (
+                <OpenList kind={openList.kind} name={r.name} orders={pend} orderTotal={pendCount} uploads={ups} onClose={closeList} />
+              )}
               </div>
 
               <div className="text-[11px] text-slate-600 truncate" data-last>
