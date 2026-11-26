@@ -1,9 +1,13 @@
 export type PlatformType = 'Amazon' | 'D2C' | 'JioMart' | 'Custom';
 export type RecordingType = 'Forward' | 'Return';
-export type UserRole = 'Master Admin' | 'Admin' | 'User';
+export type UserRole = 'Super Admin' | 'Admin' | 'User';
 export type UserStatus = 'Approved' | 'Pending' | 'Rejected' | 'Disabled';
 
 export interface AdminPermissions {
+  canAccessRecord: boolean;
+  canAccessProcessing: boolean;
+  canAccessQueue: boolean;
+  canAccessLogs: boolean;
   canDeleteData: boolean;
   canManageUsers: boolean;
   canManageSettings: boolean;
@@ -22,6 +26,8 @@ export interface User {
   status: UserStatus;
   created?: string;
   permissions?: AdminPermissions;
+  /** True when the Super Admin changed this user's permissions from their role's defaults. */
+  customPermissions?: boolean;
 }
 
 export interface VideoRecord {

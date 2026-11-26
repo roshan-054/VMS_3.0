@@ -3,17 +3,20 @@ import { Eraser, RefreshCw, Archive, AlertTriangle, CheckCircle2 } from 'lucide-
 import { BackendUpdateCard } from './BackendUpdateCard';
 import { SupabaseCard, BackupCard } from './SupabaseCard';
 import { ArchivedRowsCard } from './ArchivedRowsCard';
+import { canUserSeeSupabaseSettings } from '../lib/permissions';
+import type { User } from '../types';
 import { scanSheetCleanup, runSheetCleanup, getSheetCleanupProgress, SheetCleanupScan, SheetCleanupResult, SheetCleanupLiveProgress } from '../lib/api';
 
 interface Props {
   onShowToast: (message: string, type: 'success' | 'error' | 'info') => void;
+  currentUser?: User | null;
 }
 
 const card = 'bg-white rounded-2xl border border-slate-200 shadow-xs p-5 space-y-4';
 const btn = 'inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold disabled:opacity-50 cursor-pointer';
 
 /** Settings: maintenance tools for the Google Sheet. */
-export const SettingsPage: React.FC<Props> = ({ onShowToast }) => {
+export const SettingsPage: React.FC<Props> = ({ onShowToast, currentUser }) => {
   const [scan, setScan] = useState<SheetCleanupScan | null>(null);
   const [scanning, setScanning] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -79,7 +82,8 @@ export const SettingsPage: React.FC<Props> = ({ onShowToast }) => {
     <div className="max-w-5xl mx-auto space-y-5">
       <h2 className="text-xl font-bold text-slate-900">Settings</h2>
 
-      <SupabaseCard onShowToast={onShowToast} />
+      {/* Supabase keys and tools: Super Admin only (the backend refuses everyone else too). */}
+      {canUserSeeSupabaseSettings(currentUser) && <SupabaseCard onShowToast={onShowToast} />}
 
       <BackupCard onShowToast={onShowToast} />
 

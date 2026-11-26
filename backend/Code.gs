@@ -79,7 +79,7 @@ const ADMIN_ACTIONS = [
   'scanSheetCleanup', 'runSheetCleanup',
   'getBackendUpdateStatus', 'updateBackend', 'rollbackBackend', 'getSheetCleanupProgress',
   'listCleanupArchive', 'restoreCleanupArchive',
-  'getSupabaseConfig', 'saveSupabaseConfig', 'supabaseImport', 'supabaseSweep'
+  'getSupabaseConfig', 'saveSupabaseConfig', 'supabaseImport', 'supabaseSweep', 'setUserPermissions'
 ];
 
 function doPost(e) {
@@ -91,8 +91,10 @@ function doPost(e) {
     SB_DEFER_ = (a === 'uploadChunk' || a === 'heartbeatUpload');
     if (SB_ACTION_TABS_[a]) sbTouchTabs_(SB_ACTION_TABS_[a]);
     if (PUBLIC_ACTIONS.indexOf(a) === -1) {
-      if (ADMIN_ACTIONS.indexOf(a) !== -1) admin_(p.token);
-      else session_(p.token);
+      REQ_ACCESS_ = null;
+      authorizeRequest_(a, p.token);
+      // Any other administrator-only action keeps needing an Admin or Super Admin.
+      if (ADMIN_ACTIONS.indexOf(a) !== -1 && !ACTION_PERMISSIONS_[a]) admin_(p.token);
       try { applySheetDateFormats_(false); } catch (_) {}
     }
     switch(a) {
@@ -107,6 +109,8 @@ function doPost(e) {
       case 'validateSession': return output_(validateSession_(p));
       case 'logout': return output_(logout_(p));
       case 'getUsers': return output_(getUsers_(p));
+      case 'getMyAccess': return output_(getMyAccess_(p));
+      case 'setUserPermissions': return output_(setUserPermissions_(p));
       case 'adminCreateUser': return output_(adminCreateUser_(p));
       case 'adminManageUser': return output_(adminManageUser_(p));
       case 'adminResetPassword': return output_(adminResetPassword_(p));
@@ -612,7 +616,7 @@ function setupSystem() {
   const ss = ss_();
   const folder = parentFolder_();
   const specs = [
-    [CONFIG.USERS_SHEET,['Timestamp','Full Name','Email','Password','Role','Status']],
+    [CONFIG.USERS_SHEET,['Timestamp','Full Name','Email','Password','Role','Status','Permissions']],
     [CONFIG.ORDER_LOG_SHEET,['Timestamp','Order ID','Platform','Packer Email','Video Drive ID','Video Playback URL','Package Weight','Status','Recording Type','Queue Job ID','Video MIME Type','Playback Status']],
     [CONFIG.RETURN_LOG_SHEET,['Timestamp','Order ID','Platform','Packer Email','Video Drive ID','Video Playback URL','Package Weight','Status','Recording Type','Queue Job ID','Video MIME Type','Playback Status']],
     [CONFIG.DOWNLOAD_LOG_SHEET,['Timestamp','Order ID','Platform','User Email','File Name','File Size','Download Type','Recording Type']],
@@ -768,10 +772,234 @@ function isAdminRole_(role){
   return r==='admin'||r==='masteradmin'||r==='superadmin';
 }
 
+function isSuperAdminRole_(role){
+  const r=String(role||'').toLowerCase().replace(/[\s_-]/g,'');
+  return r==='superadmin'||r==='masteradmin';
+}
+
+/** The three roles written to the Users sheet: Super Admin, Admin or User. */
+function canonicalRole_(role){
+  if(isSuperAdminRole_(role))return 'Super Admin';
+  return isAdminRole_(role)?'Admin':'User';
+}
+
 function admin_(token){
   const u=session_(token);
-  if(!isAdminRole_(u.role))throw new Error('Administrator permission required.');
+  // The request was already allowed by its permission (for example a User the Super Admin
+  // allowed to manage users): the function's own administrator check is satisfied.
+  if(REQ_ACCESS_&&REQ_ACCESS_.token===String(token||'').trim()&&REQ_ACCESS_.granted)return u;
+  const live=REQ_ACCESS_&&REQ_ACCESS_.token===String(token||'').trim()?REQ_ACCESS_.access:null;
+  if(!isAdminRole_(live?live.role:u.role))throw new Error('Administrator permission required.');
   return u;
+}
+
+/* ---------- Super Admin and permissions ----------
+ * Roles: Super Admin > Admin > User. Each user's permissions start from their role's defaults,
+ * so existing Admins and Users keep exactly what they had. Only a Super Admin can change a
+ * user's permissions (stored as JSON in the Users sheet "Permissions" column G) or see the
+ * Supabase settings. Every request is checked against the user's current row in the Users
+ * sheet, so a change applies within a minute without signing in again. */
+const PERMISSION_KEYS_ = [
+  'canAccessRecord', 'canAccessProcessing', 'canAccessQueue', 'canAccessLogs',
+  'canAccessSearch', 'canAccessReports', 'canAccessAnalytics', 'canAccessHealth',
+  'canDeleteData', 'canManageUsers', 'canManageSettings', 'canManageBranding'
+];
+const USER_PERMISSION_DEFAULTS_ = {
+  canAccessRecord: true, canAccessProcessing: true, canAccessQueue: true, canAccessLogs: true,
+  canAccessSearch: false, canAccessReports: false, canAccessAnalytics: false, canAccessHealth: false,
+  canDeleteData: false, canManageUsers: false, canManageSettings: false, canManageBranding: false
+};
+// The one account made Super Admin automatically while the sheet has no Super Admin yet,
+// and only if it is already an approved Admin. Afterwards this email has no special rights.
+const SUPER_ADMIN_BOOTSTRAP_EMAIL_ = 'roshan.k@paraayan.com';
+const USERS_PERMISSIONS_COL_ = 7;
+const ACCESS_CACHE_SECONDS_ = 60;
+let REQ_ACCESS_ = null;
+
+// Which permission each protected action needs. 'superAdmin' = Super Admin only,
+// 'admin' = Admin or Super Admin. Arrays mean any one of them.
+const ACTION_PERMISSIONS_ = {
+  getSupabaseConfig: 'superAdmin', saveSupabaseConfig: 'superAdmin', supabaseImport: 'superAdmin', supabaseSweep: 'superAdmin',
+  setUserPermissions: 'superAdmin',
+  adminCreateUser: 'canManageUsers', adminManageUser: 'canManageUsers', adminResetPassword: 'canManageUsers', adminDeleteUser: 'canManageUsers',
+  deleteLogEntry: 'canDeleteData', removeUploadLog: 'canDeleteData', deleteOrderLog: 'canDeleteData',
+  scanDuplicates: 'canDeleteData', scanDuplicateRecords: 'canDeleteData', cleanDuplicates: 'canDeleteData',
+  removeDuplicates: 'canDeleteData', removeDuplicateRecords: 'canDeleteData',
+  scanOlder: 'canDeleteData', scanOlderVideos: 'canDeleteData', deleteOlder: 'canDeleteData', deleteOlderVideos: 'canDeleteData',
+  saveBranding: ['canManageBranding', 'canManageSettings'], uploadBrandingImage: 'canManageBranding',
+  setup: 'canManageSettings', repairPlaybackUrls: 'canManageSettings', migrateReturns: 'canManageSettings',
+  migrateDriveFolders: 'canManageSettings', migrateMonthlyFolders: 'canManageSettings',
+  applyConditionalFormatting: 'canManageSettings', checkDriveFolder: 'canManageSettings',
+  getDriveStorage: 'canManageSettings', applyDateFormats: 'canManageSettings',
+  scanSheetCleanup: 'canManageSettings', runSheetCleanup: 'canManageSettings', getSheetCleanupProgress: 'canManageSettings',
+  listCleanupArchive: 'canManageSettings', restoreCleanupArchive: 'canManageSettings',
+  getBackendUpdateStatus: 'canManageSettings', updateBackend: 'canManageSettings', rollbackBackend: 'canManageSettings',
+  getStationQueues: 'admin'
+};
+
+function roleDefaultPermissions_(role){
+  const out={};
+  const all=isAdminRole_(role);
+  PERMISSION_KEYS_.forEach(function(k){out[k]=all?true:USER_PERMISSION_DEFAULTS_[k]===true});
+  return out;
+}
+
+function parseStoredPermissions_(raw){
+  let obj=null;
+  if(raw&&typeof raw==='object')obj=raw;
+  else{try{obj=JSON.parse(String(raw||''))}catch(_){obj=null}}
+  const out={};
+  if(!obj||typeof obj!=='object')return out;
+  PERMISSION_KEYS_.forEach(function(k){if(typeof obj[k]==='boolean')out[k]=obj[k]});
+  return out;
+}
+
+/** A user's permissions: their role's defaults with the Super Admin's changes on top. */
+function effectivePermissions_(role, stored){
+  const base=roleDefaultPermissions_(role);
+  if(isSuperAdminRole_(role))return base; // a Super Admin always has everything
+  const custom=parseStoredPermissions_(stored);
+  Object.keys(custom).forEach(function(k){base[k]=custom[k]});
+  return base;
+}
+
+function hasPermission_(access, need){
+  if(!access)return false;
+  if(isSuperAdminRole_(access.role))return true;
+  if(need==='superAdmin')return false;
+  if(need==='admin')return isAdminRole_(access.role);
+  const list=Array.isArray(need)?need:[need];
+  return list.some(function(k){return access.permissions&&access.permissions[k]===true});
+}
+
+function isApprovedStatus_(raw){
+  const s=String(raw||'Approved').trim().toLowerCase();
+  return !s||s==='approved'||s==='active'||s==='enabled'||s==='true';
+}
+
+function ensurePermissionsHeader_(sh){
+  try{
+    if(sh.getLastColumn()<USERS_PERMISSIONS_COL_||String(sh.getRange(1,USERS_PERMISSIONS_COL_).getValue()||'')!=='Permissions'){
+      sh.getRange(1,USERS_PERMISSIONS_COL_).setValue('Permissions');
+    }
+  }catch(_){}
+}
+
+/** Make the bootstrap account Super Admin while the sheet has none. Returns true if it changed. */
+function ensureSuperAdmin_(sh, values){
+  for(let i=1;i<values.length;i++)if(isSuperAdminRole_(values[i][4])&&isApprovedStatus_(values[i][5]))return false;
+  for(let i=1;i<values.length;i++){
+    if(normalize_(values[i][2])!==SUPER_ADMIN_BOOTSTRAP_EMAIL_)continue;
+    if(!isAdminRole_(values[i][4])||!isApprovedStatus_(values[i][5]))return false;
+    sh.getRange(i+1,5).setValue('Super Admin');
+    values[i][4]='Super Admin';
+    try{sbTouchTabs_([CONFIG.USERS_SHEET])}catch(_){}
+    securityLog_(SUPER_ADMIN_BOOTSTRAP_EMAIL_,'ROLE','SUCCESS','Made Super Admin (no Super Admin existed)');
+    return true;
+  }
+  return false;
+}
+
+function accessCacheKey_(email){return 'ACCESS_'+normalize_(email)}
+function clearAccessCache_(email){try{CacheService.getScriptCache().remove(accessCacheKey_(email))}catch(_){}}
+
+/**
+ * The user's current role, status and permissions from the Users sheet (cached for a minute).
+ * Returns null when the account no longer exists. Throws only if the sheet cannot be read.
+ */
+function liveAccess_(email){
+  const key=accessCacheKey_(email);
+  try{
+    const hit=CacheService.getScriptCache().get(key);
+    if(hit){const rec=JSON.parse(hit);return rec.missing?null:rec}
+  }catch(_){}
+  const sh=sheet_(CONFIG.USERS_SHEET), values=sh.getDataRange().getValues();
+  try{if(ensureSuperAdmin_(sh,values))clearAccessCache_(SUPER_ADMIN_BOOTSTRAP_EMAIL_)}catch(_){}
+  let rec={missing:true};
+  for(let i=1;i<values.length;i++){
+    if(normalize_(values[i][2])!==normalize_(email))continue;
+    const role=canonicalRole_(values[i][4]);
+    rec={
+      email:normalize_(email), name:String(values[i][1]||''), role:role,
+      approved:isApprovedStatus_(values[i][5]),
+      permissions:effectivePermissions_(role, values[i][USERS_PERMISSIONS_COL_-1]),
+      customPermissions:Object.keys(parseStoredPermissions_(values[i][USERS_PERMISSIONS_COL_-1])).length>0
+    };
+    break;
+  }
+  try{CacheService.getScriptCache().put(key,JSON.stringify(rec),ACCESS_CACHE_SECONDS_)}catch(_){}
+  return rec.missing?null:rec;
+}
+
+/**
+ * Checks a signed-in request against the user's current access. Ends the session when the
+ * account was removed or disabled, and refuses actions the user is not allowed to take.
+ */
+function authorizeRequest_(action, token){
+  const user=session_(token);
+  let access=null;
+  try{access=liveAccess_(user.email)}catch(_){
+    // Users sheet not readable right now: fall back to the role saved at sign-in.
+    const role=canonicalRole_(user.role);
+    access={email:normalize_(user.email),name:user.name,role:role,approved:true,permissions:effectivePermissions_(role,null),fallback:true};
+  }
+  if(!access||!access.approved){
+    try{CacheService.getScriptCache().remove('SESSION_'+token)}catch(_){}
+    try{PropertiesService.getScriptProperties().deleteProperty('SESS_'+token)}catch(_){}
+    try{sbDropSessions_(token, null)}catch(_){}
+    throw authError_('Your account is no longer active. Please sign in again or contact an administrator.');
+  }
+  const need=ACTION_PERMISSIONS_[action];
+  const granted=need?hasPermission_(access,need):false;
+  REQ_ACCESS_={token:String(token||'').trim(), access:access, granted:granted};
+  if(need&&!granted){
+    throw new Error(need==='superAdmin'
+      ? 'Only the Super Admin can do this.'
+      : 'You do not have permission to do this. Ask the Super Admin to allow it.');
+  }
+  return access;
+}
+
+function publicUser_(access, fallbackUser){
+  return {
+    name: access ? (access.name || (fallbackUser && fallbackUser.name) || '') : String((fallbackUser && fallbackUser.name) || ''),
+    email: access ? access.email : normalize_(fallbackUser && fallbackUser.email),
+    role: access ? access.role : canonicalRole_(fallbackUser && fallbackUser.role),
+    permissions: access ? access.permissions : effectivePermissions_(fallbackUser && fallbackUser.role, null)
+  };
+}
+
+/** The signed-in user's current role and permissions (the app refreshes its menu from this). */
+function getMyAccess_(p){
+  const user=session_(p.token);
+  const access=REQ_ACCESS_&&REQ_ACCESS_.access?REQ_ACCESS_.access:liveAccess_(user.email);
+  return {success:true, user:publicUser_(access,user)};
+}
+
+/** Super Admin only: set which pages and actions a user has. */
+function setUserPermissions_(p){
+  const me=session_(p.token);
+  return withScriptLock_(function(){
+    const sh=sheet_(CONFIG.USERS_SHEET), values=sh.getDataRange().getValues();
+    const target=normalize_(p.email||p.expectedEmail);
+    let row=-1;
+    for(let i=1;i<values.length;i++)if(normalize_(values[i][2])===target){row=i;break}
+    if(row<0)throw new Error('User account not found.');
+    if(isSuperAdminRole_(values[row][4]))throw new Error('A Super Admin always has every permission.');
+    const role=canonicalRole_(values[row][4]);
+    let stored='';
+    if(!p.reset){
+      const wanted=parseStoredPermissions_(p.permissions), defaults=roleDefaultPermissions_(role), diff={};
+      // Store only what differs from the role, so a role change later still works as expected.
+      Object.keys(wanted).forEach(function(k){if(wanted[k]!==defaults[k])diff[k]=wanted[k]});
+      stored=Object.keys(diff).length?JSON.stringify(diff):'';
+    }
+    ensurePermissionsHeader_(sh);
+    sh.getRange(row+1,USERS_PERMISSIONS_COL_).setValue(stored);
+    clearAccessCache_(target);
+    securityLog_(normalize_(me.email),'PERMISSIONS','SUCCESS','Updated '+target+': '+(stored||'role defaults'));
+    return {success:true, email:target, permissions:effectivePermissions_(role,stored), customPermissions:!!stored};
+  });
 }
 
 function pruneExpiredSessions_(){
@@ -848,13 +1076,17 @@ function login_(p){
       throw new Error('Your account is pending administrator approval (Status: ' + (values[i][5] || 'Pending') + ').');
     }
 
+    try { if (ensureSuperAdmin_(sh, values)) clearAccessCache_(SUPER_ADMIN_BOOTSTRAP_EMAIL_); } catch (_) {}
+    const role = canonicalRole_(values[i][4] || 'User');
     const user = {
       name: String(values[i][1] || 'Packing Operator'),
       email: String(values[i][2] || email),
-      role: String(values[i][4] || 'User')
+      role: role
     };
+    clearAccessCache_(user.email);
     securityLog_(user.email, 'LOGIN', 'SUCCESS', 'Authenticated');
-    return { success: true, token: saveSession_(user), user };
+    const out = { name: user.name, email: user.email, role: role, permissions: effectivePermissions_(role, values[i][USERS_PERMISSIONS_COL_ - 1]) };
+    return { success: true, token: saveSession_(user), user: out };
   }
 
   securityLog_(email, 'LOGIN', 'FAILED', 'User not found: ' + rawIdentifier);
@@ -873,9 +1105,9 @@ function signup_(p){
       if(String(values[i][2]||'').trim().toLowerCase()===email)throw new Error('An account with this email already exists.');
       if(isAdminRole_(values[i][4]))hasAdmin=true;
     }
-    // Bootstrap: with no administrator yet, the first account becomes an approved Admin.
+    // Bootstrap: with no administrator yet, the first account becomes an approved Super Admin.
     // Afterwards new accounts are Pending until an administrator approves them.
-    const role=hasAdmin?'User':'Admin';
+    const role=hasAdmin?'User':'Super Admin';
     const status=hasAdmin?'Pending':'Approved';
     logAppend_(sh, [new Date(),name,email,hash_(password),role,status]);
     securityLog_(email,'SIGNUP','SUCCESS','Registered as '+role+' ('+status+')');
@@ -883,13 +1115,18 @@ function signup_(p){
       return {success:true, pending:true, message:'Account created. An administrator must approve it before you can sign in.'};
     }
     const user={name:name,email:email,role:role};
-    return {success:true, token:saveSession_(user), user:user, message:'Administrator account created. Signed in as '+name+'.'};
+    const out={name:name,email:email,role:role,permissions:effectivePermissions_(role,null)};
+    return {success:true, token:saveSession_(user), user:out, message:'Super Admin account created. Signed in as '+name+'.'};
   });
 }
 
 function validateSession_(p){
   try{
-    return {success:true,user:session_(p.token)};
+    const u=session_(p.token);
+    let access=null;
+    try{access=liveAccess_(u.email)}catch(_){access=undefined}
+    if(access===null||(access&&!access.approved))return {success:false,code:'AUTH_REQUIRED',error:'Your account is no longer active.'};
+    return {success:true,user:publicUser_(access||null,u)};
   }catch(err){
     return {success:false,code:'AUTH_REQUIRED',error:err.message};
   }
@@ -906,18 +1143,46 @@ function logout_(p){
 
 function getUsers_(p){
   session_(p.token);
-  const v=sheet_(CONFIG.USERS_SHEET).getDataRange().getValues(), users=[];
-  for(let i=1;i<v.length;i++)users.push({row:i+1,name:String(v[i][1]||''),email:String(v[i][2]||''),role:String(v[i][4]||'User'),status:String(v[i][5]||'Pending'),created:v[i][0] instanceof Date?v[i][0].toISOString():String(v[i][0]||'')});
+  const sh=sheet_(CONFIG.USERS_SHEET), v=sh.getDataRange().getValues(), users=[];
+  try{if(ensureSuperAdmin_(sh,v))clearAccessCache_(SUPER_ADMIN_BOOTSTRAP_EMAIL_)}catch(_){}
+  for(let i=1;i<v.length;i++){
+    const role=canonicalRole_(v[i][4]||'User'), stored=v[i][USERS_PERMISSIONS_COL_-1];
+    users.push({row:i+1,name:String(v[i][1]||''),email:String(v[i][2]||''),role:role,status:String(v[i][5]||'Pending'),
+      created:v[i][0] instanceof Date?v[i][0].toISOString():String(v[i][0]||''),
+      permissions:effectivePermissions_(role,stored),customPermissions:Object.keys(parseStoredPermissions_(stored)).length>0});
+  }
   return {success:true,users};
+}
+
+/** The caller is a Super Admin right now (checked against the Users sheet). */
+function callerIsSuperAdmin_(token){
+  const a=REQ_ACCESS_&&REQ_ACCESS_.token===String(token||'').trim()?REQ_ACCESS_.access:null;
+  if(a)return isSuperAdminRole_(a.role);
+  const u=session_(token);
+  try{const live=liveAccess_(u.email);return !!(live&&isSuperAdminRole_(live.role))}catch(_){return isSuperAdminRole_(u.role)}
+}
+
+/** Role to save for a create/edit: only a Super Admin can give or take away Super Admin. */
+function requestedRole_(p, callerSuper){
+  const want=canonicalRole_(p.role);
+  if(want==='Super Admin'&&!callerSuper)throw new Error('Only the Super Admin can make someone a Super Admin.');
+  return want;
+}
+
+function countApprovedSuperAdmins_(values){
+  let n=0;
+  for(let i=1;i<values.length;i++)if(isSuperAdminRole_(values[i][4])&&isApprovedStatus_(values[i][5]))n++;
+  return n;
 }
 
 function adminCreateUser_(p){
   admin_(p.token);
   const name=String(p.name||p.fullName||'').trim(), email=String(p.email||'').trim().toLowerCase(), password=String(p.password||'');
   if(!name||!email||password.length<6)throw new Error('Name, valid email and password (6+) are required.');
+  const role=requestedRole_(p, callerIsSuperAdmin_(p.token));
   const sh=sheet_(CONFIG.USERS_SHEET), v=sh.getDataRange().getValues();
   if(v.some((r,i)=>i>0&&String(r[2]||'').toLowerCase()===email))throw new Error('Email already exists.');
-  logAppend_(sh, [new Date(),name,email,hash_(password),p.role==='Admin'?'Admin':'User',p.status||'Approved']);
+  logAppend_(sh, [new Date(),name,email,hash_(password),role,p.status||'Approved']);
   return {success:true};
 }
 
@@ -926,17 +1191,29 @@ function adminManageUser_(p){
   const row=Number(p.row);if(row<2)throw new Error('Invalid user row.');
   const sh=sheet_(CONFIG.USERS_SHEET), current=sh.getRange(row,1,1,6).getValues()[0];
   const expected=String(p.expectedEmail||'').toLowerCase();if(expected&&String(current[2]||'').toLowerCase()!==expected)throw new Error('User record changed. Refresh and try again.');
+  const callerSuper=callerIsSuperAdmin_(p.token);
+  const targetSuper=isSuperAdminRole_(current[4]);
+  if(targetSuper&&!callerSuper)throw new Error('Only the Super Admin can change a Super Admin account.');
+  // A missing role keeps the current one (for example a status-only change).
+  const role=p.role===undefined||p.role===null||p.role===''?canonicalRole_(current[4]):requestedRole_(p, callerSuper);
+  const status=String(p.status||current[5]);
+  if(targetSuper&&(role!=='Super Admin'||!isApprovedStatus_(status))){
+    if(countApprovedSuperAdmins_(sh.getDataRange().getValues())<=1)throw new Error('This is the only Super Admin. Make another user Super Admin first.');
+  }
   sh.getRange(row,2,1,1).setValue(String(p.name||current[1]));
-  sh.getRange(row,5,1,2).setValues([[p.role==='Admin'?'Admin':'User',String(p.status||current[5])]]);
+  sh.getRange(row,5,1,2).setValues([[role,status]]);
+  clearAccessCache_(current[2]);
   // Role or approval changed: the user's fast-database sign-in is renewed from this Sheet on next use.
-  if (String(current[4]||'')!==(p.role==='Admin'?'Admin':'User') || String(current[5]||'')!==String(p.status||current[5])) sbDropSessions_(null, String(current[2]||''));
+  if (String(current[4]||'')!==role || String(current[5]||'')!==status) sbDropSessions_(null, String(current[2]||''));
   return {success:true};
 }
 
 function adminResetPassword_(p){
   admin_(p.token);
   const row=Number(p.row),password=String(p.password||'');if(row<2||password.length<6)throw new Error('Invalid row or password.');
-  sheet_(CONFIG.USERS_SHEET).getRange(row,4).setValue(hash_(password));return {success:true};
+  const sh=sheet_(CONFIG.USERS_SHEET);
+  if(isSuperAdminRole_(sh.getRange(row,5).getValue())&&!callerIsSuperAdmin_(p.token))throw new Error('Only the Super Admin can reset a Super Admin password.');
+  sh.getRange(row,4).setValue(hash_(password));return {success:true};
 }
 
 function adminDeleteUser_(p){
@@ -961,8 +1238,13 @@ function adminDeleteUser_(p){
   if (emailInSheet === String(me.email || '').trim().toLowerCase()) {
     throw new Error('You cannot delete your own active administrator account.');
   }
+  if (isSuperAdminRole_(sh.getRange(row, 5).getValue())) {
+    if (!callerIsSuperAdmin_(p.token)) throw new Error('Only the Super Admin can delete a Super Admin account.');
+    if (countApprovedSuperAdmins_(v) <= 1) throw new Error('This is the only Super Admin. Make another user Super Admin first.');
+  }
 
   sh.deleteRow(row);
+  clearAccessCache_(emailInSheet);
   sbDropSessions_(null, emailInSheet);
   return { success: true, email: emailInSheet };
 }
@@ -5917,10 +6199,7 @@ function markRowsTrashed_(sh, col, rowNums) {
 }
 
 function deleteOlderVideos_(p) {
-  const user = session_(p.token);
-  if (!isAdminRole_(user.role)) {
-    throw new Error('Unauthorized: Admin rights required to delete older videos and logs.');
-  }
+  const user = admin_(p.token); // the request's permission (Delete Logs & Data) was checked first
   const started = Date.now();
   const budgetMs = Number(p.budgetMs) > 0 ? Number(p.budgetMs) : 240000;
   // Sheet rows are the permanent record: this tool only moves videos to Drive Trash and never
@@ -6652,6 +6931,7 @@ const SB_ACTION_TABS_ = {
   signup: [CONFIG.USERS_SHEET],
   adminCreateUser: [CONFIG.USERS_SHEET], adminManageUser: [CONFIG.USERS_SHEET],
   adminResetPassword: [CONFIG.USERS_SHEET], adminDeleteUser: [CONFIG.USERS_SHEET],
+  setUserPermissions: [CONFIG.USERS_SHEET],
   cleanupStuckUploads: [CONFIG.UPLOAD_LOG_SHEET],
   deleteLogEntry: [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET, CONFIG.DOWNLOAD_LOG_SHEET, CONFIG.TRASH_LOG_SHEET],
   scanDuplicates: [], scanDuplicateRecords: [],

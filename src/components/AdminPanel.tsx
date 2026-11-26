@@ -47,9 +47,10 @@ import { requestApi, checkBackendHealth, uploadBrandingImage, repairSheetPlaybac
 import { DriveStorageCard } from './DriveStorageCard';
 import { getLocalUsers, deleteLocalUserByEmail, getDeletedUserEmails } from '../lib/localAuth';
 import {
-  isMasterAdmin,
+  isSuperAdmin,
   getUserPermissions,
-  saveUserPermissionsLocally,
+  roleDefaultPermissions,
+  PERMISSION_GROUPS,
   canUserManageUsers,
   canUserManageSettings,
   canUserManageBranding
@@ -107,6 +108,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
   const disableSettings = !canUserManageSettings(currentUser as User);
   const disableBranding = !canUserManageBranding(currentUser as User);
   const disableUsers = !canUserManageUsers(currentUser as User);
+  // Only the Super Admin can set permissions or give the Super Admin role.
+  const iAmSuperAdmin = isSuperAdmin(currentUser as User);
 
   const [adminTab, setAdminTab] = useState<'users' | 'branding' | 'settings'>(
     disableUsers ? (disableBranding ? 'settings' : 'branding') : 'users'
@@ -660,36 +663,35 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
     setPermissionsModalValues(getUserPermissions(u));
   };
 
-  const handleSavePermissions = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const savePermissions = async (reset: boolean) => {
     if (!permissionsModalUser) return;
-
     setSavingPermissions(true);
     try {
-      await requestApi('adminManageUser', {
-        row: permissionsModalUser.row,
-        name: permissionsModalUser.name,
-        role: permissionsModalUser.role,
-        status: permissionsModalUser.status,
-        expectedEmail: permissionsModalUser.email,
-        permissions: permissionsModalValues
+      // Saved in the Users sheet by the backend, which also enforces them.
+      await requestApi('setUserPermissions', {
+        email: permissionsModalUser.email,
+        permissions: permissionsModalValues,
+        reset,
       });
-      // Also save locally just in case
-      saveUserPermissionsLocally(permissionsModalUser.email, permissionsModalValues);
-      
-      onShowToast(`Permissions updated for ${permissionsModalUser.email}`, 'success');
+      onShowToast(
+        reset ? `Permissions for ${permissionsModalUser.email} reset to the ${permissionsModalUser.role} defaults` : `Permissions updated for ${permissionsModalUser.email}`,
+        'success'
+      );
       setPermissionsModalUser(null);
       fetchUsers();
     } catch (err: any) {
-      // If backend fails or doesn't support it, fallback to local storage
-      console.warn('Backend permission save failed, saving locally:', err);
-      saveUserPermissionsLocally(permissionsModalUser.email, permissionsModalValues);
-      onShowToast(`Saved permissions locally (Backend update failed)`, 'info');
-      setPermissionsModalUser(null);
-      fetchUsers();
+      const msg = /Unknown action/i.test(err?.message || '')
+        ? 'Click "Update backend now" in Settings first, then try again.'
+        : err?.message || 'Could not save permissions.';
+      onShowToast(msg, 'error');
     } finally {
       setSavingPermissions(false);
     }
+  };
+
+  const handleSavePermissions = (e: React.FormEvent) => {
+    e.preventDefault();
+    savePermissions(false);
   };
 
   const handleLogoFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2162,7 +2164,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                       <td className="px-4 py-3">
                         <span
                           className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold ${
-                            u.role === 'Master Admin'
+                            isSuperAdmin(u)
                               ? 'bg-amber-100 text-amber-800 border border-amber-200'
                               : u.role === 'Admin'
                               ? 'bg-purple-50 text-purple-700'
@@ -2171,6 +2173,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                         >
                           {u.role}
                         </span>
+                        {u.customPermissions && !isSuperAdmin(u) && (
+                          <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-50 text-purple-700" title="The Super Admin changed this user's permissions">
+                            Custom access
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <span
@@ -2190,6 +2197,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                       </td>
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                          {isSuperAdmin(u) && !iAmSuperAdmin ? (
+                            <span className="text-[11px] text-slate-400">Only the Super Admin can change this account</span>
+                          ) : (<>
                           <button
                             type="button"
                             onClick={() => handleOpenEditUser(u)}
@@ -2226,15 +2236,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                             </button>
                           )}
 
-                          <button
-                            type="button"
-                            onClick={() => handleEditPermissions(u)}
-                            className="inline-flex items-center gap-1 px-2 py-1 bg-purple-50 hover:bg-purple-100 text-purple-700 font-semibold rounded-lg text-[11px] transition shadow-2xs cursor-pointer"
-                            title="Granular permissions"
-                          >
-                            <Shield className="w-3 h-3" />
-                            Perms
-                          </button>
+                          {iAmSuperAdmin && !isSuperAdmin(u) && (
+                            <button
+                              type="button"
+                              onClick={() => handleEditPermissions(u)}
+                              className="inline-flex items-center gap-1 px-2 py-1 bg-purple-50 hover:bg-purple-100 text-purple-700 font-semibold rounded-lg text-[11px] transition shadow-2xs cursor-pointer"
+                              title="Choose what this user can see and do"
+                            >
+                              <Shield className="w-3 h-3" />
+                              Perms
+                            </button>
+                          )}
 
                           {u.email !== currentUser?.email && (
                             <button
@@ -2247,6 +2259,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                               Delete
                             </button>
                           )}
+                          </>)}
                         </div>
                       </td>
                     </tr>
@@ -2326,7 +2339,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                   >
                     <option value="User">User / Packer</option>
                     <option value="Admin">Administrator</option>
-                    <option value="Master Admin">Master Admin</option>
+                    {iAmSuperAdmin && <option value="Super Admin">Super Admin</option>}
                   </select>
                 </div>
 
@@ -2433,7 +2446,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
         </div>
       )}
 
-      {/* Granular Permissions Modal (Master Admin Only) */}
+      {/* Permissions Modal (Super Admin only) */}
       {permissionsModalUser && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
@@ -2456,40 +2469,47 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
             </div>
 
             <form onSubmit={handleSavePermissions} className="space-y-4">
-              <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-2">
-                {[
-                  { key: 'canDeleteData', label: 'Delete Logs & Data', desc: 'Allow user to permanently remove logs and trash Drive files' },
-                  { key: 'canManageUsers', label: 'Manage Users', desc: 'Allow user to create, edit, or disable other users' },
-                  { key: 'canManageSettings', label: 'Manage Settings', desc: 'Allow user to change Google Apps Script URL and Drive settings' },
-                  { key: 'canManageBranding', label: 'Manage Branding', desc: 'Allow user to change app logo and favicon' },
-                  { key: 'canAccessSearch', label: 'Search Videos', desc: 'Allow user to access the Search page' },
-                  { key: 'canAccessReports', label: 'View Reports', desc: 'Allow user to generate and view CSV reports' },
-                  { key: 'canAccessAnalytics', label: 'Access Analytics', desc: 'Allow user to view system analytics and charts' },
-                  { key: 'canAccessHealth', label: 'Access System Health', desc: 'Allow user to view technical diagnostics' },
-                ].map((perm) => (
-                  <label key={perm.key} className="flex items-start justify-between cursor-pointer p-2.5 hover:bg-slate-50 rounded-xl border border-transparent hover:border-slate-100">
-                    <div className="pr-4">
-                      <span className="text-xs font-semibold text-slate-800 block">
-                        {perm.label}
-                      </span>
-                      <span className="text-[10px] text-slate-500 leading-tight block mt-0.5">
-                        {perm.desc}
-                      </span>
-                    </div>
-                    <div className="pt-1">
-                      <input
-                        type="checkbox"
-                        checked={!!permissionsModalValues[perm.key]}
-                        onChange={(e) => setPermissionsModalValues({ ...permissionsModalValues, [perm.key]: e.target.checked })}
-                        className="w-4 h-4 text-purple-600 rounded border-slate-300 focus:ring-purple-500"
-                        disabled={isMasterAdmin(permissionsModalUser) && permissionsModalUser.email === currentUser?.email}
-                      />
-                    </div>
-                  </label>
+              <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-2">
+                <p className="text-[11px] text-slate-500">
+                  Starts from the {permissionsModalUser.role} defaults. Changes apply within a minute, without signing in again.
+                </p>
+                {PERMISSION_GROUPS.map((group) => (
+                  <div key={group.title} className="space-y-1">
+                    <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500 px-2.5">{group.title}</div>
+                    {group.items.map((perm) => (
+                      <label key={perm.key} className="flex items-start justify-between cursor-pointer p-2.5 hover:bg-slate-50 rounded-xl border border-transparent hover:border-slate-100">
+                        <div className="pr-4">
+                          <span className="text-xs font-semibold text-slate-800 block">{perm.label}</span>
+                          <span className="text-[10px] text-slate-500 leading-tight block mt-0.5">{perm.desc}</span>
+                        </div>
+                        <div className="pt-1">
+                          <input
+                            type="checkbox"
+                            data-perm={perm.key}
+                            checked={!!permissionsModalValues[perm.key]}
+                            onChange={(e) => setPermissionsModalValues({ ...permissionsModalValues, [perm.key]: e.target.checked })}
+                            className="w-4 h-4 text-purple-600 rounded border-slate-300 focus:ring-purple-500"
+                          />
+                        </div>
+                      </label>
+                    ))}
+                  </div>
                 ))}
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  disabled={savingPermissions}
+                  onClick={() => {
+                    setPermissionsModalValues(roleDefaultPermissions(permissionsModalUser));
+                    savePermissions(true);
+                  }}
+                  className="mr-auto px-3 py-2 text-slate-600 hover:text-slate-900 rounded-lg text-xs font-semibold cursor-pointer disabled:opacity-50"
+                  title="Go back to the normal permissions for this role"
+                >
+                  Reset to {permissionsModalUser.role} defaults
+                </button>
                 <button
                   type="button"
                   onClick={() => setPermissionsModalUser(null)}
@@ -2499,6 +2519,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                 </button>
                 <button
                   type="submit"
+                  id="save-permissions-btn"
                   disabled={savingPermissions}
                   className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white rounded-lg text-xs font-semibold shadow-xs cursor-pointer flex items-center gap-1.5"
                 >
@@ -2573,7 +2594,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                   >
                     <option value="User">User / Operator</option>
                     <option value="Admin">Administrator</option>
-                    <option value="Master Admin">Master Admin</option>
+                    {iAmSuperAdmin && <option value="Super Admin">Super Admin</option>}
                   </select>
                 </div>
 

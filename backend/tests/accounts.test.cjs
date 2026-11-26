@@ -28,9 +28,9 @@ test('first sign-up on an empty sheet becomes an approved Admin and is signed in
   const res = rt.call('signup', { fullName: 'Owner', email: 'owner@example.com', password: 'Str0ngPass!' });
   assert.equal(res.success, true, res.error);
   assert.ok(res.token);
-  assert.equal(res.user.role, 'Admin');
+  assert.equal(res.user.role, 'Super Admin');
   const row = rt.sheets.get('Users').rows[1];
-  assert.deepEqual([row[2], row[4], row[5]], ['owner@example.com', 'Admin', 'Approved']);
+  assert.deepEqual([row[2], row[4], row[5]], ['owner@example.com', 'Super Admin', 'Approved']);
   assert.equal(rt.call('getUsers', { token: res.token }).success, true);
 });
 
