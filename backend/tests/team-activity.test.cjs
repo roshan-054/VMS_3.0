@@ -65,3 +65,59 @@ test('station reports keep a short activity line and nothing else', () => {
   const st2 = rt.call('getStationQueues', { token: admin }).stations.find((s) => s.email === 'vineet@vms.com');
   assert.equal(st2.activity.state, '');
 });
+
+test('a date range counts that range; today stays the default', () => {
+  const { rt, admin } = setup();
+  const now = Date.now();
+  const yday = new Date(now - 24 * 3600e3);
+  const old = new Date(now - 10 * 24 * 3600e3);
+  rt.sheets.get('OrderLog').rows.push(
+    [new Date(now - 60000), 'OD-T', 'Amazon', 'vineet@vms.com', 'f1', '', '1 MB', 'Completed', 'Forward', 'j1', 'video/mp4', 'Ready'],
+    [yday, 'OD-Y1', 'Amazon', 'vineet@vms.com', 'f2', '', '1 MB', 'Completed', 'Forward', 'j2', 'video/mp4', 'Ready'],
+    [yday, 'OD-Y2', 'Amazon', 'vineet@vms.com', 'f3', '', '1 MB', 'Completed', 'Forward', 'j3', 'video/mp4', 'Ready'],
+    [old, 'OD-O', 'Amazon', 'vineet@vms.com', 'f4', '', '1 MB', 'Completed', 'Forward', 'j4', 'video/mp4', 'Ready'],
+  );
+  const v = (res) => res.users.find((u) => u.email === 'vineet@vms.com').today.recorded;
+  const tzName = rt.sandbox.Session.getScriptTimeZone();
+  const k = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: tzName || 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  assert.equal(v(rt.call('getTeamActivity', { token: admin })), 1, 'today');
+  const y = rt.call('getTeamActivity', { token: admin, from: k(yday), to: k(yday) });
+  assert.equal(y.from, k(yday));
+  assert.equal(v(y), 2, 'yesterday');
+  assert.equal(v(rt.call('getTeamActivity', { token: admin, from: k(new Date(now - 6 * 24 * 3600e3)), to: k(new Date(now)) })), 3, 'last 7 days');
+  assert.equal(v(rt.call('getTeamActivity', { token: admin, from: k(new Date(now)), to: k(old) })), 4, 'reversed range is swapped');
+});
+
+test('backlog: pending orders assigned to the packer and uploads that never finished, any date', () => {
+  const { rt, admin } = setup();
+  const now = Date.now();
+  const daysAgo = (n) => new Date(now - n * 24 * 3600e3);
+  const man = rt.sheets.get('OrderManifest');
+  if (!man.rows.length) man.rows.push(['Timestamp','Order ID','Platform','Assigned Packer Name','Assigned Packer Email','Processed By Name','Processed By Email','Total Items Count','Items List','Status','Notes','Packed At','Packed By Name','Video Drive Link']);
+  man.rows.push(
+    [daysAgo(3), 'OLD-PEND', 'Amazon', 'Vineet', 'vineet@vms.com', 'A', 'alice@example.com', 1, '', 'Pending', '', '', '', ''],
+    [daysAgo(0.1), 'NEW-PEND', 'D2C', 'Vineet', 'Vineet@VMS.com', 'A', 'alice@example.com', 1, '', 'Pending', '', '', '', ''],
+    [daysAgo(2), 'DONE', 'Amazon', 'Vineet', 'vineet@vms.com', 'A', 'alice@example.com', 1, '', 'Packed', '', '', '', ''],
+    [daysAgo(2), 'RAVI-PEND', 'Amazon', 'Ravi', 'ravi@vms.com', 'A', 'alice@example.com', 1, '', 'Pending', '', '', '', ''],
+  );
+  const ul = rt.sheets.get('UploadLog').rows;
+  const U = (d, id, status, err = '') => [d, id, 'Amazon', 'vineet@vms.com', id + '.mp4', '1 MB', 'u-' + id, status, 0, '', status, err, 'Forward', 'Recorder', 'j-' + id];
+  ul.push(U(daysAgo(2), 'UP-FAIL', 'Failed', 'Network'));
+  ul.push(U(daysAgo(2.1), 'UP-RETRIED', 'Failed'), U(daysAgo(1), 'UP-RETRIED', 'Completed'));
+  ul.push(U(daysAgo(1.5), 'UP-RECORDED', 'Failed'));
+  ul.push(U(daysAgo(45), 'UP-ANCIENT', 'Failed'));
+  rt.sheets.get('OrderLog').rows.push([daysAgo(1.4), 'UP-RECORDED', 'Amazon', 'vineet@vms.com', 'fidR', '', '1 MB', 'Completed', 'Forward', 'jr', 'video/mp4', 'Ready']);
+
+  const res = rt.call('getTeamActivity', { token: admin });
+  const v = res.users.find((u) => u.email === 'vineet@vms.com');
+  assert.deepEqual(v.pendingOrders.map((o) => o.orderId), ['OLD-PEND', 'NEW-PEND'], 'oldest first, packed ones left out');
+  assert.equal(v.pendingOrderCount, 2);
+  assert.ok(v.pendingOrders[0].at < v.pendingOrders[1].at);
+  assert.deepEqual(v.openUploads.map((o) => o.orderId), ['UP-FAIL'], 'retried, recorded and very old ones left out');
+  assert.equal(v.openUploads[0].error, 'Network');
+  const r = res.users.find((u) => u.email === 'ravi@vms.com');
+  assert.deepEqual(r.pendingOrders.map((o) => o.orderId), ['RAVI-PEND']);
+  // The backlog is the same whatever range is picked.
+  const old = rt.call('getTeamActivity', { token: admin, from: '2020-01-01', to: '2020-01-02' });
+  assert.equal(old.users.find((u) => u.email === 'vineet@vms.com').pendingOrderCount, 2);
+});

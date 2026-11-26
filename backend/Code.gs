@@ -4354,18 +4354,25 @@ function cleanActivity_(a) {
 }
 
 /**
- * Admins: every approved user's work today (recordings, uploads, packed orders) and their last
- * logged action, for the Live Team page. Reads only the newest rows of each log.
+ * Admins: every approved user's work in a date range (default today): recordings, uploads and
+ * packed orders, their last logged action, and their backlog whatever the range (orders still
+ * assigned and Pending, uploads that never finished), each with its date so the page can show age.
+ * p.from / p.to: yyyy-MM-dd, inclusive.
  */
 function getTeamActivity_(p) {
   admin_(p.token);
   const tz = Session.getScriptTimeZone();
   const now = new Date();
   const today = Utilities.formatDate(now, tz, 'yyyy-MM-dd');
-  const dayOf = function(v) {
-    const d = rowDate_(v);
-    return d instanceof Date && !isNaN(d.getTime()) ? Utilities.formatDate(d, tz, 'yyyy-MM-dd') : '';
-  };
+  const isDay = function(s) { return /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')); };
+  let from = isDay(p.from) ? String(p.from) : today;
+  let to = isDay(p.to) ? String(p.to) : (isDay(p.from) ? String(p.from) : today);
+  if (from > to) { const x = from; from = to; to = x; }
+  const dayOf = function(d) { return Utilities.formatDate(d, tz, 'yyyy-MM-dd'); };
+  const asDate = function(v) { const d = rowDate_(v); return d instanceof Date && !isNaN(d.getTime()) ? d : null; };
+  const inRange = function(d) { const k = dayOf(d); return k >= from && k <= to; };
+  const BACKLOG_DAYS = 30;
+  const backlogSince = now.getTime() - BACKLOG_DAYS * 86400000;
   const users = {};
   const userRows = ss_().getSheetByName(CONFIG.USERS_SHEET || 'Users');
   if (userRows) {
@@ -4373,7 +4380,8 @@ function getTeamActivity_(p) {
       const email = normalize_(r[2]);
       if (!email || String(r[5] || '').toLowerCase() !== 'approved') return;
       users[email] = { email: String(r[2]).trim(), name: String(r[1] || '').trim() || String(r[2]).trim(), role: String(r[4] || 'User'),
-        today: { recorded: 0, returns: 0, uploaded: 0, uploadFailed: 0, packed: 0 }, lastAction: '', lastActionAt: 0 };
+        today: { recorded: 0, returns: 0, uploaded: 0, uploadFailed: 0, packed: 0 }, lastAction: '', lastActionAt: 0,
+        pendingOrders: [], openUploads: [] };
     });
   }
   const touch = function(email, at, text) {
@@ -4383,49 +4391,80 @@ function getTeamActivity_(p) {
     if (t > u.lastActionAt) { u.lastActionAt = t; u.lastAction = text; }
     return u;
   };
-  const MAX_ROWS = 6000;
-  const scan = function(name, fn) {
+  // Today only needs the newest rows; an older range reads the whole log.
+  const MAX_ROWS = from >= dayOf(new Date(now.getTime() - 2 * 86400000)) ? 6000 : 0;
+  const scan = function(name, fn, maxRows) {
     const sh = ss_().getSheetByName(name);
     if (!sh) return;
     const last = sh.getLastRow();
     if (last < 2) return;
-    const start = Math.max(2, last - MAX_ROWS + 1);
+    const start = maxRows ? Math.max(2, last - maxRows + 1) : 2;
     const width = Math.max(1, sh.getLastColumn());
     sh.getRange(start, 1, last - start + 1, width).getValues().forEach(fn);
   };
+  const recordedOrders = {};
   [['OrderLog', 'recorded'], ['ReturnLog', 'returns']].forEach(function(t) {
     scan(t[0], function(r) {
-      const at = rowDate_(r[0]);
-      if (!(at instanceof Date) || isNaN(at.getTime())) return;
+      const at = asDate(r[0]);
+      if (!at) return;
+      if (r[4]) recordedOrders[normalize_(r[1])] = true;
       const u = touch(r[3], at, 'Recorded ' + (t[1] === 'returns' ? 'return ' : '') + String(r[1] || ''));
-      if (u && dayOf(at) === today) u.today[t[1]]++;
-    });
+      if (u && inRange(at)) u.today[t[1]]++;
+    }, MAX_ROWS);
   });
+  // UploadLog: counts in the range, and uploads whose newest row never reached Completed.
+  const latestUpload = {};
   scan('UploadLog', function(r) {
-    const at = rowDate_(r[0]);
-    if (!(at instanceof Date) || isNaN(at.getTime())) return;
+    const at = asDate(r[0]);
+    if (!at) return;
     const st = String(r[10] || '').toLowerCase();
     const u = touch(r[3], at, (st === 'completed' ? 'Uploaded ' : st === 'failed' ? 'Upload failed ' : 'Uploading ') + String(r[1] || ''));
-    if (u && dayOf(at) === today) {
+    if (u && inRange(at)) {
       if (st === 'completed') u.today.uploaded++;
       else if (st === 'failed') u.today.uploadFailed++;
     }
+    if (at.getTime() >= backlogSince && r[1]) {
+      const key = normalize_(r[3]) + '|' + normalize_(r[1]) + '|' + normalize_(r[12]);
+      const prev = latestUpload[key];
+      if (!prev || at.getTime() >= prev.at) latestUpload[key] = { at: at.getTime(), email: normalize_(r[3]), orderId: String(r[1]), status: String(r[10] || 'Pending'), type: String(r[12] || ''), error: String(r[11] || '').slice(0, 120) };
+    }
+  }, MAX_ROWS ? Math.max(MAX_ROWS, 20000) : 0);
+  Object.keys(latestUpload).forEach(function(k) {
+    const x = latestUpload[k];
+    if (/^completed$/i.test(x.status) || recordedOrders[normalize_(x.orderId)]) return;
+    const u = users[x.email];
+    if (u) u.openUploads.push({ orderId: x.orderId, status: x.status, type: x.type, error: x.error, at: x.at });
   });
   scan('PackVerificationLog', function(r) {
-    const at = rowDate_(r[0]);
-    if (!(at instanceof Date) || isNaN(at.getTime())) return;
+    const at = asDate(r[0]);
+    if (!at) return;
     const st = String(r[7] || '').toUpperCase();
     const u = touch(r[5], at, (st === 'MATCHED' ? 'Packed ' : 'Pack check ' + st.toLowerCase() + ' ') + String(r[1] || ''));
-    if (u && st === 'MATCHED' && dayOf(at) === today) u.today.packed++;
-  });
+    if (u && st === 'MATCHED' && inRange(at)) u.today.packed++;
+  }, MAX_ROWS);
   scan('SecurityLog', function(r) {
-    const at = rowDate_(r[0]);
-    if (!(at instanceof Date) || isNaN(at.getTime())) return;
+    const at = asDate(r[0]);
+    if (!at) return;
     if (String(r[2] || '').toUpperCase() === 'LOGIN' && String(r[3] || '').toUpperCase() === 'SUCCESS') touch(r[1], at, 'Signed in');
-  });
-  const list = Object.keys(users).map(function(k) { return users[k]; })
-    .sort(function(a, b) { return String(a.name).localeCompare(String(b.name)); });
-  return { success: true, date: today, users: list, serverTime: now.getTime() };
+  }, MAX_ROWS);
+  // Orders assigned to a packer and still Pending, whatever their date.
+  scan('OrderManifest', function(r) {
+    if (!r[1] || String(r[9] || '').trim().toLowerCase() !== 'pending') return;
+    const u = users[normalize_(r[4])];
+    const at = asDate(r[0]);
+    if (u) u.pendingOrders.push({ orderId: String(r[1]), platform: String(r[2] || ''), at: at ? at.getTime() : 0 });
+  }, 0);
+  const list = Object.keys(users).map(function(k) {
+    const u = users[k];
+    u.pendingOrders.sort(function(a, b) { return a.at - b.at; });
+    u.openUploads.sort(function(a, b) { return a.at - b.at; });
+    u.pendingOrderCount = u.pendingOrders.length;
+    u.openUploadCount = u.openUploads.length;
+    u.pendingOrders = u.pendingOrders.slice(0, 20);
+    u.openUploads = u.openUploads.slice(0, 20);
+    return u;
+  }).sort(function(a, b) { return String(a.name).localeCompare(String(b.name)); });
+  return { success: true, date: today, from: from, to: to, users: list, serverTime: now.getTime() };
 }
 
 /** The station's own totals (whole queue), so admins see the same numbers as the packer. */

@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Users, Radio, Video, PackageCheck, ScanLine, WifiOff, Search, RefreshCw } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Users, Radio, Video, PackageCheck, ScanLine, WifiOff, Search, RefreshCw, Clock } from 'lucide-react';
 import { requestApi } from '../lib/api';
-import { fmtDateTime } from '../lib/dateFormat';
+import { fmtDate, fmtDateTime } from '../lib/dateFormat';
 import { useStationReports, stationCounts, type StationReport } from './LiveStationQueues';
 import { stationSupabaseUsable } from '../lib/supabase/stations';
 
@@ -12,6 +12,63 @@ interface TeamUser {
   today: { recorded: number; returns: number; uploaded: number; uploadFailed: number; packed: number };
   lastAction: string;
   lastActionAt: number;
+  pendingOrders?: { orderId: string; platform: string; at: number }[];
+  pendingOrderCount?: number;
+  openUploads?: { orderId: string; status: string; type: string; error: string; at: number }[];
+  openUploadCount?: number;
+}
+
+type Preset = 'TODAY' | 'YESTERDAY' | 'LAST_7_DAYS' | 'CUSTOM';
+const PRESETS: { key: Preset; label: string }[] = [
+  { key: 'TODAY', label: 'Today' },
+  { key: 'YESTERDAY', label: 'Yesterday' },
+  { key: 'LAST_7_DAYS', label: 'Last 7 Days' },
+  { key: 'CUSTOM', label: 'Custom Range' },
+];
+
+/** yyyy-MM-dd on this computer's calendar. */
+export function dayKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+export function rangeFor(preset: Preset, customFrom: string, customTo: string, now = new Date()): { from: string; to: string } {
+  const back = (n: number) => dayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - n));
+  if (preset === 'YESTERDAY') return { from: back(1), to: back(1) };
+  if (preset === 'LAST_7_DAYS') return { from: back(6), to: back(0) };
+  if (preset === 'CUSTOM' && customFrom) {
+    const to = customTo || customFrom;
+    return customFrom <= to ? { from: customFrom, to } : { from: to, to: customFrom };
+  }
+  return { from: back(0), to: back(0) };
+}
+
+const dayLabel = (k: string) => fmtDate(new Date(k + 'T12:00:00'));
+
+/** Short age for the backlog: 40 min, 5 h, 3 d. */
+export function ageShort(ms: number): string {
+  if (!(ms > 0)) return 'now';
+  const m = Math.floor(ms / 60000);
+  if (m < 60) return `${Math.max(1, m)} min`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} h`;
+  return `${Math.floor(h / 24)} d`;
+}
+
+interface BacklogUpload { orderId: string; status: string; at: number; where: 'computer' | 'sheet'; error: string }
+
+/** Unfinished uploads: what is still in the packer's queue, plus Sheet rows that never completed. */
+export function backlogUploads(station: StationReport | null, team: TeamUser | null): BacklogUpload[] {
+  const out = new Map<string, BacklogUpload>();
+  for (const it of station?.items || []) {
+    if (it.status !== 'pending' && it.status !== 'uploading' && it.status !== 'failed') continue;
+    const k = String(it.orderId || it.id).toUpperCase();
+    out.set(k, { orderId: it.orderId, status: it.status === 'pending' ? 'waiting' : it.status, at: it.createdAt || 0, where: 'computer', error: it.error || '' });
+  }
+  for (const u of team?.openUploads || []) {
+    const k = String(u.orderId).toUpperCase();
+    if (!out.has(k)) out.set(k, { orderId: u.orderId, status: String(u.status || 'pending').toLowerCase(), at: u.at, where: 'sheet', error: u.error || '' });
+  }
+  return Array.from(out.values()).sort((a, b) => (a.at || 0) - (b.at || 0));
 }
 
 interface Row {
@@ -65,21 +122,44 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
   const [query, setQuery] = useState('');
   const [onlyOnline, setOnlyOnline] = useState(false);
   const [, setTick] = useState(0);
+  const [preset, setPreset] = useState<Preset>('TODAY');
+  const [customFrom, setCustomFrom] = useState(() => dayKey(new Date()));
+  const [customTo, setCustomTo] = useState(() => dayKey(new Date()));
+  const range = rangeFor(preset, customFrom, customTo);
+  const rangeRef = useRef(range);
+  rangeRef.current = range;
+  const [teamRange, setTeamRange] = useState<{ from: string; to: string } | null>(null);
+  const loadSeq = useRef(0);
 
   const loadTeam = async () => {
+    const seq = ++loadSeq.current;
+    const want = rangeRef.current;
     setTeamLoading(true);
     try {
-      const res: any = await requestApi('getTeamActivity', {});
-      if (!res?.success) throw new Error(res?.error || 'Could not load today\'s work.');
+      const res: any = await requestApi('getTeamActivity', { from: want.from, to: want.to });
+      if (seq !== loadSeq.current) return; // the range changed while this was loading
+      if (!res?.success) throw new Error(res?.error || 'Could not load the team\'s work.');
       setTeam(res.users || []);
       setTeamDate(res.date || '');
+      setTeamRange({ from: res.from || want.from, to: res.to || want.to });
       setTeamError('');
     } catch (e: any) {
+      if (seq !== loadSeq.current) return;
       setTeamError(/Unknown action/i.test(e?.message || '') ? "Today's totals appear after the live backend is updated." : e?.message || "Could not load today's work.");
     } finally {
-      setTeamLoading(false);
+      if (seq === loadSeq.current) setTeamLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (teamRange && (teamRange.from !== range.from || teamRange.to !== range.to)) loadTeam();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range.from, range.to]);
+
+  const shownRange = teamRange || range;
+  const rangeWord =
+    preset === 'TODAY' ? 'today' : preset === 'YESTERDAY' ? 'yesterday' : preset === 'LAST_7_DAYS' ? 'last 7 days' : 'in range';
+  const rangeText = shownRange.from === shownRange.to ? dayLabel(shownRange.from) : `${dayLabel(shownRange.from)} to ${dayLabel(shownRange.to)}`;
 
   useEffect(() => {
     let alive = true;
@@ -138,9 +218,10 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
         packed: t.packed + (r.team?.today.packed || 0),
         waiting: t.waiting + (c ? c.waiting + c.uploading : 0),
         failed: t.failed + (c?.failed || 0),
+        pending: t.pending + (r.team?.pendingOrderCount ?? r.team?.pendingOrders?.length ?? 0),
       };
     },
-    { online: 0, recording: 0, recorded: 0, uploaded: 0, packed: 0, waiting: 0, failed: 0 },
+    { online: 0, recording: 0, recorded: 0, uploaded: 0, packed: 0, waiting: 0, failed: 0, pending: 0 },
   );
 
   const Stat = ({ id, label, value, tone }: { id: string; label: string; value: number; tone: string }) => (
@@ -163,7 +244,7 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
               <p className="text-xs text-slate-500 flex items-center gap-1">
                 <Radio className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
                 <span id="live-team-mode">{viaSupabase ? 'Live' : 'Updates every 5 s'}</span>
-                {teamDate && <span>· today's totals for {fmtDateTime(new Date(teamDate + 'T12:00:00')).split(' ')[0]}</span>}
+                {teamDate && <span id="live-team-range-text">· totals for {rangeText}</span>}
               </p>
             </div>
           </div>
@@ -176,20 +257,40 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
             <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
               <input type="checkbox" checked={onlyOnline} onChange={(e) => setOnlyOnline(e.target.checked)} /> Online only
             </label>
+            <div id="live-team-range" className="flex items-center gap-1 bg-slate-100/80 p-1 rounded-xl border border-slate-200/60 flex-wrap">
+              {PRESETS.map((p) => (
+                <button key={p.key} type="button" data-preset={p.key} onClick={() => setPreset(p.key)}
+                  className={`px-2.5 py-1 text-xs font-bold rounded-lg transition cursor-pointer ${
+                    preset === p.key ? 'bg-indigo-600 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
+                  }`}>
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            {preset === 'CUSTOM' && (
+              <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 p-1 rounded-xl">
+                <input id="live-team-from" type="date" value={customFrom} max={dayKey(new Date())} onChange={(e) => setCustomFrom(e.target.value)} title="Start Date"
+                  className="px-2 py-1 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-none focus:border-indigo-500 cursor-pointer" />
+                <span className="text-xs text-slate-400 font-bold">to</span>
+                <input id="live-team-to" type="date" value={customTo} max={dayKey(new Date())} onChange={(e) => setCustomTo(e.target.value)} title="End Date"
+                  className="px-2 py-1 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-none focus:border-indigo-500 cursor-pointer" />
+              </div>
+            )}
             <button type="button" onClick={loadTeam} disabled={teamLoading}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-50 cursor-pointer">
               <RefreshCw className={`w-3.5 h-3.5 ${teamLoading ? 'animate-spin' : ''}`} /> Refresh
             </button>
           </div>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
           <Stat id="team-online" label="Online now" value={sum.online} tone="bg-emerald-50 border-emerald-200 text-emerald-800" />
           <Stat id="team-recording" label="Recording now" value={sum.recording} tone="bg-red-50 border-red-200 text-red-700" />
-          <Stat id="team-recorded" label="Recorded today" value={sum.recorded} tone="bg-slate-50 border-slate-200 text-slate-800" />
-          <Stat id="team-uploaded" label="Uploaded today" value={sum.uploaded} tone="bg-blue-50 border-blue-200 text-blue-800" />
-          <Stat id="team-packed" label="Packed today" value={sum.packed} tone="bg-indigo-50 border-indigo-200 text-indigo-800" />
+          <Stat id="team-recorded" label={`Recorded ${rangeWord}`} value={sum.recorded} tone="bg-slate-50 border-slate-200 text-slate-800" />
+          <Stat id="team-uploaded" label={`Uploaded ${rangeWord}`} value={sum.uploaded} tone="bg-blue-50 border-blue-200 text-blue-800" />
+          <Stat id="team-packed" label={`Packed ${rangeWord}`} value={sum.packed} tone="bg-indigo-50 border-indigo-200 text-indigo-800" />
           <Stat id="team-waiting" label="Waiting to upload" value={sum.waiting} tone="bg-amber-50 border-amber-200 text-amber-800" />
           <Stat id="team-failed" label="Failed uploads" value={sum.failed} tone="bg-rose-50 border-rose-200 text-rose-700" />
+          <Stat id="team-pending" label="Pending orders" value={sum.pending} tone="bg-orange-50 border-orange-200 text-orange-800" />
         </div>
         {(error || teamError) && <p className="text-xs text-rose-600">{teamError || error}</p>}
       </div>
@@ -202,6 +303,10 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
           const c = r.station ? stationCounts(r.station) : null;
           const act = r.station?.activity;
           const order = r.online ? act?.orderId || '' : '';
+          const ups = backlogUploads(r.station, r.team);
+          const pend = r.team?.pendingOrders || [];
+          const pendCount = r.team?.pendingOrderCount ?? pend.length;
+          const DAY = 86400000;
           return (
             <div key={r.key} data-user={r.email.toLowerCase()} data-state={r.state || (r.online ? 'online' : 'offline')}
               className="bg-white rounded-2xl border border-slate-200 shadow-2xs p-4 space-y-3 min-w-0">
@@ -255,7 +360,7 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
                 ].map(([label, v]) => (
                   <div key={label as string} className="rounded-lg border border-slate-100 py-1.5">
                     <div className="text-sm font-bold text-slate-900">{v === null ? '—' : String(v)}</div>
-                    <div className="text-[10px] text-slate-500">{label} today</div>
+                    <div className="text-[10px] text-slate-500">{label} {rangeWord}</div>
                   </div>
                 ))}
               </div>
@@ -268,6 +373,58 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
                   <span className="px-1.5 py-0.5 rounded border bg-rose-50 text-rose-700 border-rose-200">{c.failed} failed</span>
                 </div>
               )}
+
+              <div className="rounded-xl border border-orange-100 bg-orange-50/40 px-3 py-2 space-y-1.5 text-[11px]" data-backlog
+                data-backlog-orders={pendCount} data-backlog-uploads={ups.length}>
+                <div className="flex items-center gap-1 font-semibold text-slate-700">
+                  <Clock className="w-3.5 h-3.5 text-orange-600" /> Still open
+                  <span className="text-slate-400 font-normal">· any date</span>
+                </div>
+                {pendCount === 0 && ups.length === 0 ? (
+                  <div className="text-slate-500">Nothing pending</div>
+                ) : (
+                  <>
+                    {pendCount > 0 && (
+                      <div data-backlog-pending>
+                        <span className="text-slate-600">{pendCount} pending order{pendCount === 1 ? '' : 's'}</span>
+                        {pend[0]?.at > 0 && <span className="text-slate-500"> · oldest {ageShort(Date.now() - pend[0].at)}</span>}
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {pend.slice(0, 4).map((o) => {
+                            const old = o.at > 0 && Date.now() - o.at > DAY;
+                            return (
+                              <span key={o.orderId} data-backlog-item={o.orderId} title={o.at ? `Assigned ${fmtDateTime(new Date(o.at))}` : ''}
+                                className={`px-1.5 py-0.5 rounded border font-mono ${old ? 'bg-orange-100 text-orange-800 border-orange-300' : 'bg-white text-slate-700 border-slate-200'}`}>
+                                {o.orderId}{o.at ? ` · ${ageShort(Date.now() - o.at)}` : ''}
+                              </span>
+                            );
+                          })}
+                          {pendCount > 4 && <span className="text-slate-500">+{pendCount - 4} more</span>}
+                        </div>
+                      </div>
+                    )}
+                    {ups.length > 0 && (
+                      <div data-backlog-upload-list>
+                        <span className="text-slate-600">{ups.length} upload{ups.length === 1 ? '' : 's'} not finished</span>
+                        {ups[0]?.at > 0 && <span className="text-slate-500"> · oldest {ageShort(Date.now() - ups[0].at)}</span>}
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {ups.slice(0, 4).map((u) => {
+                            const old = u.at > 0 && Date.now() - u.at > DAY;
+                            const failed = u.status === 'failed';
+                            return (
+                              <span key={u.orderId} data-backlog-item={u.orderId} data-backlog-status={u.status}
+                                title={`${u.where === 'computer' ? 'In the upload queue on their computer' : 'Upload log in the Sheet'}${u.at ? ` · ${fmtDateTime(new Date(u.at))}` : ''}${u.error ? ` · ${u.error}` : ''}`}
+                                className={`px-1.5 py-0.5 rounded border font-mono ${failed ? 'bg-rose-50 text-rose-700 border-rose-200' : old ? 'bg-orange-100 text-orange-800 border-orange-300' : 'bg-white text-slate-700 border-slate-200'}`}>
+                                {u.orderId} · {u.status}{u.at ? ` · ${ageShort(Date.now() - u.at)}` : ''}
+                              </span>
+                            );
+                          })}
+                          {ups.length > 4 && <span className="text-slate-500">+{ups.length - 4} more</span>}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
 
               <div className="text-[11px] text-slate-600 truncate" data-last>
                 {r.lastAction ? (

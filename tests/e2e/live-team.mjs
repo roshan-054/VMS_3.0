@@ -45,6 +45,13 @@ const ago = (m) => new Date(Date.now() - m * 60000);
 for (let i = 0; i < 3; i++) rt.sheets.get('OrderLog').rows.push([ago(40 - i), 'TODAY-' + i, 'Amazon', PACKER.email, 'fid' + i + 'xxxxxx', '', '1 MB', 'Completed', 'Forward', 'j' + i, 'video/mp4', 'Ready']);
 for (let i = 0; i < 2; i++) rt.sheets.get('UploadLog').rows.push([ago(39 - i), 'TODAY-' + i, 'Amazon', PACKER.email, 'f.mp4', '1 MB', 'u' + i, 'Uploaded', 100, 'fid' + i + 'xxxxxx', 'Completed', '', 'Forward', 'Recorder', 'j' + i]);
 rt.sheets.get('OrderLog').rows.push([ago(90), 'RAVI-1', 'D2C', 'ravi@test.local', 'fidRxxxxxxx', '', '1 MB', 'Completed', 'Forward', 'jr', 'video/mp4', 'Ready']);
+// Yesterday: one more recording. Backlog from earlier days: an order assigned to Vineet 3 days
+// ago and still Pending, and an upload that failed 2 days ago and was never redone.
+rt.sheets.get('OrderLog').rows.push([ago(24 * 60 + 30), 'YDAY-1', 'Amazon', PACKER.email, 'fidYxxxxxxx', '', '1 MB', 'Completed', 'Forward', 'jy', 'video/mp4', 'Ready']);
+rt.sheets.get('UploadLog').rows.push([ago(2 * 24 * 60), 'UP-OLD', 'Amazon', PACKER.email, 'o.mp4', '1 MB', 'uo', 'Error', 0, '', 'Failed', 'Network', 'Forward', 'Recorder', 'jo']);
+rt.sheets.get('OrderManifest').rows[0] = ['Timestamp','Order ID','Platform','Assigned Packer Name','Assigned Packer Email','Processed By Name','Processed By Email','Total Items Count','Items List','Status','Notes','Packed At','Packed By Name','Video Drive Link'];
+rt.sheets.get('OrderManifest').rows.push([ago(3 * 24 * 60), 'OLD-PEND-1', 'Amazon', PACKER.name, PACKER.email, 'Admin', 'admin@test.local', 1, '[]', 'Pending', '', '', '', '']);
+rt.sheets.get('OrderManifest').rows.push([ago(3 * 24 * 60), 'OLD-PACKED', 'Amazon', PACKER.name, PACKER.email, 'Admin', 'admin@test.local', 1, '[]', 'Packed', '', '', '', '']);
 rt.props.set('SUPABASE_URL', sb.url);
 rt.props.set('SUPABASE_ANON_KEY', sb.anonKey);
 rt.props.set('SUPABASE_SERVICE_KEY', sb.serviceKey);
@@ -101,6 +108,38 @@ try {
   let pc = '';
   const q = await waitFor(async () => { pc = await packerCounts(); return (await card(PACKER.email).locator('[data-station-counts]').getAttribute('data-station-counts').catch(() => '')) === pc; });
   check('upload queue matches the packer (waiting/uploading/failed)', q, `packer ${pc} · admin ${await card(PACKER.email).locator('[data-station-counts]').getAttribute('data-station-counts').catch(() => '')}`);
+  // Backlog from earlier days, whatever the range.
+  const bl = () => card(PACKER.email).locator('[data-backlog]');
+  const hasBacklog = await waitFor(async () => (await bl().getAttribute('data-backlog-orders').catch(() => '')) === '1');
+  check('pending order from 3 days ago shows on the card', hasBacklog && /OLD-PEND-1 · 3 d/.test(await bl().innerText()), await bl().innerText().catch(() => ''));
+  check('packed orders are not in the backlog', !/OLD-PACKED/.test(await bl().innerText()));
+  const upText = await bl().innerText();
+  check('failed upload from 2 days ago shows with its age', /UP-OLD · failed · 2 d/.test(upText) || /\+\d+ more/.test(upText), upText.replace(/\s+/g, ' '));
+  check('backlog counts the queue plus the old Sheet upload', Number(await bl().getAttribute('data-backlog-uploads')) === 6, await bl().getAttribute('data-backlog-uploads'));
+  check('header shows pending orders', (await admin.locator('#team-pending').innerText()) === '1', await admin.locator('#team-pending').innerText());
+
+  // Date range: Yesterday, Last 7 days, Custom, back to Today.
+  const todayAttr = () => card(PACKER.email).locator('[data-today]').getAttribute('data-today').catch(() => '');
+  await admin.locator('#live-team-range [data-preset="YESTERDAY"]').click();
+  const y = await waitFor(async () => ((await todayAttr()) === '1/0/0' ? '1/0/0' : ''));
+  check('Yesterday shows yesterday\'s work', y === '1/0/0', await todayAttr());
+  const rangeText = await admin.locator('#live-team-range-text').innerText();
+  check('range shown as DD-MMM-YY', /\d{2}-[A-Z][a-z]{2}-\d{2}/.test(rangeText), rangeText);
+  check('labels follow the range', /yesterday/i.test(await admin.locator('#team-recorded').locator('..').innerText()), await admin.locator('#team-recorded').locator('..').innerText());
+  check('backlog stays on Yesterday', (await bl().getAttribute('data-backlog-orders')) === '1');
+  await admin.locator('#live-team-range [data-preset="LAST_7_DAYS"]').click();
+  const w = await waitFor(async () => ((await todayAttr()) === '4/2/0' ? 'ok' : ''));
+  check('Last 7 days adds up', w, await todayAttr());
+  await admin.locator('#live-team-range [data-preset="CUSTOM"]').click();
+  const d = new Date(Date.now() - 86400000);
+  const yk = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  await admin.locator('#live-team-from').fill(yk);
+  const c1 = await waitFor(async () => ((await todayAttr()) === '4/2/0' ? 'ok' : ''));
+  check('Custom range from yesterday to today', c1, await todayAttr());
+  await admin.locator('#live-team-range [data-preset="TODAY"]').click();
+  const back = await waitFor(async () => ((await todayAttr()) === '3/2/0' ? 'ok' : ''));
+  check('back to Today', back, await todayAttr());
+
   check('page shows live (Supabase)', (await admin.locator('#live-team-mode').innerText()) === 'Live', await admin.locator('#live-team-mode').innerText());
 
   // The packer scans an order: the admin sees the page and the order within a couple of seconds.
