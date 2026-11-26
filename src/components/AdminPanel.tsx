@@ -40,7 +40,6 @@ import {
   FileCode
 } from 'lucide-react';
 import { User, UserRole, UserStatus, AdminPermissions } from '../types';
-import { CleanDuplicatesModal } from './CleanDuplicatesModal';
 import { DeleteOlderVideosModal } from './DeleteOlderVideosModal';
 import { DriveLocationSetting } from './DriveLocationSetting';
 import { VideoSizeLimitSetting } from './VideoSizeLimitSetting';
@@ -186,7 +185,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
   const [testingHealth, setTestingHealth] = useState(false);
   const [repairingUrls, setRepairingUrls] = useState(false);
   const [refiningFormatting, setRefiningFormatting] = useState(false);
-  const [showCleanDuplicatesModal, setShowCleanDuplicatesModal] = useState(false);
   const [showDeleteOlderVideosModal, setShowDeleteOlderVideosModal] = useState(false);
   const [initialDeleteDays, setInitialDeleteDays] = useState(90);
   const [runningSetup, setRunningSetup] = useState(false);
@@ -1467,35 +1465,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
                 </div>
               </div>
 
-              {/* 7. Dedicated Duplicate Videos & Sheet Entries Cleaner */}
-              <div className="bg-gradient-to-r from-purple-50/70 via-indigo-50/50 to-white rounded-2xl border border-purple-200 p-5 shadow-xs space-y-4">
-                <div className="flex items-center justify-between border-b border-purple-100 pb-3">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center font-bold text-xs shadow-xs">
-                      <Trash2 className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h4 className="text-xs font-bold text-slate-900">Remove Duplicate Videos & Sheet Entries</h4>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-3 bg-white rounded-xl border border-purple-100">
-                  <p className="text-xs text-slate-600">Duplicates move to a Trash folder next to the original video; their rows are archived to TrashLog.</p>
-
-                  <button
-                    type="button"
-                    onClick={() => setShowCleanDuplicatesModal(true)}
-                    className="px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-sm shrink-0"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    Clean Duplicate Videos & Entries
-                  </button>
-                </div>
-              </div>
-
               {/* 8. Storage Retention Policy: Delete 90 Days Older Videos & Logs */}
               <div className="bg-gradient-to-r from-red-50/80 via-rose-50/50 to-white rounded-2xl border border-red-200 p-5 shadow-xs space-y-4">
                 <div className="flex items-center justify-between border-b border-red-100 pb-3">
@@ -2770,13 +2739,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, currentUser
           </div>
         </div>
       )}
-
-      {/* Clean Duplicates Modal */}
-      <CleanDuplicatesModal
-        isOpen={showCleanDuplicatesModal}
-        onClose={() => setShowCleanDuplicatesModal(false)}
-        onShowToast={onShowToast}
-      />
 
       {/* Delete 90 Days Older Videos Modal */}
       <DeleteOlderVideosModal

@@ -143,8 +143,10 @@ export const SettingsPage: React.FC<Props> = ({ onShowToast, currentUser }) => {
           </button>
         </div>
         <p className="text-xs text-slate-600">
-          Checks OrderLog, ReturnLog and UploadLog. One row is kept per recording (completed, 100%, with its Drive video).
-          Removed rows are copied to an Archive tab first. Rows from the last 6 hours are not touched.
+          This is the app's one duplicate finder. It checks OrderLog, ReturnLog and UploadLog, each on its own: rows count as
+          duplicates only when the same order and type appear twice in the same sheet. One row is kept per recording (completed,
+          100%, with its Drive video). Removed rows are copied to an Archive tab first, a video that a kept row uses is never
+          moved to Trash, and rows from the last 6 hours are not touched. DownloadLog and other tabs are never changed.
         </p>
 
         {error && (
