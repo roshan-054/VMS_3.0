@@ -1,6 +1,8 @@
 import { getStoredApiUrl, getStoredToken, setStoredToken, getStoredDriveFolderId, dbGetAllQueue } from './storage';
 import { User, VideoRecord, AnalyticsData } from '../types';
 import { computeLocalAnalyticsData, getLocalWorkstationLogs } from './localAnalytics';
+import { trySupabase, isSupabaseAction } from './supabase/router';
+import { applySupabaseConfigFromBranding } from './supabase/client';
 import {
   localLogin,
   getLocalUsers,
@@ -72,6 +74,11 @@ const ACTION_TIMEOUT_MS: Record<string, number> = {
   applyDateFormats: 120000,
   repairPlaybackUrls: 120000,
   applyConditionalFormatting: 120000,
+  supabaseImport: 300000,
+  saveSupabaseConfig: 60000,
+  getSupabaseConfig: 60000,
+  supabaseSweep: 300000,
+  syncSheetNow: 60000,
 };
 export const DEFAULT_API_TIMEOUT_MS = 20000;
 export function apiTimeoutFor(action: string): number {
@@ -82,6 +89,31 @@ export async function requestApi<T = any>(
   action: string,
   payload: Record<string, any> = {},
   customUrl?: string
+): Promise<ApiResponse<T>> {
+  // Everyday data requests are answered from Supabase when it is set up (much faster). Anything
+  // else, or any problem with Supabase, goes to Apps Script exactly as before.
+  if (!customUrl && isSupabaseAction(action)) {
+    const token = payload.token !== undefined ? payload.token : getStoredToken();
+    const fast = await trySupabase(action, payload, token, (a, p, t) => requestAppsScript(a, p, undefined, t));
+    if (fast) {
+      if (!fast.success) {
+        const serverErr: any = new Error(fast.error || 'Request failed.');
+        serverErr.serverError = true;
+        if (fast.code) serverErr.code = fast.code;
+        throw serverErr;
+      }
+      return fast as ApiResponse<T>;
+    }
+  }
+  return requestAppsScript<T>(action, payload, customUrl);
+}
+
+/** The original path: one request to the Apps Script web app. */
+export async function requestAppsScript<T = any>(
+  action: string,
+  payload: Record<string, any> = {},
+  customUrl?: string,
+  timeoutOverrideMs?: number
 ): Promise<ApiResponse<T>> {
   const url = customUrl || getStoredApiUrl();
   const token = payload.token !== undefined ? payload.token : getStoredToken();
@@ -101,7 +133,7 @@ export async function requestApi<T = any>(
 
     // Single attempt; the time limit depends on the action (see ACTION_TIMEOUT_MS) and covers the
     // whole exchange, including reading the reply.
-    const timeoutMs = apiTimeoutFor(action);
+    const timeoutMs = timeoutOverrideMs || apiTimeoutFor(action);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -196,6 +228,8 @@ export async function requestApi<T = any>(
       if (data.token && payload.password) {
         await rememberOfflineCredential(data.user, String(payload.password));
       }
+    } else if (action === 'getBranding') {
+      applySupabaseConfigFromBranding(data);
     } else if (action === 'getUsers' && Array.isArray((data as any).users)) {
       syncAllLocalUsers((data as any).users);
     } else if (action === 'adminDeleteUser') {

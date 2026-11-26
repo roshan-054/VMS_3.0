@@ -78,7 +78,8 @@ const ADMIN_ACTIONS = [
   'getStationQueues', 'getDriveStorage', 'applyDateFormats',
   'scanSheetCleanup', 'runSheetCleanup',
   'getBackendUpdateStatus', 'updateBackend', 'rollbackBackend', 'getSheetCleanupProgress',
-  'listCleanupArchive', 'restoreCleanupArchive'
+  'listCleanupArchive', 'restoreCleanupArchive',
+  'getSupabaseConfig', 'saveSupabaseConfig', 'supabaseImport', 'supabaseSweep'
 ];
 
 function doPost(e) {
@@ -86,6 +87,9 @@ function doPost(e) {
     const raw = (e && e.postData && e.postData.contents) || '{}';
     const p = JSON.parse(raw);
     const a = String(p.action || '');
+    SB_TOUCH_ = null;
+    SB_DEFER_ = (a === 'uploadChunk' || a === 'heartbeatUpload');
+    if (SB_ACTION_TABS_[a]) sbTouchTabs_(SB_ACTION_TABS_[a]);
     if (PUBLIC_ACTIONS.indexOf(a) === -1) {
       if (ADMIN_ACTIONS.indexOf(a) !== -1) admin_(p.token);
       else session_(p.token);
@@ -168,6 +172,12 @@ function doPost(e) {
       case 'deleteGtinProductsBatch': return output_(deleteGtinProductsBatch_(p));
       case 'saveGtinCatalogBatch': return output_(saveGtinCatalogBatch_(p));
       case 'syncExternalGtinSheet': return output_(syncExternalGtinSheet_(p));
+      case 'getSupabaseConfig': return output_(getSupabaseConfig_(p));
+      case 'saveSupabaseConfig': return output_(saveSupabaseConfig_(p));
+      case 'supabaseImport': return output_(supabaseImport_(p));
+      case 'supabaseSweep': return output_({ success: true, results: sbSweep_(true) });
+      case 'syncSheetNow': return output_(syncSheetNow_(p));
+      case 'supabaseSession': return output_(supabaseSession_(p));
       default: return output_({success:false, error:'Unknown action: '+a});
     }
   } catch(err) {
@@ -178,6 +188,7 @@ function doPost(e) {
 }
 
 function output_(obj, callback) {
+  try { sbFlush_(SB_DEFER_); } catch (sbErr) { console.warn('Supabase copy note:', sbErr); }
   const json = JSON.stringify(obj);
   if(callback && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(callback)) {
     return ContentService.createTextOutput(callback+'('+json+')')
@@ -723,6 +734,7 @@ function saveSession_(user){
   const record=JSON.stringify({user:user, exp:Date.now()+CONFIG.SESSION_SECONDS*1000});
   CacheService.getScriptCache().put('SESSION_'+t,record,CONFIG.SESSION_SECONDS);
   PropertiesService.getScriptProperties().setProperty('SESS_'+t, record);
+  try { sbPutSession_(t, JSON.parse(record)); } catch (_) {}
   pruneExpiredSessions_();
   return t;
 }
@@ -887,6 +899,7 @@ function logout_(p){
   if(p.token) {
     CacheService.getScriptCache().remove('SESSION_'+p.token);
     PropertiesService.getScriptProperties().deleteProperty('SESS_'+p.token);
+    sbDropSessions_(p.token, null);
   }
   return {success:true};
 }
@@ -915,6 +928,8 @@ function adminManageUser_(p){
   const expected=String(p.expectedEmail||'').toLowerCase();if(expected&&String(current[2]||'').toLowerCase()!==expected)throw new Error('User record changed. Refresh and try again.');
   sh.getRange(row,2,1,1).setValue(String(p.name||current[1]));
   sh.getRange(row,5,1,2).setValues([[p.role==='Admin'?'Admin':'User',String(p.status||current[5])]]);
+  // Role or approval changed: the user's fast-database sign-in is renewed from this Sheet on next use.
+  if (String(current[4]||'')!==(p.role==='Admin'?'Admin':'User') || String(current[5]||'')!==String(p.status||current[5])) sbDropSessions_(null, String(current[2]||''));
   return {success:true};
 }
 
@@ -948,6 +963,7 @@ function adminDeleteUser_(p){
   }
 
   sh.deleteRow(row);
+  sbDropSessions_(null, emailInSheet);
   return { success: true, email: emailInSheet };
 }
 
@@ -1093,6 +1109,7 @@ function sheetDateColumns_(name, headers) {
 /** appendRow, then show any date in the new row as DD-MMM-YY hh:mm (new rows don't inherit the column format). */
 function logAppend_(sh, row) {
   sh.appendRow(row);
+  try { sbTouch_(sh, sh.getLastRow()); } catch (_) {}
   try {
     const r = sh.getLastRow();
     for (let i = 0; i < row.length; i++) {
@@ -2015,6 +2032,7 @@ function updateUploadLog_(uploadId, stage, progress, fileId, status, error, queu
         const keepTs = (existingTs instanceof Date && !isNaN(existingTs.getTime())) ? existingTs : (fallbackDate || (existingTs ? new Date(existingTs) : new Date()));
         sh.getRange(i + 1, 1).setValue(keepTs);
         sh.getRange(i + 1, 8, 1, 5).setValues([[stage || 'Uploaded to Google Drive', progress !== undefined ? progress : 100, fileId || '', status || 'Completed', error || '']]);
+        sbTouch_(sh, i + 1);
         SpreadsheetApp.flush();
         return;
       }
@@ -2302,6 +2320,7 @@ function startUpload_(p){
               rowTs, order, platform, user.email, name, displaySize, uploadId, 'Session Created', 0, '', 'Started', '', type, source, queueJobId
             ]]);
             formatDateRows_(uploadSh, i + 1, 1);
+            sbTouch_(uploadSh, i + 1);
             updatedExisting = true;
             break;
           }
@@ -2574,6 +2593,7 @@ function getTargetLogSheet_(type) {
  * updates UploadLog status to 100% Completed, and releases reservation locks & global queue lease.
  */
 function finalizeCompletedUpload_(s, uploadId, fid, user) {
+  SB_DEFER_ = false; // a finished video should show up in Search straight away
   const playback = 'https://drive.google.com/file/d/' + fid + '/preview';
   try {
     DriveApp.getFileById(fid).setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
@@ -4366,7 +4386,10 @@ function getBrandingConfig_() {
     faviconUrl: faviconUrl,
     brandingFolderId: brandingFolderId,
     videoDriveFolderId: videoDriveFolderId,
-    maxVideoSizeMb: maxVideoSizeMb_()
+    maxVideoSizeMb: maxVideoSizeMb_(),
+    supabaseEnabled: sbPublicConfig_().supabaseEnabled,
+    supabaseUrl: sbPublicConfig_().supabaseUrl,
+    supabaseAnonKey: sbPublicConfig_().supabaseAnonKey
   };
 }
 
@@ -4806,6 +4829,7 @@ function getDriveFileSize_(p) {
               } else {
                 sh.getRange(i + 1, 7).setValue(bytes);
               }
+              sbTouch_(sh, i + 1);
             }
           }
         });
@@ -6593,4 +6617,562 @@ function restoreCleanupArchive_(p) {
     return { success: true, restored: restored, restoredBySheet: restoredBySheet,
       message: restored + ' row(s) put back from the Archive tabs.' };
   });
+}
+
+/* =====================================================================================
+ * SUPABASE (fast database) + GOOGLE SHEET BACKUP SYNC
+ *
+ * The web app reads and writes its data in Supabase (see supabase/vms_schema.sql). This Sheet
+ * stays exactly as it is and is kept up to date as the backup:
+ *   - Changes the app makes in Supabase are queued there and written into the Sheet here by
+ *     sbDrain_() (a 1-minute trigger, plus a "syncSheetNow" ping the app sends after it saves).
+ *   - Rows this script writes into the Sheet itself (uploads, sign-ins, admin tools) are copied
+ *     into Supabase at the end of the same request (sbFlush_), so both sides match.
+ *   - Once an hour sbSweep_() compares every tab and fixes any difference (for example rows
+ *     typed into the Sheet by hand).
+ * The service_role / secret key is kept in Script Properties and is never sent to the browser.
+ * ===================================================================================== */
+
+const SB_TABS_ = [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET, CONFIG.DOWNLOAD_LOG_SHEET,
+  CONFIG.SECURITY_LOG_SHEET, CONFIG.TRASH_LOG_SHEET, CONFIG.PACK_VERIFICATION_LOG_SHEET, CONFIG.USERS_SHEET,
+  CONFIG.ORDER_MANIFEST_SHEET, CONFIG.GTIN_CATALOG_SHEET, CONFIG.BRANDING_SHEET];
+// Tabs only this script writes: the Sheet is the source of truth, so the sweep may remove rows from Supabase.
+const SB_SHEET_PRIMARY_TABS_ = [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET,
+  CONFIG.SECURITY_LOG_SHEET, CONFIG.TRASH_LOG_SHEET, CONFIG.USERS_SHEET, CONFIG.BRANDING_SHEET];
+const SB_SWEEP_MINUTES_ = 60;
+const SB_TRIGGER_HANDLER_ = 'sbSyncTick';
+
+// Admin tools that rewrite or remove rows: the whole tab is compared with Supabase afterwards.
+const SB_ACTION_TABS_ = {
+  setup: SB_TABS_,
+  repairPlaybackUrls: [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET],
+  migrateReturns: [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET],
+  migrateDriveFolders: [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET],
+  migrateMonthlyFolders: [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET],
+  signup: [CONFIG.USERS_SHEET],
+  adminCreateUser: [CONFIG.USERS_SHEET], adminManageUser: [CONFIG.USERS_SHEET],
+  adminResetPassword: [CONFIG.USERS_SHEET], adminDeleteUser: [CONFIG.USERS_SHEET],
+  cleanupStuckUploads: [CONFIG.UPLOAD_LOG_SHEET],
+  deleteLogEntry: [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET, CONFIG.DOWNLOAD_LOG_SHEET, CONFIG.TRASH_LOG_SHEET],
+  scanDuplicates: [], scanDuplicateRecords: [],
+  deleteOlder: [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET, CONFIG.TRASH_LOG_SHEET],
+  deleteOlderVideos: [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET, CONFIG.TRASH_LOG_SHEET],
+  saveBranding: [CONFIG.BRANDING_SHEET], uploadBrandingImage: [CONFIG.BRANDING_SHEET],
+  runSheetCleanup: SB_TABS_, restoreCleanupArchive: SB_TABS_,
+  saveOrderManifest: [CONFIG.ORDER_MANIFEST_SHEET], saveOrderManifestsBatch: [CONFIG.ORDER_MANIFEST_SHEET],
+  updateManifestStatus: [CONFIG.ORDER_MANIFEST_SHEET], deleteOrderManifest: [CONFIG.ORDER_MANIFEST_SHEET],
+  saveGtinProduct: [CONFIG.GTIN_CATALOG_SHEET], deleteGtinProduct: [CONFIG.GTIN_CATALOG_SHEET],
+  deleteGtinProductsBatch: [CONFIG.GTIN_CATALOG_SHEET], saveGtinCatalogBatch: [CONFIG.GTIN_CATALOG_SHEET],
+  syncExternalGtinSheet: [CONFIG.GTIN_CATALOG_SHEET]
+};
+SB_ACTION_TABS_.removeUploadLog = SB_ACTION_TABS_.deleteLogEntry;
+SB_ACTION_TABS_.deleteOrderLog = SB_ACTION_TABS_.deleteLogEntry;
+SB_ACTION_TABS_.cleanDuplicates = SB_ACTION_TABS_.deleteLogEntry;
+SB_ACTION_TABS_.removeDuplicates = SB_ACTION_TABS_.deleteLogEntry;
+SB_ACTION_TABS_.removeDuplicateRecords = SB_ACTION_TABS_.deleteLogEntry;
+
+var SB_TOUCH_ = null;   // rows written during this request: { rows: {tab: {row: true}}, tabs: {tab: true} }
+var SB_DEFER_ = false;  // upload chunks: copy to Supabase later (next request or the trigger), not inline
+
+function sbConfig_() {
+  const props = scriptProps_();
+  return {
+    url: String(props.getProperty('SUPABASE_URL') || '').trim().replace(/\/+$/, ''),
+    anonKey: String(props.getProperty('SUPABASE_ANON_KEY') || '').trim(),
+    serviceKey: String(props.getProperty('SUPABASE_SERVICE_KEY') || '').trim(),
+    enabled: props.getProperty('SUPABASE_ENABLED') !== 'false'
+  };
+}
+
+function sbEnabled_() {
+  try { const c = sbConfig_(); return !!(c.enabled && c.url && c.serviceKey); } catch (_) { return false; }
+}
+
+function sbHeaders_(key) {
+  const h = { apikey: key };
+  // New-style keys (sb_publishable_... / sb_secret_...) are not JWTs and go in the apikey header only.
+  if (!/^sb_/.test(key)) h.Authorization = 'Bearer ' + key;
+  return h;
+}
+
+function sbRpc_(fn, args, cfg) {
+  const c = cfg || sbConfig_();
+  if (!c.url || !c.serviceKey) throw new Error('Supabase is not set up yet.');
+  const res = UrlFetchApp.fetch(c.url + '/rest/v1/rpc/' + fn, {
+    method: 'post',
+    contentType: 'application/json',
+    headers: sbHeaders_(c.serviceKey),
+    payload: JSON.stringify(args || {}),
+    muteHttpExceptions: true
+  });
+  const code = res.getResponseCode();
+  const text = res.getContentText();
+  let body = null;
+  try { body = text ? JSON.parse(text) : null; } catch (_) { body = text; }
+  if (code >= 300) {
+    const msg = body && typeof body === 'object' ? (body.message || body.error || body.hint || text) : text;
+    throw new Error('Supabase ' + fn + ' failed (HTTP ' + code + '): ' + String(msg || '').slice(0, 300));
+  }
+  return body;
+}
+
+/** Cell value -> JSON (dates become {"$d": iso} so they come back as dates). */
+function sbEncodeCell_(v) {
+  if (v instanceof Date) return isNaN(v.getTime()) ? '' : { $d: v.toISOString() };
+  if (v === null || v === undefined) return '';
+  return v;
+}
+function sbDecodeCell_(v) {
+  if (v && typeof v === 'object' && v.$d) { const d = new Date(v.$d); return isNaN(d.getTime()) ? '' : d; }
+  if (v === null || v === undefined) return '';
+  return v;
+}
+function sbEncodeRow_(tab, row) {
+  const out = row.map(sbEncodeCell_);
+  if (tab === CONFIG.USERS_SHEET && out.length > 3) out[3] = ''; // password hashes never leave the Sheet
+  while (out.length && out[out.length - 1] === '') out.pop();
+  return out;
+}
+
+function sbKeyPart_(v) {
+  if (v && typeof v === 'object' && v.$d) v = new Date(v.$d);
+  if (v instanceof Date) return isNaN(v.getTime()) ? '' : String(Math.floor(v.getTime() / 1000));
+  let s = String(v === null || v === undefined ? '' : v).trim().toLowerCase();
+  s = s.replace(/\.0+$/, '');
+  if (/^\d+$/.test(s)) s = s.replace(/^0+(?=\d)/, '');
+  return s;
+}
+
+/**
+ * Stable identity of a Sheet row, used to find the same row in Supabase and in the Sheet.
+ * The browser runs this same function, so both sides always agree. '' = blank row (skipped).
+ */
+function rowKey_(tab, row) {
+  row = row || [];
+  const has = row.some(function(c) { return sbKeyPart_(c) !== ''; });
+  if (!has) return '';
+  const k = sbKeyPart_;
+  switch (tab) {
+    case CONFIG.USERS_SHEET: if (k(row[2])) return 'u:' + k(row[2]); break;
+    case CONFIG.BRANDING_SHEET: if (k(row[0])) return 'b:' + k(row[0]); break;
+    case CONFIG.ORDER_MANIFEST_SHEET: if (k(row[1])) return 'o:' + k(row[1]); break;
+    case CONFIG.GTIN_CATALOG_SHEET: if (k(row[1])) return 'g:' + k(row[1]); break;
+    case CONFIG.UPLOAD_LOG_SHEET: if (k(row[6])) return 'up:' + k(row[6]); break;
+  }
+  return 'r:' + [k(row[0]), k(row[1]), k(row[2]), k(row[3])].join('|');
+}
+
+/** Keys for every data row of a tab (index = position in values; header -> ''). Repeats get #2, #3... */
+function sheetKeys_(tab, values) {
+  const seen = {};
+  const keys = [''];
+  for (let i = 1; i < values.length; i++) {
+    let key = rowKey_(tab, values[i]);
+    if (key) {
+      seen[key] = (seen[key] || 0) + 1;
+      if (seen[key] > 1) key = key + '#' + seen[key];
+    }
+    keys.push(key);
+  }
+  return keys;
+}
+
+function sbHeaderRow_(values) {
+  const h = (values && values[0]) ? values[0].map(function(c) { return String(c === null || c === undefined ? '' : c); }) : [];
+  while (h.length && h[h.length - 1] === '') h.pop();
+  return h;
+}
+
+function sbStatePut_(key, value) {
+  try { sbRpc_('vms_state_put', { p_key: key, p_value: value }); } catch (e) { console.warn('Supabase state note:', e); }
+}
+
+/* ---------- Sheet -> Supabase ---------- */
+
+function sbTouch_(sh, row) {
+  try {
+    if (!sh || !row || row < 2) return;
+    const name = sh.getName();
+    if (SB_TABS_.indexOf(name) === -1) return;
+    SB_TOUCH_ = SB_TOUCH_ || { rows: {}, tabs: {} };
+    (SB_TOUCH_.rows[name] = SB_TOUCH_.rows[name] || {})[row] = true;
+  } catch (_) {}
+}
+
+function sbTouchTabs_(tabs) {
+  if (!tabs || !tabs.length) return;
+  SB_TOUCH_ = SB_TOUCH_ || { rows: {}, tabs: {} };
+  tabs.forEach(function(t) { SB_TOUCH_.tabs[t] = true; });
+}
+
+function sbMergeTouch_(a, b) {
+  const out = { rows: {}, tabs: {} };
+  [a, b].forEach(function(t) {
+    if (!t) return;
+    Object.keys(t.tabs || {}).forEach(function(n) { out.tabs[n] = true; });
+    Object.keys(t.rows || {}).forEach(function(n) {
+      out.rows[n] = out.rows[n] || {};
+      Object.keys(t.rows[n]).forEach(function(r) { out.rows[n][r] = true; });
+    });
+  });
+  return out;
+}
+
+function sbLoadPending_() {
+  try { const raw = CacheService.getScriptCache().get('SB_PENDING'); return raw ? JSON.parse(raw) : null; } catch (_) { return null; }
+}
+function sbSavePending_(t) {
+  try {
+    if (!t) { CacheService.getScriptCache().remove('SB_PENDING'); return; }
+    let text = JSON.stringify(t);
+    if (text.length > 90000) { // too many rows: compare the whole tabs instead
+      Object.keys(t.rows).forEach(function(n) { t.tabs[n] = true; });
+      t.rows = {};
+      text = JSON.stringify(t);
+    }
+    CacheService.getScriptCache().put('SB_PENDING', text, 21600);
+  } catch (_) {}
+}
+
+/** Copy the rows written during this request into Supabase (called from output_). */
+function sbFlush_(defer) {
+  if (!SB_TOUCH_) return;
+  if (!sbEnabled_()) { SB_TOUCH_ = null; return; }
+  let work = SB_TOUCH_;
+  SB_TOUCH_ = null;
+  if (defer) { sbSavePending_(sbMergeTouch_(sbLoadPending_(), work)); return; }
+  const pending = sbLoadPending_();
+  if (pending) { work = sbMergeTouch_(pending, work); sbSavePending_(null); }
+  try {
+    sbPush_(work);
+  } catch (e) {
+    console.warn('Supabase copy postponed:', e);
+    sbSavePending_(sbMergeTouch_(sbLoadPending_(), work));
+  }
+}
+
+function sbPush_(work) {
+  const ss = ss_();
+  const failed = { rows: {}, tabs: {} };
+  let anyFailed = false;
+  Object.keys(work.tabs || {}).forEach(function(name) {
+    // A tool changed or removed rows here: remove them in Supabase too (app changes not yet in
+    // the Sheet are protected by vms_reconcile_tab).
+    try { sbReconcileTab_(name, true); }
+    catch (e) { console.warn('Supabase reconcile ' + name + ':', e); failed.tabs[name] = true; anyFailed = true; }
+  });
+  Object.keys(work.rows || {}).forEach(function(name) {
+    if (work.tabs && work.tabs[name]) return;
+    try {
+      const sh = ss.getSheetByName(name);
+      if (!sh) return;
+      const lastRow = sh.getLastRow(), lastCol = Math.max(sh.getLastColumn(), 1);
+      const header = sbHeaderRow_(sh.getRange(1, 1, 1, lastCol).getValues());
+      const rows = [];
+      Object.keys(work.rows[name]).map(Number).sort(function(a, b) { return a - b; }).forEach(function(r) {
+        if (r < 2 || r > lastRow) return;
+        const vals = sh.getRange(r, 1, 1, lastCol).getValues()[0];
+        const key = rowKey_(name, vals);
+        if (key) rows.push({ key: key, vals: sbEncodeRow_(name, vals) });
+      });
+      if (rows.length) sbRpc_('vms_mirror_rows', { p_tab: name, p_headers: header, p_rows: rows });
+    } catch (e) {
+      console.warn('Supabase copy ' + name + ':', e);
+      failed.rows[name] = work.rows[name]; anyFailed = true;
+    }
+  });
+  if (anyFailed) throw new Error('Some rows could not be copied to Supabase yet.');
+}
+
+/** Make Supabase match one whole Sheet tab. allowDelete null = only for tabs this script owns. */
+function sbReconcileTab_(name, allowDelete, startedAt) {
+  const sh = ss_().getSheetByName(name);
+  if (!sh) return { tab: name, skipped: true };
+  const started = startedAt || sbRpc_('vms_now', {});
+  const values = sh.getDataRange().getValues();
+  const keys = sheetKeys_(name, values);
+  const rows = [];
+  for (let i = 1; i < values.length; i++) {
+    if (keys[i]) rows.push({ key: keys[i], vals: sbEncodeRow_(name, values[i]) });
+  }
+  const del = allowDelete === null || allowDelete === undefined ? SB_SHEET_PRIMARY_TABS_.indexOf(name) !== -1 : !!allowDelete;
+  const res = sbRpc_('vms_reconcile_tab', { p_tab: name, p_headers: sbHeaderRow_(values), p_rows: rows, p_started_at: started, p_allow_delete: del });
+  try { scriptProps_().setProperty('SB_FP_' + name, sbFingerprint_(values)); } catch (_) {}
+  return res;
+}
+
+function sbFingerprint_(values) {
+  const text = JSON.stringify(values);
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, text).map(function(b) { return ('0' + (b & 255).toString(16)).slice(-2); }).join('') + ':' + text.length;
+}
+
+/** Hourly safety sweep: compare every tab that changed since the last comparison. */
+function sbSweep_(force) {
+  const ss = ss_();
+  const out = [];
+  const started = sbRpc_('vms_now', {});
+  SB_TABS_.forEach(function(name) {
+    try {
+      const sh = ss.getSheetByName(name);
+      if (!sh) return;
+      if (!force) {
+        const fp = sbFingerprint_(sh.getDataRange().getValues());
+        if (scriptProps_().getProperty('SB_FP_' + name) === fp) return;
+      }
+      out.push(sbReconcileTab_(name, null, started));
+    } catch (e) {
+      out.push({ tab: name, error: e.message });
+    }
+  });
+  scriptProps_().setProperty('SB_LAST_SWEEP', String(Date.now()));
+  sbStatePut_('lastSweep', { at: new Date().toISOString(), tabs: out.length });
+  return out;
+}
+
+/* ---------- Supabase -> Sheet ---------- */
+
+function sbWriteRow_(sh, r, vals, width) {
+  const row = vals.map(sbDecodeCell_);
+  const w = Math.max(width, row.length, 1);
+  while (row.length < w) row.push('');
+  sh.getRange(r, 1, 1, w).setValues([row]);
+}
+
+/** Write the changes the app made in Supabase into the Sheet. */
+function sbDrain_(maxMs) {
+  if (!sbEnabled_()) return { success: true, skipped: 'Supabase is not set up' };
+  const lock = LockService.getUserLock();
+  if (!lock.tryLock(3000)) return { success: true, skipped: 'busy' };
+  const startedMs = Date.now();
+  const limitMs = maxMs || 25000;
+  let written = 0, appended = 0, removed = 0, rounds = 0;
+  try {
+    while (Date.now() - startedMs < limitMs && rounds < 20) {
+      rounds++;
+      const claim = sbRpc_('vms_sync_claim', { p_limit: 400 });
+      const items = (claim && claim.items) || [];
+      if (!items.length) break;
+      const byTab = {};
+      items.forEach(function(it) { (byTab[it.tab] = byTab[it.tab] || []).push(it); });
+      Object.keys(byTab).forEach(function(tab) {
+        if (!tab || tab === 'null') return;
+        const list = byTab[tab];
+        let sh = ss_().getSheetByName(tab);
+        if (!sh) {
+          sh = ss_().insertSheet(tab);
+          const h = (claim.headers && claim.headers[tab]) || [];
+          if (h.length) sh.getRange(1, 1, 1, h.length).setValues([h]);
+        }
+        const values = sh.getLastRow() > 0 ? sh.getDataRange().getValues() : [];
+        if (values.length === 0 || values[0].every(function(c) { return c === '' || c === null; })) {
+          const h = (claim.headers && claim.headers[tab]) || [];
+          if (h.length) { sh.getRange(1, 1, 1, h.length).setValues([h]); values[0] = h.slice(); }
+        }
+        const keys = sheetKeys_(tab, values);
+        const where = {};
+        keys.forEach(function(k, i) { if (k && !where[k]) where[k] = i + 1; });
+        const width = Math.max(sh.getLastColumn(), (values[0] || []).length, 1);
+        const appends = [];
+        const updates = {};
+        const deletes = {};
+        // Removals first, so a row deleted and re-added under the same key ends up present.
+        list.slice().sort(function(a, b) { return (a.live ? 1 : 0) - (b.live ? 1 : 0); }).forEach(function(it) {
+          let r = 0;
+          const cand = [it.key].concat(it.keys || []);
+          for (let c = 0; c < cand.length && !r; c++) if (cand[c] && where[cand[c]]) r = where[cand[c]];
+          if (it.live) {
+            if (r) { updates[r] = it.vals || []; delete deletes[r]; }
+            else appends.push(it);
+          } else if (r) {
+            deletes[r] = true; delete updates[r];
+          }
+        });
+        appends.sort(function(a, b) { return Number(a.seq) - Number(b.seq); });
+        const updRows = Object.keys(updates).map(Number);
+        const delRows = Object.keys(deletes).map(Number);
+        const decodeRow = function(vals, w) {
+          const row = (vals || []).map(sbDecodeCell_);
+          while (row.length < w) row.push('');
+          return row.slice(0, Math.max(w, row.length));
+        };
+        if (updRows.length + delRows.length > 20) {
+          // Many changes (for example a catalog sync): rewrite the tab in one go instead of row by row.
+          const w = Math.max(width, appends.reduce(function(m, it) { return Math.max(m, (it.vals || []).length); }, 1),
+            updRows.reduce(function(m, r) { return Math.max(m, updates[r].length); }, 1));
+          const finalRows = [];
+          for (let i = 0; i < values.length; i++) {
+            const r = i + 1;
+            if (deletes[r]) continue;
+            if (updates[r]) finalRows.push(decodeRow(updates[r], w));
+            else { const row = values[i].slice(); while (row.length < w) row.push(''); finalRows.push(row.slice(0, w)); }
+          }
+          appends.forEach(function(it) { finalRows.push(decodeRow(it.vals, w)); });
+          if (finalRows.length) sh.getRange(1, 1, finalRows.length, w).setValues(finalRows);
+          if (values.length > finalRows.length) sh.deleteRows(finalRows.length + 1, values.length - finalRows.length);
+          if (finalRows.length > 1) formatDateRows_(sh, 2, finalRows.length - 1);
+          written += updRows.length; appended += appends.length; removed += delRows.length;
+        } else {
+          updRows.forEach(function(r) { sbWriteRow_(sh, r, updates[r], width); formatDateRows_(sh, r, 1); written++; });
+          if (appends.length) {
+            const w = Math.max(width, appends.reduce(function(m, it) { return Math.max(m, (it.vals || []).length); }, 1));
+            const block = appends.map(function(it) { return decodeRow(it.vals, w); });
+            const first = sh.getLastRow() + 1;
+            sh.getRange(first, 1, block.length, w).setValues(block);
+            formatDateRows_(sh, first, block.length);
+            appended += block.length;
+          }
+          delRows.sort(function(a, b) { return b - a; }).forEach(function(r) { sh.deleteRow(r); removed++; });
+        }
+      });
+      SpreadsheetApp.flush();
+      sbRpc_('vms_sync_ack', { p_items: items.map(function(it) { return { row_id: it.row_id, last_id: it.last_id }; }) });
+      if (items.length < 400) break;
+    }
+    if (written || appended || removed) {
+      bumpAnalyticsVersion_();
+      sbStatePut_('lastSheetSync', { at: new Date().toISOString(), updated: written, appended: appended, removed: removed });
+    }
+    return { success: true, updated: written, appended: appended, removed: removed };
+  } finally {
+    try { lock.releaseLock(); } catch (_) {}
+  }
+}
+
+/* ---------- trigger ---------- */
+
+function sbEnsureTrigger_() {
+  const all = ScriptApp.getProjectTriggers();
+  for (let i = 0; i < all.length; i++) if (all[i].getHandlerFunction() === SB_TRIGGER_HANDLER_) return true;
+  ScriptApp.newTrigger(SB_TRIGGER_HANDLER_).timeBased().everyMinutes(1).create();
+  return true;
+}
+
+function sbRemoveTrigger_() {
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (t.getHandlerFunction() === SB_TRIGGER_HANDLER_) ScriptApp.deleteTrigger(t);
+  });
+}
+
+function sbHasTrigger_() {
+  try { return ScriptApp.getProjectTriggers().some(function(t) { return t.getHandlerFunction() === SB_TRIGGER_HANDLER_; }); }
+  catch (_) { return false; }
+}
+
+/** Runs every minute: write app changes into the Sheet, copy postponed rows, hourly sweep. */
+function sbSyncTick() {
+  if (!sbEnabled_()) return;
+  try {
+    const pending = sbLoadPending_();
+    if (pending) { sbSavePending_(null); SB_TOUCH_ = sbMergeTouch_(SB_TOUCH_, pending); sbFlush_(false); }
+  } catch (e) { console.warn('Supabase pending copy:', e); }
+  try { sbDrain_(30000); } catch (e) { console.warn('Supabase drain:', e); }
+  try {
+    const last = Number(scriptProps_().getProperty('SB_LAST_SWEEP') || 0);
+    if (Date.now() - last > SB_SWEEP_MINUTES_ * 60000) sbSweep_(false);
+  } catch (e) { console.warn('Supabase sweep:', e); }
+}
+
+/* ---------- sessions ---------- */
+
+function sbPutSession_(token, rec) {
+  if (!sbEnabled_() || !token || !rec || !rec.user) return false;
+  try {
+    sbRpc_('vms_session_put', {
+      p_token_hash: hash_(token), p_email: String(rec.user.email || ''), p_name: String(rec.user.name || ''),
+      p_role: String(rec.user.role || 'User'), p_expires_at: new Date(Number(rec.exp)).toISOString()
+    });
+    return true;
+  } catch (e) { console.warn('Supabase session copy:', e); return false; }
+}
+
+function sbDropSessions_(token, email) {
+  if (!sbEnabled_()) return;
+  try { sbRpc_('vms_session_drop', { p_token_hash: token ? hash_(token) : null, p_email: email || null }); }
+  catch (e) { console.warn('Supabase session drop:', e); }
+}
+
+/** The app found no Supabase copy of its sign-in (for example it signed in before Supabase was set up). */
+function supabaseSession_(p) {
+  const token = String(p.token || '').trim();
+  let raw = CacheService.getScriptCache().get('SESSION_' + token) || PropertiesService.getScriptProperties().getProperty('SESS_' + token);
+  const rec = raw ? JSON.parse(raw) : null;
+  if (!rec) throw authError_();
+  const ok = sbPutSession_(token, rec);
+  return { success: ok, error: ok ? undefined : 'Supabase is not reachable right now.' };
+}
+
+/* ---------- admin actions ---------- */
+
+function sbPublicConfig_() {
+  const c = sbConfig_();
+  const on = !!(c.enabled && c.url && c.anonKey && c.serviceKey);
+  return { supabaseEnabled: on, supabaseUrl: on ? c.url : '', supabaseAnonKey: on ? c.anonKey : '' };
+}
+
+function getSupabaseConfig_() {
+  const c = sbConfig_();
+  const out = {
+    success: true, url: c.url, anonKey: c.anonKey, hasServiceKey: !!c.serviceKey, enabled: c.enabled,
+    triggerInstalled: sbHasTrigger_(), lastSweep: Number(scriptProps_().getProperty('SB_LAST_SWEEP') || 0) || null,
+    importedAt: scriptProps_().getProperty('SB_IMPORTED_AT') || null
+  };
+  if (c.url && c.serviceKey) {
+    try { out.status = sbRpc_('vms_service_status', {}, c); out.connected = true; }
+    catch (e) { out.connected = false; out.connectionError = e.message; }
+  }
+  return out;
+}
+
+function saveSupabaseConfig_(p) {
+  const props = scriptProps_();
+  const old = sbConfig_();
+  const url = String(p.url !== undefined ? p.url : old.url).trim().replace(/\/+$/, '');
+  const anonKey = String(p.anonKey !== undefined ? p.anonKey : old.anonKey).trim();
+  const serviceKey = String(p.serviceKey || '').trim() || old.serviceKey;
+  const enabled = p.enabled === undefined ? true : !!p.enabled;
+  if (enabled) {
+    if (!/^https:\/\/[a-z0-9.-]+$/i.test(url)) throw new Error('Enter the Project URL, for example https://abcd1234.supabase.co');
+    if (!anonKey) throw new Error('Enter the anon / publishable key.');
+    if (!serviceKey) throw new Error('Enter the service_role / secret key.');
+    if (anonKey === serviceKey) throw new Error('The anon key and the service key must be different keys.');
+    // Prove the keys and the database script work before saving anything.
+    let status;
+    try { status = sbRpc_('vms_service_status', {}, { url: url, serviceKey: serviceKey }); }
+    catch (e) {
+      throw new Error('Could not reach Supabase with these details. Check the URL and service key, and that you ran supabase/vms_schema.sql in the SQL Editor. (' + e.message + ')');
+    }
+    if (!status || !status.schemaVersion) throw new Error('The Supabase database script has not been run yet.');
+  }
+  props.setProperty('SUPABASE_URL', url);
+  props.setProperty('SUPABASE_ANON_KEY', anonKey);
+  if (serviceKey) props.setProperty('SUPABASE_SERVICE_KEY', serviceKey);
+  props.setProperty('SUPABASE_ENABLED', enabled ? 'true' : 'false');
+  if (enabled) sbEnsureTrigger_(); else sbRemoveTrigger_();
+  return getSupabaseConfig_();
+}
+
+/** First copy of the whole Sheet into Supabase (safe to run again: it only fixes differences). */
+function supabaseImport_(p) {
+  if (!sbEnabled_()) throw new Error('Save the Supabase settings first.');
+  const started = sbRpc_('vms_now', {});
+  try { sbDrain_(60000); } catch (e) { console.warn('Drain before import:', e); }
+  const tabs = (p && Array.isArray(p.tabs) && p.tabs.length) ? p.tabs : SB_TABS_;
+  const results = [];
+  tabs.forEach(function(name) {
+    try { results.push(sbReconcileTab_(name, null, started)); }
+    catch (e) { results.push({ tab: name, error: e.message }); }
+  });
+  const failed = results.filter(function(r) { return r && r.error; });
+  if (!failed.length) {
+    scriptProps_().setProperty('SB_IMPORTED_AT', new Date().toISOString());
+    scriptProps_().setProperty('SB_LAST_SWEEP', String(Date.now()));
+    sbStatePut_('importedAt', new Date().toISOString());
+  }
+  try { sbEnsureTrigger_(); } catch (e) { console.warn('Trigger note:', e); }
+  return { success: failed.length === 0, results: results, error: failed.length ? failed.map(function(f) { return f.tab + ': ' + f.error; }).join('; ') : undefined };
+}
+
+function syncSheetNow_() {
+  if (!sbEnabled_()) return { success: true, skipped: 'Supabase is not set up' };
+  return sbDrain_(20000);
 }

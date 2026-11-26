@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Eraser, RefreshCw, Archive, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { BackendUpdateCard } from './BackendUpdateCard';
+import { SupabaseCard, BackupCard } from './SupabaseCard';
 import { ArchivedRowsCard } from './ArchivedRowsCard';
 import { scanSheetCleanup, runSheetCleanup, getSheetCleanupProgress, SheetCleanupScan, SheetCleanupResult, SheetCleanupLiveProgress } from '../lib/api';
 
@@ -77,6 +78,10 @@ export const SettingsPage: React.FC<Props> = ({ onShowToast }) => {
   return (
     <div className="max-w-5xl mx-auto space-y-5">
       <h2 className="text-xl font-bold text-slate-900">Settings</h2>
+
+      <SupabaseCard onShowToast={onShowToast} />
+
+      <BackupCard onShowToast={onShowToast} />
 
       <section id="sheet-cleanup-card" className={card}>
         <div className="flex flex-wrap items-center justify-between gap-3">
