@@ -1,3 +1,4 @@
+import { noteAction } from './stationActivity';
 import { OrderManifest, ManifestItem, GtinCatalogProduct, PackVerificationLog, VideoRecord } from '../types';
 import { hasStationServer } from './serverFeatures';
 import { requestApi, normalizeOrderId, checkDuplicate, formatOrderId } from './api';
@@ -1382,6 +1383,7 @@ export function saveStoredVerificationLogs(logs: PackVerificationLog[]): void {
 }
 
 export async function logPackVerification(log: PackVerificationLog): Promise<void> {
+  noteAction((String(log.status).toUpperCase() === 'MATCHED' ? 'Packed ' : 'Pack check ' + String(log.status || '').toLowerCase() + ' ') + log.orderId);
   const logs = getStoredVerificationLogs();
   logs.unshift(log);
   saveStoredVerificationLogs(logs);
