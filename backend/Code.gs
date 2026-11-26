@@ -4856,7 +4856,7 @@ function uploadBrandingImage_(p) {
 // ---------------------------------------------------------------------------
 const STATION_INDEX_KEY_ = 'STATIONQ_INDEX';
 const STATION_TTL_S_ = 21600;
-const STATION_MAX_ITEMS_ = 60;
+const STATION_MAX_ITEMS_ = 60; // script cache values are limited to 100 KB; counts carry the exact totals
 
 function cleanQueueItem_(it) {
   const str = function(v, n) { return String(v == null ? '' : v).slice(0, n || 200); };
@@ -4877,6 +4877,17 @@ function cleanQueueItem_(it) {
   };
 }
 
+/** The station's own totals (whole queue), so admins see the same numbers as the packer. */
+function cleanQueueCounts_(c) {
+  if (!c || typeof c !== 'object') return null;
+  const out = {};
+  ['waiting', 'uploading', 'failed', 'duplicate', 'completed', 'total'].forEach(function(k) {
+    const n = Math.floor(Number(c[k]) || 0);
+    out[k] = n > 0 ? Math.min(n, 100000) : 0;
+  });
+  return out;
+}
+
 function reportStationQueue_(p) {
   const user = session_(p.token);
   const email = normalize_(user.email);
@@ -4890,6 +4901,7 @@ function reportStationQueue_(p) {
     online: p.online !== false,
     worker: String(p.worker || '').slice(0, 200),
     items: items,
+    counts: cleanQueueCounts_(p.counts),
     reportedAt: now
   };
   const cache = CacheService.getScriptCache();

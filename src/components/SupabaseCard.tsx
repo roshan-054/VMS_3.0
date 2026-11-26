@@ -23,6 +23,7 @@ interface Config {
   importedAt: string | null;
   status?: {
     tabs: Record<string, number>;
+    schemaVersion?: number;
     pendingSheetWrites: number;
     oldestPending: string | null;
     state: Record<string, any>;
@@ -186,6 +187,13 @@ export const SupabaseCard: React.FC<Props> = ({ onShowToast }) => {
             <dd className="mt-1 font-semibold text-slate-800">{cfg.importedAt ? fmtDateTime(cfg.importedAt) : 'Not done yet'}</dd>
           </div>
         </dl>
+      )}
+
+      {cfg && connected && Number(cfg.status?.schemaVersion || 0) < 2 && (
+        <div id="supabase-schema-old" className="flex gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          <div>The database script has a newer version. Click <b>Copy database script</b>, paste it in the Supabase SQL Editor and click <b>Run</b> to turn on live station status. Your data is kept.</div>
+        </div>
       )}
 
       {cfg && connected && !cfg.importedAt && (

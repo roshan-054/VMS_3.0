@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Radio, Upload, Clock, AlertTriangle, CheckCircle2, Video, WifiOff } from 'lucide-react';
-import { requestApi } from '../lib/api';
-import type { StationQueueItem } from '../lib/stationReporter';
+import { requestApi, requestAppsScript } from '../lib/api';
+import { getStoredToken } from '../lib/storage';
+import type { StationQueueItem, StationQueueCounts } from '../lib/stationReporter';
+import { listStationsFromSupabase, mergeStationReports, stationSupabaseUsable } from '../lib/supabase/stations';
 
 export interface StationReport {
   email: string;
@@ -12,9 +14,45 @@ export interface StationReport {
   ageMs: number;
   worker: string;
   items: StationQueueItem[];
+  counts?: StationQueueCounts | null;
+  reportedAt?: number;
 }
 
-const POLL_MS = 5000;
+const POLL_MS = 5000; // Apps Script
+const POLL_SUPABASE_MS = 1000; // Supabase: a check costs one tiny call when nothing changed
+const GAS_WITH_SUPABASE_MS = 15000; // still read Apps Script now and then for stations that fell back to it
+const LIVE_MS = 45000;
+
+/** The station's own totals; older stations that do not send them are counted from their list. */
+export function stationCounts(st: StationReport): StationQueueCounts {
+  if (st.counts) return st.counts;
+  const c: StationQueueCounts = { waiting: 0, uploading: 0, failed: 0, duplicate: 0, completed: 0, total: st.items.length };
+  for (const i of st.items) {
+    if (i.status === 'pending') c.waiting++;
+    else if (i.status === 'uploading') c.uploading++;
+    else if (i.status === 'failed' || i.status === 'paused') c.failed++;
+    else if (i.status === 'completed') c.completed++;
+  }
+  return c;
+}
+
+/** Puts reportedAt on this computer's clock so ages tick correctly between answers. */
+function toLocal(list: any[], serverTime: number): StationReport[] {
+  const now = Date.now();
+  const st = Number(serverTime) || now;
+  return (list || []).map((x) => {
+    const reported = x.reportedAt ? Number(x.reportedAt) : st - Number(x.ageMs || 0);
+    return { ...x, items: Array.isArray(x.items) ? x.items : [], reportedAt: reported - st + now };
+  });
+}
+
+function withLive(list: StationReport[]): StationReport[] {
+  const now = Date.now();
+  return list.map((x) => {
+    const ageMs = Math.max(0, now - Number(x.reportedAt || 0));
+    return { ...x, ageMs, live: ageMs < LIVE_MS };
+  });
+}
 
 function ago(ms: number): string {
   const s = Math.round(ms / 1000);
@@ -50,22 +88,58 @@ export const LiveStationQueues: React.FC<{ onStations?: (stations: StationReport
   const onStationsRef = useRef(onStations);
   onStationsRef.current = onStations;
 
+  const [viaSupabase, setViaSupabase] = useState(false);
+
   useEffect(() => {
     let alive = true;
+    let sbList: StationReport[] = [];
+    let gasList: StationReport[] = [];
+    let sbVersion = 0;
+    let gasAt = 0;
+    let gotAny = false;
     let timer: ReturnType<typeof setTimeout>;
+    const publish = () => {
+      if (!alive || !gotAny) return;
+      const merged = withLive(mergeStationReports(sbList, gasList));
+      setStations(merged);
+      onStationsRef.current?.(merged);
+    };
     const tick = async () => {
+      let delay = POLL_MS;
       if (document.visibilityState === 'visible') {
+        const token = getStoredToken() || '';
+        let sbOk = false;
         try {
-          const res: any = await requestApi('getStationQueues', {});
-          if (!alive) return;
-          setStations(res.stations || []);
-          onStationsRef.current?.(res.stations || []);
-          setError('');
+          const res = await listStationsFromSupabase(sbVersion, token, (a, p) => requestAppsScript(a, p));
+          if (res) {
+            sbOk = true;
+            if (res.changed) {
+              sbVersion = res.version;
+              sbList = toLocal(res.stations || [], res.serverTime);
+            }
+            gotAny = true;
+          }
         } catch (e: any) {
           if (alive) setError(e?.message || 'Could not load live station status.');
         }
+        if (alive) setViaSupabase(sbOk);
+        const gasEvery = sbOk ? GAS_WITH_SUPABASE_MS : POLL_MS;
+        if (Date.now() - gasAt >= gasEvery - 50) {
+          gasAt = Date.now();
+          try {
+            const res: any = await requestApi('getStationQueues', {});
+            if (!alive) return;
+            gasList = toLocal(res.stations || [], res.serverTime);
+            gotAny = true;
+            setError('');
+          } catch (e: any) {
+            if (alive && !sbOk) setError(e?.message || 'Could not load live station status.');
+          }
+        }
+        publish();
+        delay = sbOk ? POLL_SUPABASE_MS : POLL_MS;
       }
-      if (alive) timer = setTimeout(tick, POLL_MS);
+      if (alive) timer = setTimeout(tick, delay);
     };
     tick();
     return () => {
@@ -74,8 +148,10 @@ export const LiveStationQueues: React.FC<{ onStations?: (stations: StationReport
     };
   }, []);
 
-  const all = (stations || []).flatMap((s) => s.items.map((it) => ({ ...it, station: s })));
-  const count = (st: string) => all.filter((i) => i.status === st || (st === 'failed' && i.status === 'paused')).length;
+  const totals = (stations || []).map(stationCounts).reduce(
+    (t, c) => ({ waiting: t.waiting + c.waiting, uploading: t.uploading + c.uploading, failed: t.failed + c.failed }),
+    { waiting: 0, uploading: 0, failed: 0 },
+  );
 
   return (
     <div id="live-station-queues" className="bg-white rounded-2xl border border-slate-200 shadow-2xs p-4 space-y-3">
@@ -83,17 +159,17 @@ export const LiveStationQueues: React.FC<{ onStations?: (stations: StationReport
         <div className="flex items-center gap-2">
           <Radio className="w-4 h-4 text-emerald-600 animate-pulse" />
           <h3 className="text-sm font-bold text-slate-800">Live packer stations</h3>
-          <span className="text-[11px] text-slate-500">updates every 5 s</span>
+          <span className="text-[11px] text-slate-500" id="live-station-mode">{viaSupabase ? 'live' : 'updates every 5 s'}</span>
         </div>
         <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-semibold">
           <span className="px-2 py-0.5 rounded-full border bg-blue-50 text-blue-700 border-blue-200" id="live-count-uploading">
-            {count('uploading')} uploading
+            {totals.uploading} uploading
           </span>
           <span className="px-2 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-200" id="live-count-pending">
-            {count('pending')} waiting
+            {totals.waiting} waiting
           </span>
           <span className="px-2 py-0.5 rounded-full border bg-rose-50 text-rose-700 border-rose-200" id="live-count-failed">
-            {count('failed')} failed
+            {totals.failed} failed
           </span>
           <label className="ml-1 flex items-center gap-1 text-slate-500 font-medium cursor-pointer">
             <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} className="w-3 h-3" />
@@ -111,6 +187,7 @@ export const LiveStationQueues: React.FC<{ onStations?: (stations: StationReport
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {(stations || []).map((st) => {
           const items = st.items.filter((i) => showDone || i.status !== 'completed');
+          const c = stationCounts(st);
           return (
             <div key={st.email} className="rounded-xl border border-slate-200 p-3 space-y-2 min-w-0" data-station={st.email}>
               <div className="flex items-center justify-between gap-2">
@@ -132,6 +209,12 @@ export const LiveStationQueues: React.FC<{ onStations?: (stations: StationReport
                     </span>
                   )}
                 </div>
+              </div>
+              <div className="flex flex-wrap gap-1 text-[10px] font-semibold" data-station-counts={`${c.waiting}/${c.uploading}/${c.failed}`}>
+                <span className="px-1.5 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-200">{c.waiting} waiting</span>
+                <span className="px-1.5 py-0.5 rounded border bg-blue-50 text-blue-700 border-blue-200">{c.uploading} uploading</span>
+                <span className="px-1.5 py-0.5 rounded border bg-rose-50 text-rose-700 border-rose-200">{c.failed} failed</span>
+                {c.duplicate > 0 && <span className="px-1.5 py-0.5 rounded border bg-orange-50 text-orange-700 border-orange-200">{c.duplicate} duplicate</span>}
               </div>
               {st.worker && st.live && <div className="text-[10px] text-blue-700 truncate">{st.worker}</div>}
               {items.length === 0 ? (

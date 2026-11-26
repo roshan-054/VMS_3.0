@@ -31,4 +31,8 @@ Apps Script exactly as before.
   while paused; restore the project from the Supabase dashboard.
 - **Settings > Download backup** exports every tab (or a date range of the log tabs) as Excel with
   the Sheet's tabs, columns and DD-MMM-YY dates. Users, Branding and GTINCatalog are always whole.
+- Live packer stations (Upload Logs, admins): each station writes its upload queue to Supabase
+  within about a second of a change, and the admin view checks every second, so admins see the
+  same waiting / uploading / failed numbers as the packer. Without Supabase it uses Apps Script
+  every 5 seconds as before. After updating VMS, run `vms_schema.sql` again once (safe to re-run).
 - Checks for recordings still in progress, uploads and anything touching Drive still go to Apps Script.
