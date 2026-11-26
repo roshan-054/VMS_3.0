@@ -1383,36 +1383,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
               <span>{isRefreshingData ? 'Refreshing Data...' : 'Refresh Live Data'}</span>
             </button>
 
-            {/* Sync Google Sheet Button Group with Direct Settings / Tab Configuration (Shown on non-GTIN subtabs) */}
-            {activeSubTab !== 'gtin' && (
-              <div className="inline-flex rounded-xl shadow-xs overflow-hidden border border-emerald-700 bg-emerald-600">
-                <button
-                  type="button"
-                  disabled={isSyncingMasterSheet || isSyncingSheet}
-                  onClick={handleSyncMasterSheet}
-                  className="px-3.5 py-2 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                  title="Fetch and sync products from Google Sheet into GTIN Catalog"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingMasterSheet || isSyncingSheet ? 'animate-spin' : ''}`} />
-                  <span>{isSyncingMasterSheet || isSyncingSheet ? 'Syncing...' : 'Sync GTIN Catalog'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const cfg = getGtinSheetConfig();
-                    setGtinSheetInput(cfg.sheetIdOrUrl);
-                    setGtinSheetTab(cfg.tabName || 'GTINCatalog');
-                    setGtinSheetTagsInput(cfg.tagsFilter || '');
-                    setIsSyncModalOpen(true);
-                  }}
-                  className="px-2.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white border-l border-emerald-500 transition cursor-pointer flex items-center gap-1 text-xs font-bold"
-                  title="Change Google Sheet Link or Tab Name"
-                >
-                  <Sliders className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Sheet &amp; Tab</span>
-                </button>
-              </div>
-            )}
+            {/* Catalog sync (Sync Now / Change Sheet / Tab) lives only in the GTIN Barcode Catalog tab. */}
 
           </div>
         )}
