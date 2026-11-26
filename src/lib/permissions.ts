@@ -1,154 +1,115 @@
-import { User, UserRole, AdminPermissions } from '../types';
+import { User, AdminPermissions } from '../types';
 
-export const DEFAULT_MASTER_ADMIN_PERMISSIONS: AdminPermissions = {
-  canDeleteData: true,
-  canManageUsers: true,
-  canManageSettings: true,
-  canManageBranding: true,
-  canAccessSearch: true,
-  canAccessReports: true,
-  canAccessAnalytics: true,
-  canAccessHealth: true,
-};
+/**
+ * Roles: Super Admin > Admin > User.
+ * Each user's permissions come from the backend (Users sheet), starting from their role's
+ * defaults below. Only the Super Admin can change them, and the backend enforces them; these
+ * helpers decide what the app shows. No account is privileged by its email address.
+ */
 
-export const DEFAULT_ADMIN_PERMISSIONS: AdminPermissions = {
-  canDeleteData: true,       // Administrators can delete/trash logs and records
-  canManageUsers: true,      // Administrators can create, edit, approve, and reset user passwords
-  canManageSettings: true,   // Administrators can change backend/drive settings
-  canManageBranding: true,   // Administrators can change branding and favicon
-  canAccessSearch: true,     // Allowed to search recorded orders
-  canAccessReports: true,    // Allowed to generate reports
-  canAccessAnalytics: true,  // Allowed to view analytics
-  canAccessHealth: true,     // Allowed to view health
-};
+export const PERMISSION_KEYS: (keyof AdminPermissions)[] = [
+  'canAccessRecord', 'canAccessProcessing', 'canAccessQueue', 'canAccessLogs',
+  'canAccessSearch', 'canAccessReports', 'canAccessAnalytics', 'canAccessHealth',
+  'canDeleteData', 'canManageUsers', 'canManageSettings', 'canManageBranding',
+];
 
+export const PERMISSION_GROUPS: { title: string; items: { key: keyof AdminPermissions; label: string; desc: string }[] }[] = [
+  {
+    title: 'Pages they can see',
+    items: [
+      { key: 'canAccessRecord', label: 'Scan & Record', desc: 'Record packing and return videos' },
+      { key: 'canAccessProcessing', label: 'Order Processing', desc: 'Assign orders and see order products' },
+      { key: 'canAccessQueue', label: 'Upload Queue', desc: 'See and retry uploads from this station' },
+      { key: 'canAccessLogs', label: 'Upload Logs', desc: 'See uploaded videos and their status' },
+      { key: 'canAccessSearch', label: 'Search Videos', desc: 'Search recorded orders' },
+      { key: 'canAccessReports', label: 'Reports', desc: 'Generate and download reports' },
+      { key: 'canAccessAnalytics', label: 'Analytics', desc: 'See charts and packing statistics' },
+      { key: 'canAccessHealth', label: 'Health & Diagnostics', desc: 'See technical diagnostics' },
+    ],
+  },
+  {
+    title: 'Actions they can take',
+    items: [
+      { key: 'canDeleteData', label: 'Delete logs & videos', desc: 'Remove log rows, clean duplicates and move old videos to Drive Trash' },
+      { key: 'canManageUsers', label: 'Manage users', desc: 'Add, edit, approve, disable and reset passwords of users' },
+      { key: 'canManageSettings', label: 'Manage settings', desc: 'Settings page, Drive folder, backend update and sheet tools' },
+      { key: 'canManageBranding', label: 'Manage branding', desc: 'Change the app name, logo and favicon' },
+    ],
+  },
+];
+
+const all = (v: boolean): AdminPermissions =>
+  Object.fromEntries(PERMISSION_KEYS.map((k) => [k, v])) as unknown as AdminPermissions;
+
+export const DEFAULT_MASTER_ADMIN_PERMISSIONS: AdminPermissions = all(true);
+export const DEFAULT_ADMIN_PERMISSIONS: AdminPermissions = all(true);
 export const DEFAULT_USER_PERMISSIONS: AdminPermissions = {
-  canDeleteData: false,
-  canManageUsers: false,
-  canManageSettings: false,
-  canManageBranding: false,
-  canAccessSearch: false,
-  canAccessReports: false,
-  canAccessAnalytics: false,
-  canAccessHealth: false,
+  ...all(false),
+  canAccessRecord: true,
+  canAccessProcessing: true,
+  canAccessQueue: true,
+  canAccessLogs: true,
 };
 
-const PERMISSIONS_STORAGE_KEY = 'vms_admin_permissions_map_v1';
+const roleKey = (user: User | null | undefined) => String(user?.role || '').toLowerCase().replace(/[\s_-]/g, '');
 
-export function getStoredPermissionsMap(): Record<string, AdminPermissions> {
-  try {
-    const raw = localStorage.getItem(PERMISSIONS_STORAGE_KEY);
-    if (!raw) return {};
-    return JSON.parse(raw);
-  } catch (e) {
-    return {};
-  }
+export function isSuperAdmin(user: User | null | undefined): boolean {
+  const r = roleKey(user);
+  return r === 'superadmin' || r === 'masteradmin';
 }
 
-export function saveUserPermissionsLocally(email: string, permissions: AdminPermissions): void {
-  try {
-    const map = getStoredPermissionsMap();
-    map[email.trim().toLowerCase()] = permissions;
-    localStorage.setItem(PERMISSIONS_STORAGE_KEY, JSON.stringify(map));
-    window.dispatchEvent(new CustomEvent('ops_permissions_updated', { detail: { email, permissions } }));
-  } catch (e) {}
-}
+/** Kept for older callers: the top role is now called Super Admin. */
+export const isMasterAdmin = isSuperAdmin;
 
-export function isMasterAdmin(user: User | null | undefined): boolean {
-  if (!user) return false;
-  const role = String(user.role || '').toLowerCase().replace(/[\s_-]/g, '');
-  // Roles come from the backend Users sheet. The backend has a single admin tier, so every
-  // Admin is treated as a master admin here. No account is privileged by its email address.
-  return role === 'masteradmin' || role === 'superadmin' || role === 'admin';
-}
-
+/** Admin or Super Admin. */
 export function isAdmin(user: User | null | undefined): boolean {
   if (!user) return false;
-  if (isMasterAdmin(user)) return true;
-  const role = String(user.role || '').toLowerCase();
-  return role === 'admin' || role === 'master admin' || role === 'administrator';
+  const r = roleKey(user);
+  return isSuperAdmin(user) || r === 'admin' || r === 'administrator';
 }
 
 export function isStandardUser(user: User | null | undefined): boolean {
-  if (!user) return true;
-  return !isAdmin(user) && !isMasterAdmin(user);
+  return !isAdmin(user);
+}
+
+export function roleDefaultPermissions(user: User | null | undefined): AdminPermissions {
+  return isAdmin(user) ? { ...DEFAULT_ADMIN_PERMISSIONS } : { ...DEFAULT_USER_PERMISSIONS };
 }
 
 export function getUserPermissions(user: User | null | undefined): AdminPermissions {
-  if (!user) return DEFAULT_USER_PERMISSIONS;
-  if (isMasterAdmin(user) || isAdmin(user)) return DEFAULT_MASTER_ADMIN_PERMISSIONS;
-  if (user.role === 'User') return DEFAULT_USER_PERMISSIONS;
-
-  // Check locally saved permissions map as well
-  const localMap = getStoredPermissionsMap();
-  const localPerms = localMap[String(user.email || '').toLowerCase().trim()];
-
-  return {
-    ...DEFAULT_ADMIN_PERMISSIONS,
-    ...(user.permissions || {}),
-    ...(localPerms || {}),
-  };
+  if (!user) return { ...all(false) };
+  if (isSuperAdmin(user)) return all(true);
+  const out = roleDefaultPermissions(user);
+  const fromBackend = (user.permissions || {}) as Partial<AdminPermissions>;
+  for (const k of PERMISSION_KEYS) if (typeof fromBackend[k] === 'boolean') out[k] = fromBackend[k] as boolean;
+  return out;
 }
 
-export function canUserDeleteData(user: User | null | undefined): boolean {
-  if (!user) return false;
-  if (isMasterAdmin(user) || isAdmin(user)) return true;
-  if (user.role === 'User') return false;
-  return getUserPermissions(user).canDeleteData === true;
-}
+const can = (k: keyof AdminPermissions) => (user: User | null | undefined) => !!user && getUserPermissions(user)[k] === true;
 
-export function canUserManageUsers(user: User | null | undefined): boolean {
-  if (!user) return false;
-  if (isMasterAdmin(user) || isAdmin(user)) return true;
-  if (user.role === 'User') return false;
-  return getUserPermissions(user).canManageUsers === true;
-}
+export const canUserAccessRecord = can('canAccessRecord');
+export const canUserAccessProcessing = can('canAccessProcessing');
+export const canUserAccessQueue = can('canAccessQueue');
+export const canUserAccessLogs = can('canAccessLogs');
+export const canUserDeleteData = can('canDeleteData');
+export const canUserManageUsers = can('canManageUsers');
+export const canUserManageSettings = can('canManageSettings');
+export const canUserManageBranding = can('canManageBranding');
+export const canUserAccessSearch = can('canAccessSearch');
+export const canUserAccessReports = can('canAccessReports');
+export const canUserAccessAnalytics = can('canAccessAnalytics');
+export const canUserAccessHealth = can('canAccessHealth');
 
-export function canUserManageSettings(user: User | null | undefined): boolean {
-  if (!user) return false;
-  if (isMasterAdmin(user) || isAdmin(user)) return true;
-  if (user.role === 'User') return false;
-  return getUserPermissions(user).canManageSettings === true;
-}
-
-export function canUserManageBranding(user: User | null | undefined): boolean {
-  if (!user) return false;
-  if (isMasterAdmin(user) || isAdmin(user)) return true;
-  if (user.role === 'User') return false;
-  return getUserPermissions(user).canManageBranding === true;
-}
-
-export function canUserAccessSearch(user: User | null | undefined): boolean {
-  if (!user) return false;
-  if (isMasterAdmin(user) || isAdmin(user)) return true;
-  if (user.role === 'User') return false;
-  return getUserPermissions(user).canAccessSearch === true;
-}
-
-export function canUserAccessReports(user: User | null | undefined): boolean {
-  if (!user) return false;
-  if (isMasterAdmin(user) || isAdmin(user)) return true;
-  if (user.role === 'User') return false;
-  return getUserPermissions(user).canAccessReports === true;
-}
-
-export function canUserAccessAnalytics(user: User | null | undefined): boolean {
-  if (!user) return false;
-  if (isMasterAdmin(user) || isAdmin(user)) return true;
-  if (user.role === 'User') return false;
-  return getUserPermissions(user).canAccessAnalytics === true;
-}
-
-export function canUserAccessHealth(user: User | null | undefined): boolean {
-  if (!user) return false;
-  if (isMasterAdmin(user) || isAdmin(user)) return true;
-  if (user.role === 'User') return false;
-  return getUserPermissions(user).canAccessHealth === true;
-}
-
+/** Admin & Users page: shown to anyone who may manage users, branding or settings. */
 export function canUserAccessAdminPanel(user: User | null | undefined): boolean {
-  if (!user) return false;
-  if (isMasterAdmin(user) || isAdmin(user)) return true;
-  if (user.role === 'User') return false;
-  return true; // All Admins can see the panel
+  return canUserManageUsers(user) || canUserManageBranding(user) || canUserManageSettings(user);
 }
+
+/** Settings page (Supabase card inside it is for the Super Admin only). */
+export function canUserAccessSettingsPage(user: User | null | undefined): boolean {
+  return canUserManageSettings(user);
+}
+
+/** Only the Super Admin can change other users' permissions or see Supabase settings. */
+export const canUserEditPermissions = isSuperAdmin;
+export const canUserSeeSupabaseSettings = isSuperAdmin;

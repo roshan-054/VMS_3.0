@@ -111,7 +111,7 @@ test('a normal user cannot call admin actions', () => {
   for (const a of rt.sandbox.__ADMIN) {
     const res = rt.call(a, { token, name: 'X', email: 'x@x.com', password: 'abcdef1', row: 2, days: 1 });
     assert.equal(res.success, false, `${a} allowed for a normal user`);
-    assert.match(res.error, /Administrator permission required/, `${a}: ${res.error}`);
+    assert.match(res.error, /Administrator permission required|do not have permission|Only the Super Admin/, `${a}: ${res.error}`);
   }
   assert.equal(rt.sheets.get('Users').rows.length, USERS.length + 1);
 });

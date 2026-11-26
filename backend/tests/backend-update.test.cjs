@@ -71,7 +71,7 @@ test('only administrators can see or run the backend update', () => {
   for (const a of ['getBackendUpdateStatus', 'updateBackend', 'rollbackBackend']) {
     const r = rt.call(a, { token: packer });
     assert.equal(r.success, false, a);
-    assert.match(r.error, /Administrator/);
+    assert.match(r.error, /Administrator|do not have permission/);
   }
 });
 

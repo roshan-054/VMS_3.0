@@ -41,7 +41,7 @@ import {
 } from './lib/branding';
 import { getStoredManifests, startGlobalManifestSyncLoop } from './lib/manifestStorage';
 import { startStationReporter } from './lib/stationReporter';
-import { SESSION_EXPIRED_EVENT } from './lib/api';
+import { SESSION_EXPIRED_EVENT, requestApi } from './lib/api';
 import { initUploadWorker } from './lib/uploadWorker';
 import { appBuildLabel, watchForNewBuild } from './lib/appVersion';
 import { ScanRecord } from './components/ScanRecord';
@@ -65,12 +65,16 @@ const TabLoading = () => (
 );
 
 import {
-  isMasterAdmin,
+  canUserAccessRecord,
+  canUserAccessProcessing,
+  canUserAccessQueue,
+  canUserAccessLogs,
   canUserAccessSearch,
   canUserAccessReports,
   canUserAccessAnalytics,
   canUserAccessHealth,
-  canUserAccessAdminPanel
+  canUserAccessAdminPanel,
+  canUserAccessSettingsPage
 } from './lib/permissions';
 
 export function App() {
@@ -277,6 +281,36 @@ export function App() {
     showToast('Logged out of workstation', 'info');
   };
 
+  // Keep this user's role and permissions current: the Super Admin can change them at any time.
+  useEffect(() => {
+    if (!signedInEmail) return;
+    let stopped = false;
+    const refreshAccess = async () => {
+      try {
+        const res: any = await requestApi('getMyAccess', {});
+        if (stopped || !res?.success || !res.user) return;
+        setCurrentUser((prev) => {
+          if (!prev || String(prev.email).toLowerCase() !== String(res.user.email).toLowerCase()) return prev;
+          const next = { ...prev, name: res.user.name || prev.name, role: res.user.role, permissions: res.user.permissions };
+          if (JSON.stringify(next) === JSON.stringify(prev)) return prev;
+          try { localStorage.setItem('vms_current_user', JSON.stringify(next)); } catch (_) {}
+          return next;
+        });
+      } catch (_) {
+        // An older backend without getMyAccess, or offline: keep what we have.
+      }
+    };
+    refreshAccess();
+    const timer = setInterval(refreshAccess, 120000);
+    const onFocus = () => refreshAccess();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [signedInEmail]);
+
   // Backend rejected our session (expired, revoked or missing): return to the sign-in screen.
   useEffect(() => {
     const onExpired = (e: Event) => {
@@ -301,18 +335,20 @@ export function App() {
   }
 
   const navItems = [
-    { id: 'record', label: 'Scan & Record', icon: Camera },
-    { id: 'processing', label: 'Order Processing', icon: PackagePlus, badge: pendingManifestCount },
-    { id: 'queue', label: 'Upload Queue', icon: UploadCloud, badge: pendingQueueCount },
-    { id: 'logs', label: 'Upload Logs', icon: FileClock },
+    ...(canUserAccessRecord(currentUser) ? [{ id: 'record', label: 'Scan & Record', icon: Camera }] : []),
+    ...(canUserAccessProcessing(currentUser) ? [{ id: 'processing', label: 'Order Processing', icon: PackagePlus, badge: pendingManifestCount }] : []),
+    ...(canUserAccessQueue(currentUser) ? [{ id: 'queue', label: 'Upload Queue', icon: UploadCloud, badge: pendingQueueCount }] : []),
+    ...(canUserAccessLogs(currentUser) ? [{ id: 'logs', label: 'Upload Logs', icon: FileClock }] : []),
     ...(canUserAccessSearch(currentUser) ? [{ id: 'search', label: 'Search Videos', icon: Search }] : []),
     ...(canUserAccessReports(currentUser) ? [{ id: 'reports', label: 'Reports', icon: FileSpreadsheet }] : []),
     ...(canUserAccessAnalytics(currentUser) ? [{ id: 'analytics', label: 'Analytics', icon: BarChart3 }] : []),
     ...(canUserAccessHealth(currentUser) ? [{ id: 'health', label: 'Health & Diagnostics', icon: Activity }] : []),
-    ...(canUserAccessAdminPanel(currentUser)
-      ? [{ id: 'admin', label: 'Admin & Users', icon: Shield }, { id: 'settings', label: 'Settings', icon: Settings }]
-      : []),
+    ...(canUserAccessAdminPanel(currentUser) ? [{ id: 'admin', label: 'Admin & Users', icon: Shield }] : []),
+    ...(canUserAccessSettingsPage(currentUser) ? [{ id: 'settings', label: 'Settings', icon: Settings }] : []),
   ];
+  // A page this user may not see is never shown, even if it was open when access changed.
+  const allowedTabs = navItems.map((n) => n.id);
+  const shownTab = allowedTabs.includes(activeTab) ? activeTab : (allowedTabs[0] as typeof activeTab | undefined);
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col md:flex-row text-slate-800">
@@ -473,7 +509,7 @@ export function App() {
         <nav id="left-sidebar-navigation" className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
           {navItems.map((tab) => {
             const Icon = tab.icon;
-            const isActive = activeTab === tab.id;
+            const isActive = shownTab === tab.id;
             return (
               <button
                 key={tab.id}
@@ -538,14 +574,14 @@ export function App() {
               <div className="text-[10px] text-slate-400 font-mono truncate">{currentUser.role}</div>
             </div>
             <div className="flex items-center gap-1">
-              {canUserAccessAdminPanel(currentUser) && (
+              {canUserAccessSettingsPage(currentUser) && (
                 <button
                   id="footer-settings-btn"
                   onClick={() => {
                     setActiveTab('settings');
                     setIsMobileMenuOpen(false);
                   }}
-                  className={`p-1.5 rounded-lg transition shrink-0 cursor-pointer ${activeTab === 'settings' ? 'text-blue-600 bg-blue-50' : 'text-slate-400 hover:text-blue-600 hover:bg-slate-100'}`}
+                  className={`p-1.5 rounded-lg transition shrink-0 cursor-pointer ${shownTab === 'settings' ? 'text-blue-600 bg-blue-50' : 'text-slate-400 hover:text-blue-600 hover:bg-slate-100'}`}
                   title="Settings"
                   aria-label="Settings"
                 >
@@ -591,7 +627,7 @@ export function App() {
         )}
         <main className="flex-1 w-full px-4 sm:px-6 lg:px-10 xl:px-12 py-6 transition-all duration-200">
           <Suspense fallback={<TabLoading />}>
-          {activeTab === 'record' && (
+          {shownTab === 'record' && (
             <ScanRecord
               onQueueUpdated={refreshQueueBadge}
               onShowToast={showToast}
@@ -601,7 +637,7 @@ export function App() {
             />
           )}
 
-          {activeTab === 'processing' && (
+          {shownTab === 'processing' && (
             <OrderProcessing
               currentUser={currentUser}
               onShowToast={showToast}
@@ -612,7 +648,7 @@ export function App() {
             />
           )}
 
-          {activeTab === 'queue' && (
+          {shownTab === 'queue' && (
             <UploadQueue
               onQueueChanged={refreshQueueBadge}
               onShowToast={showToast}
@@ -620,7 +656,7 @@ export function App() {
             />
           )}
 
-          {activeTab === 'logs' && (
+          {shownTab === 'logs' && (
             <UploadLogs
               onShowToast={showToast}
               onNavigateToQueue={() => setActiveTab('queue')}
@@ -628,21 +664,27 @@ export function App() {
             />
           )}
 
-          {activeTab === 'search' && (
+          {shownTab === 'search' && (
             <SearchOrders onShowToast={showToast} currentUser={currentUser} />
           )}
 
-          {activeTab === 'reports' && <Reports onShowToast={showToast} />}
+          {shownTab === 'reports' && <Reports onShowToast={showToast} />}
 
-          {activeTab === 'analytics' && <Analytics onShowToast={showToast} userKey={currentUser?.email} />}
+          {shownTab === 'analytics' && <Analytics onShowToast={showToast} userKey={currentUser?.email} />}
 
-          {activeTab === 'health' && <SystemHealth onShowToast={showToast} />}
+          {shownTab === 'health' && <SystemHealth onShowToast={showToast} />}
 
-          {activeTab === 'admin' && (
+          {shownTab === 'admin' && (
             <AdminPanel onShowToast={showToast} currentUser={currentUser} />
           )}
 
-          {activeTab === 'settings' && <SettingsPage onShowToast={showToast} />}
+          {shownTab === 'settings' && <SettingsPage onShowToast={showToast} currentUser={currentUser} />}
+
+          {!shownTab && (
+            <div id="no-pages-allowed" className="max-w-md mx-auto mt-16 text-center bg-white border border-slate-200 rounded-2xl p-6 text-sm text-slate-600">
+              Your account has no pages turned on yet. Ask the Super Admin to give you access.
+            </div>
+          )}
           </Suspense>
         </main>
       </div>
