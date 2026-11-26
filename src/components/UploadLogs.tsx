@@ -39,7 +39,7 @@ import { HighQualityVideoPlayer } from './HighQualityVideoPlayer';
 import { LiveStationQueues, type StationReport } from './LiveStationQueues';
 import { User, UploadLogItem, QueueItem, PlatformType, RecordingType } from '../types';
 import { CleanDuplicatesModal } from './CleanDuplicatesModal';
-import { fetchUploadLogs, deleteLogEntry, formatFileSize, fetchDriveFileSize, normalizeOrderId } from '../lib/api';
+import { fetchUploadLogs, deleteLogEntry, formatFileSize, fetchDriveFileSize, normalizeOrderId, orderLabel } from '../lib/api';
 import { dbGetAllQueue, dbPutQueue, dbDeleteQueueItem, getStoredDriveFolderId, getStoredAutoRefreshInterval, manualFileCache } from '../lib/storage';
 import { canUserDeleteData } from '../lib/permissions';
 import { retryUploadItem, fixAndCleanAllStuckUploads, subscribeWorkerStatus, triggerUploadWorker } from '../lib/uploadWorker';
@@ -2147,7 +2147,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
                 localBlobUrl={localBlobUrl || undefined}
                 orderId={playbackLog.orderId}
                 fileName={playbackLog.fileName}
-                title={`Order #${playbackLog.orderId} (${playbackLog.platform} - ${playbackLog.recordingType})`}
+                title={`Order ${orderLabel(playbackLog.orderId)} (${playbackLog.platform} - ${playbackLog.recordingType})`}
                 autoPlay={false}
               />
             </div>
@@ -2522,7 +2522,7 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
                     </div>
                   ) : (
                     <div className="p-3 text-center text-xs text-slate-400 font-medium bg-slate-50 rounded-xl border border-dashed border-slate-200">
-                      No pre-entered product manifest recorded for Order #{selectedLog.orderId}.
+                      No pre-entered product manifest recorded for Order {orderLabel(selectedLog.orderId)}.
                     </div>
                   )}
                 </div>

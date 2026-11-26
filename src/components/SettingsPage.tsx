@@ -5,6 +5,7 @@ import { Eraser, RefreshCw, Archive, AlertTriangle, CheckCircle2 } from 'lucide-
 import { BackendUpdateCard } from './BackendUpdateCard';
 import { SupabaseCard, BackupCard } from './SupabaseCard';
 import { ArchivedRowsCard } from './ArchivedRowsCard';
+import { OrderIdFormatCard } from './OrderIdFormatCard';
 import { canUserSeeSupabaseSettings, canUserManageSettings, canUserManageBranding } from '../lib/permissions';
 import type { User } from '../types';
 import { scanSheetCleanup, runSheetCleanup, getSheetCleanupProgress, SheetCleanupScan, SheetCleanupResult, SheetCleanupLiveProgress } from '../lib/api';
@@ -307,6 +308,8 @@ export const SettingsPage: React.FC<Props> = ({ onShowToast, currentUser }) => {
           </div>
         )}
       </section>
+
+      <OrderIdFormatCard onShowToast={onShowToast} />
 
       <ArchivedRowsCard onShowToast={onShowToast} />
       </>)}

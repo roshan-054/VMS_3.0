@@ -41,7 +41,7 @@ import {
 import { PlatformType, RecordingType, QueueItem, OrderManifest, ManifestItem, User } from '../types';
 import { syncCloudBranding } from '../lib/branding';
 import { dbPutQueue, dbGetAllQueue, exceedsMaxVideoSize, formatVideoSizeLimit, getStoredVideoBitrate } from '../lib/storage';
-import { normalizeOrderId, checkDuplicate } from '../lib/api';
+import { normalizeOrderId, checkDuplicate, formatOrderId } from '../lib/api';
 import { triggerUploadWorker, setRecordingInProgress } from '../lib/uploadWorker';
 import { saveRecordingLocally, ensureBackupPermission, backupPathParts } from '../lib/localBackup';
 import { LocalBackupFolderPicker } from './LocalBackupFolderPicker';
@@ -1135,7 +1135,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
 
     // Snapshot recording metadata now so handleFinishRecording is immune to stale closures or mid-save state changes
     recordingMetaRef.current = {
-      orderId: orderId.trim(),
+      orderId: formatOrderId(orderId, effectivePlatform),
       effectivePlatform,
       recordingType,
       // Date the recording STARTED (local time) decides the Drive / local date folder.
@@ -1188,7 +1188,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
 
   const handleFinishRecording = async (result: RecordingResult) => {
     const meta = recordingMetaRef.current || {
-      orderId: orderId.trim(),
+      orderId: formatOrderId(orderId, effectivePlatform),
       effectivePlatform,
       recordingType,
       mimeType: result.mimeType,
@@ -1200,7 +1200,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
     try {
       const mimeType = result.mimeType || meta.mimeType || 'video/webm';
       const ext = mimeType.includes('mp4') ? '.mp4' : '.webm';
-      const cleanOrderId = meta.orderId.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const cleanOrderId = meta.orderId.replace(/^#+/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
       const cleanPlatform = meta.effectivePlatform.replace(/[^a-zA-Z0-9_-]/g, '_');
       const fileName = `${cleanOrderId}_${cleanPlatform}_${meta.recordingType}${ext}`;
 

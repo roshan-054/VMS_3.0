@@ -35,7 +35,7 @@ import {
 import { HighQualityVideoPlayer } from './HighQualityVideoPlayer';
 import { VideoRecord, User } from '../types';
 import { CleanDuplicatesModal } from './CleanDuplicatesModal';
-import { requestApi, formatFileSize, deleteLogEntry, fetchDriveFileSize } from '../lib/api';
+import { requestApi, formatFileSize, deleteLogEntry, fetchDriveFileSize, orderLabel } from '../lib/api';
 import { canUserDeleteData } from '../lib/permissions';
 import { getStoredManifests, getManifestByOrderId } from '../lib/manifestStorage';
 import { getDirectImageUrl } from '../lib/branding';
@@ -772,7 +772,7 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast, current
                   driveLink={selectedRecord.driveLink}
                   orderId={selectedRecord.orderId}
                   fileName={selectedRecord.fileName}
-                  title={`Order #${selectedRecord.orderId} (${selectedRecord.platform} - ${selectedRecord.recordingType})`}
+                  title={`Order ${orderLabel(selectedRecord.orderId)} (${selectedRecord.platform} - ${selectedRecord.recordingType})`}
                   autoPlay={false}
                 />
               </div>
@@ -984,7 +984,7 @@ export const SearchOrders: React.FC<SearchOrdersProps> = ({ onShowToast, current
                     </div>
                   ) : (
                     <div className="p-3 text-center text-xs text-slate-400 font-medium bg-white rounded-xl border border-dashed border-slate-200">
-                      No pre-entered manifest product items recorded for Order #{selectedRecord.orderId}.
+                      No pre-entered manifest product items recorded for Order {orderLabel(selectedRecord.orderId)}.
                     </div>
                   )}
                 </div>
