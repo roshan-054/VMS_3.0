@@ -64,11 +64,12 @@ check('sheet has "#OD-20001"', manRows.includes('#OD-20001'), manRows.join(', ')
 // 3. Settings: fix the old IDs, rows stay.
 const before = Object.fromEntries(['OrderManifest', 'OrderLog', 'UploadLog'].map((n) => [n, backend.rt.sheets.get(n).rows.length]));
 await page.getByRole('button', { name: /^Settings$/ }).first().click();
+await page.locator('#settings-section-data').click();
 await page.waitForSelector('#order-id-format-card');
 await page.locator('#order-id-format-scan').click();
 await page.waitForSelector('#order-id-format-preview');
 const prev = await page.locator('#order-id-format-preview').innerText();
-check('check finds the 2 old-format IDs', /2 order ID\(s\) need fixing/.test(prev), prev.replace(/\s+/g, ' '));
+check('check finds the 2 old-format IDs', /2 cell\(s\) need fixing/.test(prev), prev.replace(/\s+/g, ' '));
 await page.locator('#order-id-format-card').scrollIntoViewIfNeeded();
 await page.screenshot({ path: `${SHOTS}/settings-order-id-check.png` });
 await page.locator('#order-id-format-fix').click();

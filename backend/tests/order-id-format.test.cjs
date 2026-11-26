@@ -107,3 +107,43 @@ test('only administrators can run the order ID fix', () => {
   const res = rt.call('fixOrderIdFormat', { token });
   assert.equal(res.success, false);
 });
+
+test('stray punctuation around an order ID is removed', () => {
+  const { rt } = setup();
+  const c = rt.sandbox.canonicalOrderId_;
+  assert.equal(c(':408-3093842-5865165', 'Amazon'), '408-3093842-5865165');
+  assert.equal(c('#:OD-1,', 'D2C'), '#OD-1');
+  assert.equal(rt.sandbox.normalizeOrderId_(':408-3093842-5865165'), rt.sandbox.normalizeOrderId_('408-3093842-5865165'));
+});
+
+test('an upload never saves "Automatic Recording" as the packer', () => {
+  const { rt, token } = setup();
+  rt.call('saveOrderManifest', { token, manifest: { orderId: '#OD-7', platform: 'D2C', assignedPackerName: 'vineet', assignedPackerEmail: 'vineet@vms.com', items: [] } });
+  rt.call('updateManifestStatus', { token, orderId: '#OD-7', status: 'Packed', packerDetails: { name: 'Automatic Recording', email: 'Automatic Recording', videoDriveUrl: 'https://v' } });
+  const row = rt.sheets.get('OrderManifest').rows[1];
+  assert.equal(row[4], 'vineet@vms.com');
+  assert.notEqual(row[12], 'Automatic Recording');
+  assert.equal(row[13], 'https://v');
+});
+
+test('the fix tool puts the real packer back where "Automatic Recording" was saved', () => {
+  const rt = createRuntime({ users: [
+    [new Date(), 'Alice Admin', 'alice@example.com', sha('AdminPass1'), 'Admin', 'Approved'],
+    [new Date(), 'vineet', 'vineet@vms.com', sha('x'), 'User', 'Approved'],
+  ] });
+  const token = rt.call('login', { email: 'alice@example.com', password: 'AdminPass1' }).token;
+  const d = new Date();
+  rt.sheets.get('OrderLog').rows.push([d, '#OD-9844', 'D2C', 'vineet@vms.com', 'F1', '', '', 'Completed', 'Forward']);
+  const ms = rt.sheets.get('OrderManifest');
+  ms.rows.push([d, '#OD-9844', 'D2C', 'vineet', 'Automatic Recording', 'Shivansh', 's@x', 1, 'A x 1', 'Packed', '', d, 'Automatic Recording', 'https://v']);
+  ms.rows.push([d, '#OD-9845', 'D2C', 'vineet', 'Automatic Recording', 'Shivansh', 's@x', 1, 'A x 1', 'Packed', '', d, 'vineet', '']);
+  ms.rows.push([d, ':408-3093842-5865165', 'Amazon', 'vineet', 'vineet@vms.com', 'Shivansh', 's@x', 1, 'A x 1', 'Packed', '', d, 'vineet', '']);
+  const scan = rt.call('scanOrderIdFormat', { token });
+  assert.equal(scan.total, 4, JSON.stringify(scan.examples));
+  rt.call('fixOrderIdFormat', { token });
+  assert.equal(ms.rows[1][4], 'vineet@vms.com');
+  assert.equal(ms.rows[1][12], 'vineet');
+  assert.equal(ms.rows[2][4], 'vineet@vms.com', 'from the assigned packer name');
+  assert.equal(ms.rows[3][1], '408-3093842-5865165');
+  assert.equal(ms.rows.length, 4);
+});

@@ -36,6 +36,7 @@ async function station(order) {
   await page.getByRole('button', { name: /Open Camera Feed/ }).first().click();
   await page.waitForFunction(() => { const v = document.querySelector('video'); return v && v.videoWidth > 0; }, null, { timeout: 15000 });
   await page.fill('#orderIdInput', order);
+  await page.waitForTimeout(500); if (!(await page.locator('#platformSelect').inputValue())) await page.selectOption('#platformSelect', 'Amazon'); // no default platform any more
   return page;
 }
 const a = await station('PAR-A-0001');

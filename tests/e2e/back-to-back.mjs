@@ -23,6 +23,7 @@ await page.waitForFunction(() => { const v = document.querySelector('video'); re
 const rows = [];
 for (let i = 0; i < 5; i++) {
   await page.fill('#orderIdInput', `B2B-${i}`);
+  await page.waitForTimeout(500); if (!(await page.locator('#platformSelect').inputValue())) await page.selectOption('#platformSelect', 'Amazon'); // no default platform any more
   const dl = page.waitForEvent('download');
   await page.getByRole('button', { name: /Start Recording/i }).first().click();
   await page.waitForSelector('text=/Recording \\(/');

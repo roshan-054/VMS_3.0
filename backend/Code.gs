@@ -1259,6 +1259,8 @@ function normalizeOrderId_(v){
   // Strip leading '#' (any number of them), 'no.', 'order#', 'order ', etc.
   s = s.replace(/^(?:order\s*#*|#+|no\.?\s*)/i, '');
   s = s.replace(/^[#\s]+/, '');
+  // Stray punctuation from a scanner or a paste (":408-…", "#OD-1,")
+  s = s.replace(/^[^a-z0-9#]+/, '').replace(/^#+/, '').replace(/[^a-z0-9]+$/, '');
   // Strip trailing .0 or .00 from numeric cell exports
   s = s.replace(/\.0+$/, '');
   // Remove all whitespace
@@ -1275,9 +1277,11 @@ function normalizeOrderId_(v){
 function canonicalOrderId_(v, platform){
   if(v===null||v===undefined)return '';
   let s = String(v).replace(/[\s\u00a0\u200b\ufeff]+/g, '');
+  // Stray punctuation a scanner or paste adds around the ID (":408-3093842-5865165", "#OD-1,")
+  s = s.replace(/^[^A-Za-z0-9#]+/, '').replace(/[^A-Za-z0-9]+$/, '');
   if(!s)return '';
   const hadHash = /^#/.test(s);
-  const bare = s.replace(/^#+/, '');
+  const bare = s.replace(/^#+/, '').replace(/^[^A-Za-z0-9]+/, '');
   if(!bare)return '';
   const pf = String(platform||'').trim().toLowerCase();
   if(pf==='d2c' || (!pf && /^od-/i.test(bare))) return '#' + bare.toUpperCase();
@@ -5416,6 +5420,9 @@ function getOrderManifests_(p) {
   }
 }
 
+function isEmailLike_(v) { return /^[^\s@]+@[^\s@]+$/.test(String(v || '').trim()); }
+function isUploadSourceLabel_(v) { return /^(automatic recording|manual upload|uploadlog|packer)$/i.test(String(v || '').trim()); }
+
 function updateManifestStatus_(p) {
   var orderId = String(p.orderId || '').trim().toUpperCase();
   if (!orderId) return { success: false, error: 'Order ID is required' };
@@ -5452,8 +5459,12 @@ function updateManifestStatus_(p) {
     if (p.platform !== undefined) sh.getRange(targetRow, 3).setValue(p.platform);
     if (p.notes !== undefined) sh.getRange(targetRow, 11).setValue(p.notes);
     if (p.packerDetails) {
-      if (p.packerDetails.name) sh.getRange(targetRow, 13).setValue(p.packerDetails.name);
-      if (p.packerDetails.email) sh.getRange(targetRow, 5).setValue(p.packerDetails.email);
+      // Older app versions sent the upload source ("Automatic Recording", "Manual Upload") as the
+      // packer: never save a label as a name, and only a real email address as the email.
+      var pdName = String(p.packerDetails.name || '').trim();
+      var pdEmail = String(p.packerDetails.email || '').trim();
+      if (pdName && !isUploadSourceLabel_(pdName)) sh.getRange(targetRow, 13).setValue(pdName);
+      if (isEmailLike_(pdEmail)) sh.getRange(targetRow, 5).setValue(pdEmail);
       if (p.packerDetails.videoDriveUrl) sh.getRange(targetRow, 14).setValue(p.packerDetails.videoDriveUrl);
       if (p.status === 'Packed') sh.getRange(targetRow, 12).setValue(formatDateDDMMMYYYY_(new Date()));
     }
@@ -6568,7 +6579,58 @@ function planOrderIdFix_() {
     plan.tabs.push({ name: name, sh: sh, changes: changes });
     plan.total += changes.length;
   });
+  planPackerFix_(plan);
   return plan;
+}
+
+/**
+ * Order list rows where an older app version saved the upload source ("Automatic Recording")
+ * as the packer: put back the real packer email (Assigned Packer Email, E) and name (Packed By
+ * Name, M). The packer comes from the order's recording in OrderLog, else from the assigned
+ * packer's name in Users. Cells that cannot be worked out are left as they are.
+ */
+function planPackerFix_(plan) {
+  plan.packerFixes = [];
+  plan.packerUnresolved = 0;
+  const ss = ss_();
+  const ms = ss.getSheetByName(CONFIG.ORDER_MANIFEST_SHEET);
+  if (!ms || ms.getLastRow() < 2) return;
+  const usersByEmail = {}, emailByName = {};
+  try {
+    const us = ss.getSheetByName(CONFIG.USERS_SHEET);
+    const uv = us ? us.getDataRange().getValues() : [];
+    for (let i = 1; i < uv.length; i++) {
+      const em = String(uv[i][2] || '').trim().toLowerCase(), nm = String(uv[i][1] || '').trim();
+      if (!em) continue;
+      usersByEmail[em] = nm || em;
+      if (nm && !emailByName[nm.toLowerCase()]) emailByName[nm.toLowerCase()] = em;
+    }
+  } catch (_) {}
+  const packerByOrder = {};
+  try {
+    const ol = ss.getSheetByName(CONFIG.ORDER_LOG_SHEET);
+    const ov = ol && ol.getLastRow() > 1 ? ol.getDataRange().getValues() : [];
+    for (let i = 1; i < ov.length; i++) {
+      const em = String(ov[i][3] || '').trim();
+      if (isEmailLike_(em)) packerByOrder[normalizeOrderId_(ov[i][1])] = em.toLowerCase();
+    }
+  } catch (_) {}
+  const mv = ms.getDataRange().getValues();
+  for (let i = 1; i < mv.length; i++) {
+    const row = mv[i];
+    const badEmail = String(row[4] || '').trim() !== '' && !isEmailLike_(row[4]);
+    const badName = isUploadSourceLabel_(row[12]) && String(row[12] || '').trim().toLowerCase() !== 'packer';
+    if (!badEmail && !badName) continue;
+    const email = packerByOrder[normalizeOrderId_(row[1])] || emailByName[String(row[3] || '').trim().toLowerCase()] || '';
+    if (!email) { plan.packerUnresolved++; continue; }
+    const add = function(col, from, to) {
+      plan.packerFixes.push({ sh: ms, row: i + 1, col: col, from: String(from), to: to });
+      if (plan.examples.length < 10) plan.examples.push({ sheet: CONFIG.ORDER_MANIFEST_SHEET + (col === 5 ? ' (packer email)' : ' (packed by)'), row: i + 1, from: String(from), to: to });
+    };
+    if (badEmail) add(5, row[4], email);
+    if (badName) add(13, row[12], usersByEmail[email] || email);
+  }
+  plan.total += plan.packerFixes.length;
 }
 
 function fixOrderIdFormat_(p, apply) {
@@ -6577,14 +6639,17 @@ function fixOrderIdFormat_(p, apply) {
     return {
       success: true,
       total: plan.total,
-      sheets: plan.tabs.map(function(t) { return { sheet: t.name, rows: t.changes.length }; }).filter(function(t) { return t.rows > 0; }),
+      sheets: plan.tabs.map(function(t) { return { sheet: t.name, rows: t.changes.length }; })
+        .concat(plan.packerFixes && plan.packerFixes.length ? [{ sheet: 'OrderManifest packer', rows: plan.packerFixes.length }] : [])
+        .filter(function(t) { return t.rows > 0; }),
+      packerUnresolved: plan.packerUnresolved || 0,
       examples: plan.examples,
       manifestRepeats: plan.manifestRepeats
     };
   };
   if (!apply) {
     const out = summary(planOrderIdFix_());
-    out.message = out.total ? out.total + ' order ID(s) need fixing.' : 'Every order ID is already in the right format.';
+    out.message = out.total ? out.total + ' cell(s) need fixing.' : 'Every order ID and packer is already in the right format.';
     return out;
   }
   // Bring in app changes still waiting in Supabase first, so the fix sees every row.
@@ -6602,12 +6667,13 @@ function fixOrderIdFormat_(p, apply) {
         i = j + 1;
       }
     });
+    (plan.packerFixes || []).forEach(function(f) { f.sh.getRange(f.row, f.col).setValue(f.to); });
     SpreadsheetApp.flush();
     bumpManifestVersion_();
     try { bumpAnalyticsVersion_(); } catch (_) {}
     const out = summary(plan);
     out.fixed = plan.total;
-    out.message = plan.total ? 'Fixed ' + plan.total + ' order ID(s). No rows were removed.' : 'Every order ID is already in the right format.';
+    out.message = plan.total ? 'Fixed ' + plan.total + ' cell(s). No rows were removed.' : 'Every order ID and packer is already in the right format.';
     return out;
   });
 }

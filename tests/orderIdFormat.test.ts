@@ -64,3 +64,9 @@ test('saving a D2C order stores "#OD-…" and replaces older copies in other for
   assert.equal(all[0].orderId, '#OD-10063');
   assert.equal(all[0].items[0].quantity, 3);
 });
+
+test('stray punctuation around the ID is removed', () => {
+  assert.equal(formatOrderId(':408-3093842-5865165', 'Amazon'), '408-3093842-5865165');
+  assert.equal(formatOrderId(':#OD-5,', 'D2C'), '#OD-5');
+  assert.equal(normalizeOrderId(':408-3093842-5865165'), normalizeOrderId('408-3093842-5865165'));
+});

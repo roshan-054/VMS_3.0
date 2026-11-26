@@ -53,7 +53,7 @@ export const OrderIdFormatCard: React.FC<Props> = ({ onShowToast }) => {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Hash className="w-4 h-4 text-blue-600" />
-          <h3 className="text-sm font-bold text-slate-800">Fix order ID format</h3>
+          <h3 className="text-sm font-bold text-slate-800">Fix order IDs and packers</h3>
         </div>
         <button id="order-id-format-scan" type="button" onClick={doScan} disabled={!!busy}
           className={`${btn} border border-slate-200 text-slate-700 hover:bg-slate-50`}>
@@ -63,8 +63,9 @@ export const OrderIdFormatCard: React.FC<Props> = ({ onShowToast }) => {
       </div>
       <p className="text-xs text-slate-600">
         D2C orders are saved as <span className="font-mono font-semibold">#OD-10063</span>: one # and no spaces. This finds
-        saved order IDs written another way (OD-10063, ##OD-10063, extra spaces) and corrects only that cell.
-        No row is added or removed. New orders are saved in this format automatically.
+        saved order IDs written another way (OD-10063, ##OD-10063, extra spaces, a stray ":" in front) and corrects only that cell.
+        It also puts back the real packer where the order list says "Automatic Recording".
+        No row is added or removed. New orders are saved correctly automatically.
       </p>
 
       {error && (
@@ -76,7 +77,7 @@ export const OrderIdFormatCard: React.FC<Props> = ({ onShowToast }) => {
       {scan && (
         <div id="order-id-format-preview" className="space-y-3">
           <div className="text-xs font-semibold text-slate-800">
-            {scan.total ? `${scan.total.toLocaleString()} order ID(s) need fixing.` : 'Every order ID is already in the right format.'}
+            {scan.total ? `${scan.total.toLocaleString()} cell(s) need fixing.` : 'Every order ID and packer is already in the right format.'}
           </div>
           {scan.sheets.length > 0 && (
             <div className="flex flex-wrap gap-2 text-[11px]">
@@ -84,6 +85,9 @@ export const OrderIdFormatCard: React.FC<Props> = ({ onShowToast }) => {
                 <span key={s.sheet} className="px-2 py-1 rounded-md bg-slate-100 text-slate-700">{s.sheet}: {s.rows.toLocaleString()}</span>
               ))}
             </div>
+          )}
+          {(scan.packerUnresolved || 0) > 0 && (
+            <div className="text-[11px] text-slate-500">{(scan.packerUnresolved || 0)} order(s) say "Automatic Recording" but no recording or packer was found for them; those are left as they are.</div>
           )}
           {scan.examples.length > 0 && (
             <div className="max-h-56 overflow-y-auto border border-slate-200 rounded-lg">
@@ -113,11 +117,11 @@ export const OrderIdFormatCard: React.FC<Props> = ({ onShowToast }) => {
             <button id="order-id-format-fix" type="button" disabled={!!busy} onClick={() => setConfirming(true)}
               className={`${btn} bg-blue-600 text-white hover:bg-blue-700`}>
               <Wand2 className="w-3.5 h-3.5" />
-              Fix {scan.total.toLocaleString()} order IDs
+              Fix {scan.total.toLocaleString()} cells
             </button>
           ) : (
             <div id="order-id-format-confirm" className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
-              <span className="text-xs text-amber-900">Rewrite {scan.total.toLocaleString()} order ID cells in the sheet? Rows stay where they are.</span>
+              <span className="text-xs text-amber-900">Rewrite {scan.total.toLocaleString()} cells in the sheet? Rows stay where they are.</span>
               <button id="order-id-format-confirm-yes" type="button" onClick={doFix}
                 className={`${btn} bg-blue-600 text-white hover:bg-blue-700`}>Yes, fix</button>
               <button type="button" onClick={() => setConfirming(false)}

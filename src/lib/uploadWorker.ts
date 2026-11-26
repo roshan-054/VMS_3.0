@@ -1127,8 +1127,9 @@ export async function triggerUploadWorker(): Promise<void> {
                   'Packed',
                   undefined,
                   {
-                    name: currentItem.source || 'Packer',
-                    email: currentItem.source || '',
+                    // Only the video link: who packed it was saved when the recording stopped.
+                    // (This used to pass the upload source, "Automatic Recording", as the packer's
+                    // name and email, overwriting the real packer in the order list.)
                     videoDriveUrl: resolvedWebLink || `https://drive.google.com/file/d/${resolvedFileId}/preview`,
                   }
                 ).catch(() => {});
