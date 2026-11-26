@@ -100,14 +100,14 @@ export const canUserAccessReports = can('canAccessReports');
 export const canUserAccessAnalytics = can('canAccessAnalytics');
 export const canUserAccessHealth = can('canAccessHealth');
 
-/** Admin & Users page: shown to anyone who may manage users, branding or settings. */
+/** Admin & Users page (Users & Roles). */
 export function canUserAccessAdminPanel(user: User | null | undefined): boolean {
-  return canUserManageUsers(user) || canUserManageBranding(user) || canUserManageSettings(user);
+  return canUserManageUsers(user);
 }
 
-/** Settings page (Supabase card inside it is for the Super Admin only). */
+/** Settings page: app, Drive, logo and data tools (the Supabase section is for the Super Admin only). */
 export function canUserAccessSettingsPage(user: User | null | undefined): boolean {
-  return canUserManageSettings(user);
+  return canUserManageSettings(user) || canUserManageBranding(user);
 }
 
 /** Only the Super Admin can change other users' permissions or see Supabase settings. */

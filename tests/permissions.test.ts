@@ -37,10 +37,12 @@ test('permissions from the backend win over the role defaults', () => {
   const packer = user('User', { canAccessReports: true, canAccessLogs: false });
   assert.equal(P.canUserAccessReports(packer), true);
   assert.equal(P.canUserAccessLogs(packer), false);
-  const admin = user('Admin', { canDeleteData: false, canManageSettings: false });
+  const admin = user('Admin', { canDeleteData: false, canManageSettings: false, canManageBranding: false });
   assert.equal(P.canUserDeleteData(admin), false);
   assert.equal(P.canUserAccessSettingsPage(admin), false);
   assert.equal(P.canUserAccessAdminPanel(admin), true);
+  assert.equal(P.canUserAccessSettingsPage(user('User', { canManageBranding: true })), true);
+  assert.equal(P.canUserAccessAdminPanel(user('Admin', { canManageUsers: false })), false);
   // The Super Admin always has everything, whatever is stored.
   assert.equal(P.canUserDeleteData(user('Super Admin', { canDeleteData: false })), true);
 });

@@ -1,3 +1,4 @@
+import { closeOnBackdrop } from '../lib/backdrop';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   ShieldAlert,
@@ -358,7 +359,7 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
   // ==========================================
   if (isOrderPacked) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fade-in select-none">
+      <div {...closeOnBackdrop(onCancel)} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fade-in select-none">
         <div className="w-full max-w-lg bg-slate-950 border-2 border-emerald-500 rounded-3xl p-6 sm:p-8 shadow-[0_0_50px_rgba(16,185,129,0.3)] text-center space-y-5 text-white">
           <div className="w-20 h-20 rounded-3xl bg-emerald-500/20 border-2 border-emerald-500 text-emerald-400 flex items-center justify-center mx-auto shadow-lg shadow-emerald-500/30">
             <CheckCircle2 className="w-10 h-10" />
@@ -450,7 +451,7 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
     const isUserAdmin = currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin';
 
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in select-none">
+      <div {...closeOnBackdrop(onCancel)} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in select-none">
         <div className="w-full max-w-lg bg-slate-950 border-2 border-red-500 rounded-3xl p-6 sm:p-8 shadow-[0_0_50px_rgba(239,68,68,0.4)] text-center space-y-6">
           {/* Warning Icon Badge */}
           <div className="w-20 h-20 rounded-3xl bg-red-500/20 border-2 border-red-500 text-red-400 flex items-center justify-center mx-auto shadow-lg shadow-red-500/30 animate-pulse">

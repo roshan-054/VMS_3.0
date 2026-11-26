@@ -1,3 +1,4 @@
+import { closeOnBackdrop } from '../lib/backdrop';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   LineChart as LineChartIcon,
@@ -1772,7 +1773,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast, userKey }) =>
 
           {/* Interactive SKU Platform Breakdown Modal */}
           {selectedSkuDetail && (
-            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+            <div {...closeOnBackdrop(() => setSelectedSkuDetail(null))} className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
               <div className="bg-white rounded-3xl max-w-2xl w-full p-6 space-y-5 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-150 max-h-[90vh] flex flex-col">
                 {/* Modal Header */}
                 <div className="flex items-start justify-between border-b border-slate-100 pb-4">
