@@ -18,11 +18,12 @@ interface TeamUser {
   openUploadCount?: number;
 }
 
-type Preset = 'TODAY' | 'YESTERDAY' | 'LAST_7_DAYS' | 'CUSTOM';
+type Preset = 'TODAY' | 'YESTERDAY' | 'LAST_7_DAYS' | 'THIS_MONTH' | 'CUSTOM';
 const PRESETS: { key: Preset; label: string }[] = [
   { key: 'TODAY', label: 'Today' },
   { key: 'YESTERDAY', label: 'Yesterday' },
   { key: 'LAST_7_DAYS', label: 'Last 7 Days' },
+  { key: 'THIS_MONTH', label: 'This Month' },
   { key: 'CUSTOM', label: 'Custom Range' },
 ];
 
@@ -35,6 +36,7 @@ export function rangeFor(preset: Preset, customFrom: string, customTo: string, n
   const back = (n: number) => dayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - n));
   if (preset === 'YESTERDAY') return { from: back(1), to: back(1) };
   if (preset === 'LAST_7_DAYS') return { from: back(6), to: back(0) };
+  if (preset === 'THIS_MONTH') return { from: dayKey(new Date(now.getFullYear(), now.getMonth(), 1)), to: back(0) };
   if (preset === 'CUSTOM' && customFrom) {
     const to = customTo || customFrom;
     return customFrom <= to ? { from: customFrom, to } : { from: to, to: customFrom };
@@ -252,7 +254,7 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
 
   const shownRange = teamRange || range;
   const rangeWord =
-    preset === 'TODAY' ? 'today' : preset === 'YESTERDAY' ? 'yesterday' : preset === 'LAST_7_DAYS' ? 'last 7 days' : 'in range';
+    preset === 'TODAY' ? 'today' : preset === 'YESTERDAY' ? 'yesterday' : preset === 'LAST_7_DAYS' ? 'last 7 days' : preset === 'THIS_MONTH' ? 'this month' : 'in range';
   const rangeText = shownRange.from === shownRange.to ? dayLabel(shownRange.from) : `${dayLabel(shownRange.from)} to ${dayLabel(shownRange.to)}`;
 
   useEffect(() => {
