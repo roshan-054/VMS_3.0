@@ -158,6 +158,18 @@ try {
   await admin.locator('#live-team-range [data-preset="LAST_7_DAYS"]').click();
   const w = await waitFor(async () => ((await todayAttr()) === '4/2/0' ? 'ok' : ''));
   check('Last 7 days adds up', w, await todayAttr());
+  // This Month: 1st of this month to today. Yesterday's recording counts unless today is the 1st.
+  await admin.locator('#live-team-range [data-preset="THIS_MONTH"]').click();
+  const monthWant = new Date().getDate() > 1 ? '4/2/0' : '3/2/0';
+  const mo = await waitFor(async () => ((await todayAttr()) === monthWant ? 'ok' : ''));
+  check('This Month adds up', mo, await todayAttr());
+  check('This Month button is highlighted', /bg-indigo-600/.test(await admin.locator('#live-team-range [data-preset="THIS_MONTH"]').getAttribute('class')));
+  const mText = await admin.locator('#live-team-range-text').innerText();
+  const first = new Date(); first.setDate(1);
+  const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const firstLabel = `01-${MON[first.getMonth()]}-${String(first.getFullYear()).slice(-2)}`;
+  check('This Month range starts on the 1st (DD-MMM-YY)', mText.includes(firstLabel), mText);
+  check('labels say this month', /this month/i.test(await admin.locator('#team-recorded').locator('..').innerText()), await admin.locator('#team-recorded').locator('..').innerText());
   await admin.locator('#live-team-range [data-preset="CUSTOM"]').click();
   const d = new Date(Date.now() - 86400000);
   const yk = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
