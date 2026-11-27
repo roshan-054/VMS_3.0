@@ -98,6 +98,42 @@ export function recordDeletedGtinCode(gtin: string): void {
 
 // --- Order Manifest Store ---
 
+/** Same product in a manifest: same SKU, else same GTIN, else same name. Keep in step with manifestItemKey_ in Code.gs. */
+function manifestItemKey(it: ManifestItem): string {
+  const sku = String(it?.sku || '').trim().toLowerCase();
+  if (sku) return 's:' + sku;
+  const gtin = String(it?.gtin || '').trim().toLowerCase();
+  if (gtin) return 'g:' + gtin;
+  return 'n:' + String(it?.productName || it?.shortName || '').trim().toLowerCase();
+}
+
+/**
+ * One order found twice (two Sheet rows, or "OD-1" and "#OD-1"): every product from both copies.
+ * A product in both copies is the same line written twice, so it is kept once with the larger quantity.
+ */
+export function mergeManifestItems(a: ManifestItem[] | undefined, b: ManifestItem[] | undefined): ManifestItem[] {
+  const out: ManifestItem[] = [];
+  const at = new Map<string, number>();
+  const ids = new Set<string>();
+  for (const list of [a || [], b || []]) {
+    for (const it of list) {
+      if (!it) continue;
+      const key = manifestItemKey(it);
+      const idx = at.get(key);
+      if (idx === undefined) {
+        at.set(key, out.length);
+        // Both copies number their lines item-1, item-2...: keep every line's id unique.
+        const id = it.id && !ids.has(it.id) ? it.id : 'item-' + (out.length + 1) + '-' + key;
+        ids.add(id);
+        out.push({ ...it, id });
+      } else if (Number(it.quantity || 1) > Number(out[idx].quantity || 1)) {
+        out[idx] = { ...out[idx], quantity: Number(it.quantity || 1) };
+      }
+    }
+  }
+  return out;
+}
+
 export function enrichManifestItems(items: ManifestItem[]): ManifestItem[] {
   if (!Array.isArray(items)) return [];
   return items.map((it) => {
@@ -208,8 +244,9 @@ export function getManifestByOrderId(orderId: string): OrderManifest | null {
       if (!id) continue;
       const prev = c.byId.get(id);
       // The same order can sit in the list twice (e.g. "OD-10063" and "#OD-10063" from older
-      // entries). Prefer the copy that carries the product items.
+      // entries). Prefer the copy that carries the product items, and show the products of both.
       if (!prev || (!(prev.items && prev.items.length) && m.items && m.items.length)) c.byId.set(id, m);
+      else if (m.items && m.items.length) c.byId.set(id, { ...prev, items: mergeManifestItems(prev.items, m.items) });
     }
   }
   return c.byId.get(clean) || null;
@@ -1443,6 +1480,7 @@ export async function syncManifestsWithCloud(
         cloudByKey.set(k, {
           ...other,
           ...withItems,
+          items: mergeManifestItems(withItems.items, other.items),
           status: prev.status === 'Packed' || m.status === 'Packed' ? 'Packed' : withItems.status,
           packedAt: withItems.packedAt || other.packedAt,
           packedByName: withItems.packedByName || other.packedByName,

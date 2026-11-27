@@ -4861,6 +4861,7 @@ function saveOrderManifest_(p) {
   if (targetRow > 0) {
     sh.getRange(targetRow, 1, 1, rowValues.length).setValues([rowValues]);
     formatDateRows_(sh, targetRow, 1);
+    if (Array.isArray(manifest.items) && manifest.items.length) clearRepeatManifestItems_(sh, data, orderKey, targetRow);
   } else {
     logAppend_(sh, rowValues);
   }
@@ -4892,12 +4893,19 @@ function parseItemsList_(text) {
       if (Array.isArray(parsed)) return parsed;
     } catch (_) {}
   }
-  var parts = str.split(';');
+  // Items are written "Name [SKU] x 1; Name 2 [SKU2] x 1". Rows typed or pasted into the Sheet by
+  // hand may put each product on its own line, or separate them with "|" or ",".
+  var parts = str.split(/\s*(?:;|\r?\n|\|)\s*/);
+  if (parts.length === 1 && str.indexOf(',') > 0) {
+    var byComma = str.split(/\s*,\s*/);
+    var allLookLikeItems = byComma.length > 1 && byComma.every(function(x) { return /\s+x\s*\d+$/i.test(x); });
+    if (allLookLikeItems) parts = byComma;
+  }
   var items = [];
   for (var i = 0; i < parts.length; i++) {
     var p = parts[i].trim();
     if (!p) continue;
-    var match = p.match(/^(.*?)(?:\s+\[(.*?)\])?\s+x\s+(\d+)$/);
+    var match = p.match(/^(.*?)(?:\s+\[(.*?)\])?\s+x\s*(\d+)$/i);
     if (match) {
       items.push({
         id: 'item-' + (i + 1),
@@ -4919,6 +4927,57 @@ function parseItemsList_(text) {
     }
   }
   return items;
+}
+
+/** Same product in a manifest: same SKU, else same GTIN, else same name. */
+function manifestItemKey_(it) {
+  it = it || {};
+  var sku = String(it.sku || '').trim().toLowerCase();
+  if (sku) return 's:' + sku;
+  var gtin = String(it.gtin || '').trim().toLowerCase();
+  if (gtin) return 'g:' + gtin;
+  return 'n:' + String(it.productName || it.shortName || '').trim().toLowerCase();
+}
+
+/**
+ * Product list of one order kept in two rows: every product from both rows. A product listed in
+ * both rows is the same line written twice, so it is kept once with the larger quantity.
+ */
+function mergeManifestItems_(a, b) {
+  var out = [];
+  var at = {};
+  [a || [], b || []].forEach(function(list) {
+    for (var i = 0; i < list.length; i++) {
+      var it = list[i];
+      if (!it) continue;
+      var key = manifestItemKey_(it);
+      if (at[key] === undefined) {
+        at[key] = out.length;
+        var copy = {};
+        for (var f in it) copy[f] = it[f];
+        copy.id = 'item-' + (out.length + 1);
+        out.push(copy);
+      } else {
+        var cur = out[at[key]];
+        if (Number(it.quantity || 1) > Number(cur.quantity || 1)) cur.quantity = Number(it.quantity || 1);
+      }
+    }
+  });
+  return out;
+}
+
+/**
+ * Items List / Total Items Count of the other rows of the same order are cleared after the full
+ * list is saved into one row, so a product removed in the app does not come back from an old row.
+ * The rows themselves stay.
+ */
+function clearRepeatManifestItems_(sh, data, orderKey, keepRow) {
+  for (var i = 1; i < data.length; i++) {
+    if (i + 1 === keepRow) continue;
+    if (normalizeOrderId_(data[i][1]) !== orderKey) continue;
+    if (String(data[i][8] || '').trim() === '' && String(data[i][7] || '').trim() === '') continue;
+    sh.getRange(i + 1, 8, 1, 2).setValues([['', '']]);
+  }
 }
 
 function safeIsoDate_(val) {
@@ -4984,6 +5043,8 @@ function getOrderManifests_(p) {
       if (byKey[okey] !== undefined) {
         var prev = manifests[byKey[okey]];
         if (!prev.items.length && items.length) { prev.items = items; prev.processedAt = safeIsoDate_(r[0]) || prev.processedAt; }
+        // A row per product (typed into the Sheet, or saved twice in the past): show every product.
+        else if (items.length) prev.items = mergeManifestItems_(prev.items, items);
         if (String(r[9] || '') === 'Packed') prev.status = 'Packed';
         prev.assignedPackerName = prev.assignedPackerName || r[3] || '';
         prev.assignedPackerEmail = prev.assignedPackerEmail || r[4] || '';
@@ -5043,6 +5104,7 @@ function updateManifestStatus_(p) {
     if (p.status) sh.getRange(targetRow, 10).setValue(p.status);
     if (p.items) {
       sh.getRange(targetRow, 9).setValue(formatItemsList_(p.items));
+      if (Array.isArray(p.items) && p.items.length) clearRepeatManifestItems_(sh, data, orderKey, targetRow);
       var totalItems = 0;
       if (Array.isArray(p.items)) {
         for (var k = 0; k < p.items.length; k++) {

@@ -75,3 +75,25 @@ test('a new station starts with no demo orders, and old demo orders are dropped'
   localStorage.setItem('vms_order_manifests_v1', JSON.stringify([{ id: 'manifest-seed-101', orderId: 'OD-5035', items: [] }, { id: 'm-1', orderId: 'REAL-1', items: [] }]));
   assert.deepEqual(ms.getStoredManifests().map((m) => m.orderId), ['REAL-1']);
 });
+
+test('an order stored twice ("OD-7083" and "#OD-7083") shows the products of both copies', () => {
+  const list = JSON.parse(localStorage.getItem('vms_order_manifests_v1')!);
+  list.push(
+    { id: 'r1', orderId: '#OD-7083', platform: 'D2C', status: 'Packed', items: [{ id: 'item-1', sku: 'UP-SI-SI-MA-KAM-0101', gtin: '', productName: 'Sindoor', quantity: 1 }] },
+    { id: 'r2', orderId: 'OD-7083', platform: 'D2C', status: 'Packed', items: [
+      { id: 'item-1', sku: 'UP-KA-0303', gtin: '', productName: 'Kajal', quantity: 1 },
+      { id: 'item-2', sku: 'UP-SI-SI-MA-KAM-0101', gtin: '', productName: 'Sindoor', quantity: 1 },
+    ] },
+  );
+  localStorage.setItem('vms_order_manifests_v1', JSON.stringify(list));
+  const m = ms.getManifestByOrderId('#OD-7083')!;
+  assert.deepEqual(m.items.map((it) => `${it.productName} x${it.quantity}`), ['Sindoor x1', 'Kajal x1']);
+  assert.equal(new Set(m.items.map((it) => it.id)).size, 2, 'unique item ids');
+});
+
+test('merging item lists keeps different products and does not double a repeated one', () => {
+  const a = [{ id: 'item-1', sku: 'S1', gtin: '', productName: 'Sindoor', quantity: 1 }];
+  const b = [{ id: 'item-1', sku: 's1', gtin: '', productName: 'Sindoor', quantity: 2 }, { id: 'item-2', sku: '', gtin: '890', productName: 'Kajal', quantity: 1 }];
+  const out = ms.mergeManifestItems(a as any, b as any);
+  assert.deepEqual(out.map((it) => `${it.productName} x${it.quantity}`), ['Sindoor x2', 'Kajal x1']);
+});
