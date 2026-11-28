@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ShoppingBag, RefreshCw, AlertTriangle, ArrowRight, Loader2, Search, UserCheck } from 'lucide-react';
+import { ShoppingBag, RefreshCw, AlertTriangle, ArrowRight, Loader2, Search, UserCheck, X } from 'lucide-react';
 import type { OrderManifest, User } from '../types';
 import { normalizeOrderId } from '../lib/api';
 import { saveMultipleManifests, getStoredManifests } from '../lib/manifestStorage';
@@ -8,6 +8,7 @@ import {
   ShopifyOrder, ShopifyOrdersResult, SHOPIFY_ORDERS_EVENT, fetchShopifyOrders, getCachedShopifyOrders,
   itemsMissingGtin, shopifyItemsToManifest, syncShopifyNow,
 } from '../lib/shopify';
+import { ShopifyOrderFilters, NO_FILTERS, filterShopifyOrders, shopifyPaymentLabel } from '../lib/shopifyFilters';
 
 interface Props {
   manifests: OrderManifest[];
@@ -19,6 +20,7 @@ interface Props {
 }
 
 const REFRESH_MS = 60000;
+const field = 'px-2.5 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500';
 const btn = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-50 cursor-pointer';
 
 /**
@@ -30,7 +32,8 @@ export const ShopifyOrdersPanel: React.FC<Props> = ({ manifests, packers, curren
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState('');
-  const [query, setQuery] = useState('');
+  const [filters, setFilters] = useState<ShopifyOrderFilters>(NO_FILTERS);
+  const setF = (change: Partial<ShopifyOrderFilters>) => setFilters((f) => ({ ...f, ...change }));
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [packerEmail, setPackerEmail] = useState('');
   const [assigning, setAssigning] = useState(false);
@@ -62,12 +65,22 @@ export const ShopifyOrdersPanel: React.FC<Props> = ({ manifests, packers, curren
 
   const assignedKeys = useMemo(() => new Set(manifests.map((m) => normalizeOrderId(m.orderId))), [manifests]);
   const waiting = useMemo(() => data.orders.filter((o) => !assignedKeys.has(normalizeOrderId(o.orderId))), [data.orders, assignedKeys]);
-  const shown = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return waiting;
-    return waiting.filter((o) => o.orderId.toLowerCase().includes(q) ||
-      o.items.some((it) => (it.sku || '').toLowerCase().includes(q) || (it.shortName || it.productName || '').toLowerCase().includes(q)));
-  }, [waiting, query]);
+  const shown = useMemo(() => filterShopifyOrders(waiting, filters), [waiting, filters]);
+  const skuOptions = useMemo(() => {
+    const m = new Map<string, { name: string; count: number }>();
+    for (const o of waiting) for (const it of o.items) {
+      const k = (it.sku || '').trim().toUpperCase();
+      if (!k) continue;
+      const e = m.get(k) || { name: it.shortName || it.productName || '', count: 0 };
+      e.count++;
+      m.set(k, e);
+    }
+    return [...m.entries()].sort((a, b) => b[1].count - a[1].count || a[0].localeCompare(b[0]));
+  }, [waiting]);
+  const filtered = JSON.stringify(filters) !== JSON.stringify(NO_FILTERS);
+  // Only orders that are on screen can be assigned, so a filter change never assigns hidden orders.
+  const shownIds = useMemo(() => new Set(shown.map((o) => o.orderId)), [shown]);
+  const selectedShown = useMemo(() => [...selected].filter((id) => shownIds.has(id)), [selected, shownIds]);
 
   if (!data.enabled) return null;
 
@@ -95,7 +108,7 @@ export const ShopifyOrdersPanel: React.FC<Props> = ({ manifests, packers, curren
   const assignSelected = async () => {
     const packer = packers.find((u) => u.email === packerEmail);
     if (!packer) { onShowToast('Pick the packer first.', 'error'); return; }
-    const picked = waiting.filter((o) => selected.has(o.orderId));
+    const picked = shown.filter((o) => selected.has(o.orderId));
     const ready: OrderManifest[] = [];
     const blocked: string[] = [];
     const already = new Set(getStoredManifests().map((m) => normalizeOrderId(m.orderId)));
@@ -164,24 +177,65 @@ export const ShopifyOrdersPanel: React.FC<Props> = ({ manifests, packers, curren
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative">
           <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-          <input id="shopify-orders-search" type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Order ID, SKU or product"
+          <input id="shopify-orders-search" type="text" value={filters.query} onChange={(e) => setF({ query: e.target.value })} placeholder="Order ID, SKU or product"
             className="pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs w-56 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
         </div>
+        <label className="inline-flex items-center gap-1 text-[11px] text-slate-500">From
+          <input id="shopify-filter-from" type="date" value={filters.from} max={filters.to || undefined} onChange={(e) => setF({ from: e.target.value })} className={field} />
+        </label>
+        <label className="inline-flex items-center gap-1 text-[11px] text-slate-500">To
+          <input id="shopify-filter-to" type="date" value={filters.to} min={filters.from || undefined} onChange={(e) => setF({ to: e.target.value })} className={field} />
+        </label>
+        <select id="shopify-filter-payment" value={filters.payment} onChange={(e) => setF({ payment: e.target.value as ShopifyOrderFilters['payment'] })} className={field}>
+          <option value="">COD and Prepaid</option>
+          <option value="COD">COD only</option>
+          <option value="Prepaid">Prepaid only</option>
+        </select>
+        <select id="shopify-filter-lines" value={filters.lines} onChange={(e) => setF({ lines: e.target.value as ShopifyOrderFilters['lines'] })} className={field}>
+          <option value="">Any number of products</option>
+          <option value="single">Single-product orders</option>
+          <option value="multi">Multi-product orders</option>
+        </select>
+        <select id="shopify-filter-sku" value={filters.sku} onChange={(e) => setF({ sku: e.target.value })} className={`${field} max-w-[14rem]`}>
+          <option value="">All products</option>
+          {skuOptions.map(([k, v]) => <option key={k} value={k}>{v.name ? `${v.name} [${k}]` : k} ({v.count})</option>)}
+        </select>
+        {filtered && (
+          <button id="shopify-filter-clear" type="button" onClick={() => setFilters(NO_FILTERS)} className={`${btn} text-slate-600 hover:bg-slate-100`}>
+            <X className="w-3.5 h-3.5" /> Clear filters
+          </button>
+        )}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <span id="shopify-filter-count" className="text-xs text-slate-600">
+          {filtered ? <>Showing <b>{shown.length}</b> of {waiting.length}</> : <>{waiting.length} waiting</>}
+        </span>
+        <button id="shopify-select-filtered" type="button" disabled={!shown.length || allShownSelected}
+          onClick={() => setSelected((prev) => new Set([...prev, ...shown.map((o) => o.orderId)]))}
+          className={`${btn} border border-slate-200 text-slate-700 hover:bg-slate-50`}>
+          Select all {shown.length}{filtered ? ' filtered' : ''}
+        </button>
+        {selected.size > 0 && (
+          <button id="shopify-select-none" type="button" onClick={() => setSelected(new Set())} className={`${btn} text-slate-600 hover:bg-slate-100`}>
+            Clear selection
+          </button>
+        )}
         <select id="shopify-bulk-packer" value={packerEmail} onChange={(e) => setPackerEmail(e.target.value)}
           className="px-2.5 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-semibold text-slate-800">
           <option value="">-- Choose packer --</option>
           {packers.map((u) => <option key={u.email} value={u.email}>{u.name} ({u.email})</option>)}
         </select>
-        <button id="shopify-assign-selected" type="button" onClick={assignSelected} disabled={assigning || selected.size === 0}
+        <button id="shopify-assign-selected" type="button" onClick={assignSelected} disabled={assigning || selectedShown.length === 0}
           className={`${btn} bg-indigo-600 text-white hover:bg-indigo-700`}>
-          {assigning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UserCheck className="w-3.5 h-3.5" />} Assign {selected.size || ''} selected
+          {assigning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UserCheck className="w-3.5 h-3.5" />} Assign {selectedShown.length || ''} selected
         </button>
       </div>
 
       {loading && !data.orders.length ? (
         <div className="text-xs text-slate-500 flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading Shopify orders…</div>
       ) : shown.length === 0 ? (
-        <div id="shopify-orders-empty" className="text-xs text-slate-500">{waiting.length ? 'No order matches the search.' : 'Every open Shopify order is assigned.'}</div>
+        <div id="shopify-orders-empty" className="text-xs text-slate-500">{waiting.length ? 'No order matches these filters.' : 'Every open Shopify order is assigned.'}</div>
       ) : (
         <div className="max-h-80 overflow-y-auto border border-slate-200 rounded-xl">
           <table className="w-full text-xs">
@@ -189,7 +243,11 @@ export const ShopifyOrdersPanel: React.FC<Props> = ({ manifests, packers, curren
               <tr>
                 <th className="p-2 w-8">
                   <input type="checkbox" aria-label="Select all shown" checked={allShownSelected}
-                    onChange={() => setSelected(allShownSelected ? new Set() : new Set(shown.map((o) => o.orderId)))} />
+                    onChange={() => setSelected((prev) => {
+                      const next = new Set(prev);
+                      for (const o of shown) { if (allShownSelected) next.delete(o.orderId); else next.add(o.orderId); }
+                      return next;
+                    })} />
                 </th>
                 <th className="p-2 text-left">Order</th>
                 <th className="p-2 text-left">Products</th>
@@ -219,8 +277,8 @@ export const ShopifyOrdersPanel: React.FC<Props> = ({ manifests, packers, curren
                     </ul>
                   </td>
                   <td className="p-2 whitespace-nowrap">
-                    <span className={`inline-block px-2 py-0.5 rounded-md text-[11px] font-bold ${o.paymentMode === 'COD' ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-emerald-50 text-emerald-800 border border-emerald-200'}`}>
-                      {o.paymentMode || (o.payment === 'PENDING' ? 'COD' : 'Prepaid')}
+                    <span className={`inline-block px-2 py-0.5 rounded-md text-[11px] font-bold ${shopifyPaymentLabel(o) === 'COD' ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-emerald-50 text-emerald-800 border border-emerald-200'}`}>
+                      {shopifyPaymentLabel(o)}
                     </span>
                     {o.tags && <div className="text-[11px] text-slate-500 mt-0.5 max-w-[10rem] truncate" title={o.tags}>{o.tags}</div>}
                   </td>
