@@ -4541,7 +4541,7 @@ function getTeamActivity_(p) {
       const email = normalize_(r[2]);
       if (!email || String(r[5] || '').toLowerCase() !== 'approved') return;
       users[email] = { email: String(r[2]).trim(), name: String(r[1] || '').trim() || String(r[2]).trim(), role: String(r[4] || 'User'),
-        today: { assigned: 0, recorded: 0, returns: 0, uploaded: 0, uploadFailed: 0, packed: 0 }, lastAction: '', lastActionAt: 0,
+        today: { assigned: 0, remaining: 0, recorded: 0, returns: 0, uploaded: 0, uploadFailed: 0, packed: 0 }, lastAction: '', lastActionAt: 0,
         pendingOrders: [], openUploads: [] };
     });
   }
@@ -4616,7 +4616,10 @@ function getTeamActivity_(p) {
     if (!u) return;
     const st = String(r[9] || '').trim().toLowerCase();
     const at = asDate(r[0]);
-    if (at && inRange(at) && st !== 'cancelled') u.today.assigned++;
+    if (at && inRange(at) && st !== 'cancelled') {
+      u.today.assigned++;
+      if (st === 'pending') u.today.remaining++; // assigned in the range and not packed yet
+    }
     if (st === 'pending') u.pendingOrders.push({ orderId: String(r[1]), platform: String(r[2] || ''), at: at ? at.getTime() : 0 });
   }, 0);
   const list = Object.keys(users).map(function(k) {
