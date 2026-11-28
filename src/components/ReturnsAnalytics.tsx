@@ -111,7 +111,10 @@ export const ReturnsAnalytics: React.FC<Props> = ({ fromDate, toDate, platform, 
       const res = await requestApi<ReturnAnalyticsData>('getReturnAnalytics', { fromDate, toDate, platform: platform === 'all' ? '' : platform });
       if (n === seq.current) setData(res as unknown as ReturnAnalyticsData);
     } catch (e: any) {
-      if (n === seq.current) setError(e?.message || 'Could not load return analytics.');
+      const msg = String(e?.message || '');
+      if (n === seq.current) setError(/unknown action/i.test(msg)
+        ? 'The backend is on an older version. A Super Admin or settings manager can click Settings > Backend code > Update backend now, then Try again.'
+        : msg || 'Could not load return analytics.');
     } finally {
       if (n === seq.current) setLoading(false);
     }
