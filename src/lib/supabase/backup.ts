@@ -9,7 +9,7 @@ import { fmtDate } from '../dateFormat';
 
 /** Same order as the Sheet. */
 export const BACKUP_TABS = ['Users', 'OrderLog', 'ReturnLog', 'DownloadLog', 'UploadLog', 'SecurityLog', 'Branding', 'TrashLog',
-  'OrderManifest', 'PackVerificationLog', 'GTINCatalog', 'PackageDetails'];
+  'OrderManifest', 'PackVerificationLog', 'GTINCatalog', 'PackageDetails', 'ReturnDetails'];
 /** Lists that are copied whole even for a date range (they are not time logs). */
 export const REFERENCE_TABS = ['Users', 'Branding', 'GTINCatalog'];
 
@@ -27,6 +27,8 @@ const DEFAULT_HEADERS: Record<string, string[]> = {
   GTINCatalog: ['Timestamp', 'GTIN', 'SKU', 'Product Name', 'Short Name', 'Category', 'Image URL', 'Default Quantity', 'Notes', 'Tag'],
   PackageDetails: ['Timestamp', 'Order ID', 'Platform', 'Recording Type', 'Box', 'Length (cm)', 'Breadth (cm)', 'Height (cm)',
     'Actual Weight (kg)', 'Volumetric Weight (kg)', 'Chargeable Weight (kg)', 'Volumetric Divisor', 'Packer Email'],
+  ReturnDetails: ['Timestamp', 'Order ID', 'Platform', 'Return Type', 'Logistics Partner', 'Return Condition', 'Notes', 'Pincode',
+    'Customer Name', 'Customer Phone', 'Customer Email', 'Not Received Claim', 'Recorded By'],
 };
 
 export interface BackupTabData {
