@@ -7815,9 +7815,9 @@ function packageDetailsByOrder_() {
  * Branding tab: ShopifyOrdersEnabled (Super Admin only).
  * ===================================================================================== */
 const SHOPIFY_ORDERS_SHEET_ = CONFIG.SHOPIFY_ORDERS_SHEET;
-const SHOPIFY_ORDERS_HEADERS_ = ['Synced At', 'Order ID', 'Order Date', 'Payment', 'Fulfillment', 'Order Status',
+const SHOPIFY_ORDERS_HEADERS_ = ['Synced At', 'Order ID', 'Order Date', 'Payment Status', 'Fulfillment Status', 'Order Status',
   'Total Items Count', 'Items List', 'Items JSON', 'Shopify Order ID', 'Shopify Updated At',
-  'Payment Mode', 'Payment Gateway', 'Tags', 'Customer Name', 'Customer Phone', 'Customer Email',
+  'COD / Prepaid', 'Payment Gateway', 'Tags', 'Customer Name', 'Customer Phone', 'Customer Email',
   'Shipping Pincode', 'Shipping City', 'Shipping State', 'Courier', 'Tracking Number'];
 const SHOPIFY_API_VERSION_ = '2026-10';
 const SHOPIFY_TRIGGER_HANDLER_ = 'shopifySyncTick';
