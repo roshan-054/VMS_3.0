@@ -9,7 +9,7 @@ interface TeamUser {
   email: string;
   name: string;
   role: string;
-  today: { recorded: number; returns: number; uploaded: number; uploadFailed: number; packed: number };
+  today: { assigned?: number; recorded: number; returns: number; uploaded: number; uploadFailed: number; packed: number };
   lastAction: string;
   lastActionAt: number;
   pendingOrders?: { orderId: string; platform: string; at: number }[];
@@ -309,6 +309,7 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
       return {
         online: t.online + (r.online ? 1 : 0),
         recording: t.recording + (r.state === 'recording' ? 1 : 0),
+        assigned: t.assigned + (r.team?.today.assigned || 0),
         recorded: t.recorded + (r.team ? r.team.today.recorded + r.team.today.returns : 0),
         uploaded: t.uploaded + (r.team?.today.uploaded || 0),
         packed: t.packed + (r.team?.today.packed || 0),
@@ -317,7 +318,7 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
         pending: t.pending + (r.team?.pendingOrderCount ?? r.team?.pendingOrders?.length ?? 0),
       };
     },
-    { online: 0, recording: 0, recorded: 0, uploaded: 0, packed: 0, waiting: 0, failed: 0, pending: 0 },
+    { online: 0, recording: 0, assigned: 0, recorded: 0, uploaded: 0, packed: 0, waiting: 0, failed: 0, pending: 0 },
   );
 
   const Stat = ({ id, label, value, tone }: { id: string; label: string; value: number; tone: string }) => (
@@ -378,9 +379,10 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
             </button>
           </div>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-9 gap-2">
           <Stat id="team-online" label="Online now" value={sum.online} tone="bg-emerald-50 border-emerald-200 text-emerald-800" />
           <Stat id="team-recording" label="Recording now" value={sum.recording} tone="bg-red-50 border-red-200 text-red-700" />
+          <Stat id="team-assigned" label={`Assigned ${rangeWord}`} value={sum.assigned} tone="bg-violet-50 border-violet-200 text-violet-800" />
           <Stat id="team-recorded" label={`Recorded ${rangeWord}`} value={sum.recorded} tone="bg-slate-50 border-slate-200 text-slate-800" />
           <Stat id="team-uploaded" label={`Uploaded ${rangeWord}`} value={sum.uploaded} tone="bg-blue-50 border-blue-200 text-blue-800" />
           <Stat id="team-packed" label={`Packed ${rangeWord}`} value={sum.packed} tone="bg-indigo-50 border-indigo-200 text-indigo-800" />
@@ -447,8 +449,10 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
                 )}
               </div>
 
-              <div className="grid grid-cols-4 gap-1.5 text-center" data-today={r.team ? `${r.team.today.recorded}/${r.team.today.uploaded}/${r.team.today.packed}` : ''}>
+              <div className="grid grid-cols-5 gap-1.5 text-center" data-today={r.team ? `${r.team.today.recorded}/${r.team.today.uploaded}/${r.team.today.packed}` : ''}
+                data-assigned={r.team ? String(r.team.today.assigned ?? '') : ''}>
                 {[
+                  ['Assigned', r.team ? r.team.today.assigned ?? null : null],
                   ['Recorded', r.team ? r.team.today.recorded + r.team.today.returns : null],
                   ['Uploaded', r.team ? r.team.today.uploaded : null],
                   ['Packed', r.team ? r.team.today.packed : null],

@@ -4515,8 +4515,8 @@ function cleanActivity_(a) {
 }
 
 /**
- * Admins: every approved user's work in a date range (default today): recordings, uploads and
- * packed orders, their last logged action, and their backlog whatever the range (orders still
+ * Admins: every approved user's work in a date range (default today): orders assigned, recordings,
+ * uploads and packed orders, their last logged action, and their backlog whatever the range (orders still
  * assigned and Pending, uploads that never finished), each with its date so the page can show age.
  * p.from / p.to: yyyy-MM-dd, inclusive.
  */
@@ -4541,7 +4541,7 @@ function getTeamActivity_(p) {
       const email = normalize_(r[2]);
       if (!email || String(r[5] || '').toLowerCase() !== 'approved') return;
       users[email] = { email: String(r[2]).trim(), name: String(r[1] || '').trim() || String(r[2]).trim(), role: String(r[4] || 'User'),
-        today: { recorded: 0, returns: 0, uploaded: 0, uploadFailed: 0, packed: 0 }, lastAction: '', lastActionAt: 0,
+        today: { assigned: 0, recorded: 0, returns: 0, uploaded: 0, uploadFailed: 0, packed: 0 }, lastAction: '', lastActionAt: 0,
         pendingOrders: [], openUploads: [] };
     });
   }
@@ -4608,12 +4608,16 @@ function getTeamActivity_(p) {
     if (!at) return;
     if (String(r[2] || '').toUpperCase() === 'LOGIN' && String(r[3] || '').toUpperCase() === 'SUCCESS') touch(r[1], at, 'Signed in');
   }, MAX_ROWS);
-  // Orders assigned to a packer and still Pending, whatever their date.
+  // Orders assigned to each packer in the range (column A is when the order was assigned in
+  // Order Processing; cancelled orders are left out), and orders still Pending, whatever their date.
   scan('OrderManifest', function(r) {
-    if (!r[1] || String(r[9] || '').trim().toLowerCase() !== 'pending') return;
+    if (!r[1]) return;
     const u = users[normalize_(r[4])];
+    if (!u) return;
+    const st = String(r[9] || '').trim().toLowerCase();
     const at = asDate(r[0]);
-    if (u) u.pendingOrders.push({ orderId: String(r[1]), platform: String(r[2] || ''), at: at ? at.getTime() : 0 });
+    if (at && inRange(at) && st !== 'cancelled') u.today.assigned++;
+    if (st === 'pending') u.pendingOrders.push({ orderId: String(r[1]), platform: String(r[2] || ''), at: at ? at.getTime() : 0 });
   }, 0);
   const list = Object.keys(users).map(function(k) {
     const u = users[k];
