@@ -25,6 +25,8 @@ const HEADERS: Record<string, string[]> = {
   PackVerificationLog: ['Timestamp', 'Order ID', 'Platform', 'Assigned Packer', 'Verified By Packer', 'Packer Email', 'Processed By', 'Status', 'Total Required Items', 'Total Scanned Items', 'Items Summary', 'Scanned GTINs Log', 'Duration Seconds', 'Drive Video URL'],
   GTINCatalog: ['Timestamp', 'GTIN', 'SKU', 'Product Name', 'Short Name', 'Category', 'Image URL', 'Default Quantity', 'Notes', 'Tag'],
   PackageDetails: ['Timestamp', 'Order ID', 'Platform', 'Recording Type', 'Box', 'Length (cm)', 'Breadth (cm)', 'Height (cm)', 'Actual Weight (kg)', 'Volumetric Weight (kg)', 'Chargeable Weight (kg)', 'Volumetric Divisor', 'Packer Email'],
+  Branding: ['Setting Key', 'Setting Value', 'Last Updated', 'Description'],
+  ShopifyOrders: ['Synced At', 'Order ID', 'Order Date', 'Payment', 'Fulfillment', 'Order Status', 'Total Items Count', 'Items List', 'Items JSON', 'Shopify Order ID', 'Shopify Updated At'],
 };
 
 // Deterministic pseudo-random data.
@@ -67,6 +69,12 @@ function fixtures(): Record<string, unknown[][]> {
   }
   for (let i = 0; i < 30; i++) {
     t.PackVerificationLog.push(pad([new Date(NOW - i * 7200000), 'MAN-' + i, 'Amazon', 'Packer 1', 'Packer 1', 'p1@vms.test', 'Office', i % 5 ? 'MATCHED' : 'MISMATCH', 3, i % 5 ? 3 : 2, 'Soap x 2', JSON.stringify([{ gtin: '890' + i, at: 'x' }]), 40 + i, ''], 14));
+  }
+  t.Branding.push(['ShopifyOrdersEnabled', 'TRUE', new Date(NOW - DAY), 'Shopify']);
+  for (let i = 0; i < 25; i++) {
+    const items = [{ sku: 'SKU' + (i % 9), name: 'Shopify product ' + i, quantity: 1 + (i % 3), imageUrl: '' }, { sku: i % 4 ? 'NOT-IN-CATALOG' : '', name: 'Extra', quantity: 1, imageUrl: '' }];
+    t.ShopifyOrders.push([new Date(NOW - i * 600000), '#OD-' + (10300 + i), new Date(NOW - i * 900000), i % 2 ? 'PAID' : 'PENDING', 'UNFULFILLED',
+      i % 6 === 0 ? 'Cancelled' : 'Open', items[0].quantity + 1, 'x', JSON.stringify(items), 'gid://shopify/Order/' + i, new Date(NOW - i * 600000)]);
   }
   for (let i = 0; i < 60; i++) {
     t.GTINCatalog.push(pad([new Date(NOW - i * DAY), String(8901000000000 + i), 'SKU' + i, 'Product ' + i, 'P' + i, i % 3 ? 'Active-online' : 'Offline', '', 1 + (i % 2), '', i % 3 ? 'Active-online' : 'Offline'], 10));
@@ -198,6 +206,9 @@ const READS: Array<[string, string, any, (G: any, p: any) => any, ('admin' | 'us
   ['catalog', 'getGtinCatalog', {}, (G, p) => G('getGtinCatalog_')(p)],
   ['catalog: by tag', 'getGtinCatalog', { tags: ['Active-online'] }, (G, p) => G('getGtinCatalog_')(p)],
   ['duplicate: existing', 'checkDuplicateOrder', { orderId: '405-1000007-2000001', platform: 'Amazon', recordingType: 'Forward' }, (G, p) => G('checkDuplicateOrder_')(p)],
+  ['shopify orders: open', 'getShopifyOrders', {}, (G, p) => G('getShopifyOrders_')(p), 'user'],
+  ['shopify orders: all', 'getShopifyOrders', { status: 'all' }, (G, p) => G('getShopifyOrders_')(p)],
+  ['shopify orders: one', 'getShopifyOrders', { orderId: 'OD-10306' }, (G, p) => G('getShopifyOrders_')(p)],
   ['duplicate: new', 'checkDuplicateOrder', { orderId: 'NEW-1', platform: 'Amazon', recordingType: 'Forward' }, (G, p) => G('checkDuplicateOrder_')(p)],
 ];
 
@@ -272,4 +283,16 @@ test('formatDate matches Apps Script patterns in India time', () => {
   assert.equal(formatDate(d, 'Asia/Kolkata', 'hh:mm a'), '12:15 AM');
   assert.equal(formatDate(d, 'Asia/Kolkata', "MMM-yyyy"), 'Nov-2026');
   assert.equal(formatDate(d, 'Asia/Kolkata', '_yyyyMMdd_HHmmss'), '_20261127_001507');
+});
+
+test('Shopify orders from Supabase come with their catalog barcodes', () => {
+  const { engine } = both('getShopifyOrders', {}, { call: (G, p) => G('getShopifyOrders_')(p), as: 'user' });
+  assert.equal(engine.enabled, true);
+  assert.equal(engine.orders.length, 25 - 5, 'cancelled orders are left out');
+  const o = engine.orders.find((x: any) => x.orderId === '#OD-10301');
+  assert.equal(o.items[0].sku, 'SKU1');
+  assert.equal(o.items[0].gtin, '8901000000001');
+  assert.equal(o.items[0].inCatalog, true);
+  assert.equal(o.items[1].gtin, '');
+  assert.equal(o.missingGtin, 1);
 });

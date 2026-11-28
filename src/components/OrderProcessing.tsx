@@ -78,6 +78,8 @@ import { requestApi, formatOrderId } from '../lib/api';
 import { isAdmin, isMasterAdmin } from '../lib/permissions';
 import { SmartProductImage } from './SmartProductImage';
 import { fmtDate, fmtTime, fmtDateTime } from '../lib/dateFormat';
+import { ShopifyOrdersPanel } from './ShopifyOrdersPanel';
+import { ShopifyOrder, SHOPIFY_ORDERS_EVENT, findShopifyOrder, itemsMissingGtin, shopifyItemsToManifest } from '../lib/shopify';
 
 interface OrderProcessingProps {
   currentUser: User | null;
@@ -112,6 +114,9 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   const [customPlatform, setCustomPlatform] = useState<string>('');
   const [assignedPackerEmail, setAssignedPackerEmail] = useState<string>('');
   const [notes, setNotes] = useState<string>('');
+  // The Shopify order whose products are in the form right now (filled automatically).
+  const [shopifyFilledFrom, setShopifyFilledFrom] = useState<string>('');
+  const [shopifyVersion, setShopifyVersion] = useState(0);
 
   // Multi-item lines for the current order
   const [orderItems, setOrderItems] = useState<Array<{
@@ -355,6 +360,57 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
     }, 220);
   };
 
+  // Shopify: put the order's products, SKUs, quantities and catalog barcodes into the form.
+  const fillFromShopify = (order: ShopifyOrder, announce = true) => {
+    const items = shopifyItemsToManifest(order);
+    setOrderId(order.orderId);
+    setPlatform('D2C');
+    setShopifyFilledFrom(order.orderId);
+    setOrderItems(items.map((it, i) => ({
+      tempId: 'shopify-' + (i + 1) + '-' + Date.now(),
+      sku: it.sku,
+      productName: it.productName,
+      shortName: it.shortName,
+      gtin: it.gtin,
+      quantity: it.quantity,
+      imageUrl: it.imageUrl || ''
+    })));
+    if (announce) {
+      const missing = itemsMissingGtin(items).length;
+      onShowToast(
+        missing
+          ? `Filled ${order.orderId} from Shopify. ${missing} product${missing === 1 ? ' has' : 's have'} no barcode: add the SKU to the GTIN catalog or type the GTIN.`
+          : `Filled ${order.orderId} from Shopify: ${items.length} product${items.length === 1 ? '' : 's'}, barcodes from the GTIN catalog. Pick the packer and save.`,
+        missing ? 'info' : 'success'
+      );
+    }
+  };
+
+  useEffect(() => {
+    const onUpd = () => setShopifyVersion((v) => v + 1);
+    window.addEventListener(SHOPIFY_ORDERS_EVENT, onUpd);
+    return () => window.removeEventListener(SHOPIFY_ORDERS_EVENT, onUpd);
+  }, []);
+
+  // Typing or scanning a Shopify order ID fills the products in by itself. Items typed by hand
+  // are never replaced; products filled from another Shopify order are.
+  useEffect(() => {
+    const id = orderId.trim();
+    const formIsBlank = orderItems.every((it) => !it.sku.trim() && !it.productName.trim() && !it.gtin.trim());
+    const match = id ? findShopifyOrder(id) : null;
+    if (match) {
+      if (shopifyFilledFrom === match.orderId) return;
+      if (formIsBlank || shopifyFilledFrom) fillFromShopify(match);
+      return;
+    }
+    if (shopifyFilledFrom) {
+      // The ID no longer names that Shopify order: take its products out again.
+      setShopifyFilledFrom('');
+      setOrderItems([{ tempId: 'item-1', sku: '', productName: '', shortName: '', gtin: '', quantity: 1, imageUrl: '' }]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderId, shopifyVersion]);
+
   // Submit Order Manifest Pre-Entry
   const handleSaveOrder = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -424,10 +480,11 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
       processedAt: new Date().toISOString(),
       items: validItems,
       status: 'Pending',
-      notes: notes.trim() || undefined
+      notes: notes.trim() || (shopifyFilledFrom ? 'From Shopify' : undefined)
     };
 
     await saveOrderManifest(newManifest);
+    setShopifyFilledFrom('');
     setManifests(getStoredManifests());
 
     onShowToast(`Order ${newManifest.orderId} assigned to ${assignedName}!`, 'success');
@@ -1620,6 +1677,18 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
           </button>
         )}
       </div>
+
+      {/* Shopify orders waiting to be assigned (only when the Super Admin switched Shopify on) */}
+      {isUserAdmin && activeSubTab === 'entry' && (
+        <ShopifyOrdersPanel
+          manifests={manifests}
+          packers={availablePackers}
+          currentUser={currentUser}
+          onFill={(o) => fillFromShopify(o)}
+          onAssigned={() => setManifests(getStoredManifests())}
+          onShowToast={onShowToast}
+        />
+      )}
 
       {/* SUB-TAB 1: ORDER ENTRY FORM (Admin Only) */}
       {isUserAdmin && activeSubTab === 'entry' && (
