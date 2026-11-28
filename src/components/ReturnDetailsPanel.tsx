@@ -124,7 +124,7 @@ export const ReturnDetailsPanel = forwardRef<ReturnDetailsPanelHandle, Props>(({
         onShowToast(`Return details for ${t.orderId}: ${e.message}`, 'info');
         return true;
       }
-      const msg = e?.message || 'Could not save return details.';
+      const msg = /unknown action/i.test(String(e?.message || '')) ? 'The backend needs updating (Settings > Backend code > Update backend now).' : e?.message || 'Could not save return details.';
       if (mine()) setError(msg);
       onShowToast(`Return details for ${t.orderId} not saved: ${msg}`, 'error');
       return false;
