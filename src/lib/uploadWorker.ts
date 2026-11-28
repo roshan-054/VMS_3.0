@@ -302,7 +302,7 @@ export async function triggerUploadWorker(): Promise<void> {
       // If remote already has a completed Drive file for this order:
       // Only treat as verified completion if this exact item was already uploaded and assigned this fileId
       if (remoteDuplicate && remoteDuplicate.fileId && remoteDuplicate.fileId.length > 5) {
-        const isThisExactItem = Boolean(currentItem.fileId && currentItem.fileId === remoteDuplicate.fileId);
+        const isThisExactItem = isOwnRecord(currentItem, remoteDuplicate);
         if (isThisExactItem) {
           currentItem.status = 'completed';
           currentItem.progress = 100;
@@ -326,7 +326,7 @@ export async function triggerUploadWorker(): Promise<void> {
       if (localCompleted || (remoteDuplicate && (remoteDuplicate.fileId || remoteDuplicate.isDuplicate || remoteDuplicate.isInProgress))) {
         const typeLabel = currentItem.recordingType || 'Forward';
         const targetSheetName = typeLabel === 'Return' ? 'ReturnLog' : 'OrderLog';
-        const isInProgressCollision = Boolean(remoteDuplicate?.isInProgress || remoteDuplicate?.status?.includes('Progress') || remoteDuplicate?.packerEmail);
+        const isInProgressCollision = Boolean(remoteDuplicate?.isInProgress || remoteDuplicate?.status?.includes('Progress'));
 
         currentItem.status = 'failed';
         currentItem.isDuplicate = true;
@@ -353,7 +353,7 @@ export async function triggerUploadWorker(): Promise<void> {
         notify(
           isInProgressCollision
             ? `⚠️ Collision: Order ${currentItem.orderId} is currently being packed by ${remoteDuplicate?.packerEmail || 'another station'}. Duplicate upload prevented.`
-            : `⚠️ Duplicate ${typeLabel} Order blocked: Order ${currentItem.orderId} already exists in Google Drive. Click "Bypass & Upload" if you wish to upload anyway.`,
+            : `⚠️ Duplicate ${typeLabel} Order blocked: Order ${currentItem.orderId} already exists in Google Drive. Use "Upload & Keep Bigger" in Upload Queue if this video should replace it.`,
           'error'
         );
 
@@ -468,7 +468,28 @@ export async function triggerUploadWorker(): Promise<void> {
         setTimeout(() => triggerUploadWorker(), 300);
         return;
       }
+      // The server says THIS video (same queue job) is already in Drive: it is done, with that file.
+      // Before, this answer was read as a failure ("Upload interrupted - Ready to resume"), which
+      // invited a Resume and a second copy.
+      if (startErr?.alreadyUploaded && startErr?.existing?.fileId) {
+        currentItem.status = 'completed';
+        currentItem.progress = 100;
+        currentItem.stage = 'Uploaded to Google Drive';
+        currentItem.fileId = startErr.existing.fileId;
+        currentItem.webViewLink =
+          startErr.existing.webViewLink ||
+          startErr.existing.playbackUrl ||
+          `https://drive.google.com/file/d/${startErr.existing.fileId}/preview`;
+        currentItem.isDuplicate = false;
+        currentItem.error = undefined;
+        await safePutQueue(currentItem);
+        updateState({ isProcessing: false, activeItemId: null, activeProgress: 100, activeStage: 'Upload verified in Google Drive' });
+        isWorkerBusy = false;
+        setTimeout(() => triggerUploadWorker(), 300);
+        return;
+      }
       if (
+        startErr?.code === 'DUPLICATE_ORDER_ID' ||
         errMsg.toLowerCase().includes('duplicate') ||
         errMsg.toLowerCase().includes('already exists') ||
         errMsg.toLowerCase().includes('collision') ||
@@ -481,7 +502,9 @@ export async function triggerUploadWorker(): Promise<void> {
             platform: currentItem.platform,
             recordingType: currentItem.recordingType || 'Forward',
           });
-          if (verifiedExisting && verifiedExisting.fileId) {
+          // Only when the file in Drive is this item's own upload; a different video of the order
+          // stays blocked (it may be the bigger, complete one) instead of being hidden as done.
+          if (verifiedExisting && verifiedExisting.fileId && isOwnRecord(currentItem, verifiedExisting)) {
             currentItem.status = 'completed';
             currentItem.progress = 100;
             currentItem.stage = 'Uploaded to Google Drive';
@@ -531,7 +554,7 @@ export async function triggerUploadWorker(): Promise<void> {
 
     if (!startRes?.success) {
       if (startRes?.isDuplicate || startRes?.code === 'DUPLICATE_ORDER_ID') {
-        if (startRes.existing?.fileId) {
+        if (startRes.existing?.fileId && (startRes.alreadyUploaded || isOwnRecord(currentItem, startRes.existing))) {
           currentItem.status = 'completed';
           currentItem.progress = 100;
           currentItem.stage = 'Uploaded to Google Drive';
@@ -1299,6 +1322,18 @@ export async function resumeUploadItem(id: string): Promise<void> {
     await safePutQueue(item);
     triggerUploadWorker();
   }
+}
+
+/**
+ * True when a Drive record found for this order is this queue item's own upload (same queue job
+ * or same file). Then the item is done. Any other video of the order is a real duplicate.
+ * Before, only the file ID was compared, so a video whose upload had finished could be marked
+ * "Blocked: Duplicate" on a second pass, and the station then bypassed it into a second copy.
+ */
+export function isOwnRecord(item: { id: string; fileId?: string }, rec: any): boolean {
+  if (!rec) return false;
+  if (item.fileId && rec.fileId && item.fileId === rec.fileId) return true;
+  return Boolean(rec.queueJobId && String(rec.queueJobId) === item.id);
 }
 
 /**

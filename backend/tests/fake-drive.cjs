@@ -11,7 +11,7 @@ function fakeDrive({ readOnly = [] } = {}) {
       getFoldersByName: (nm) => { const list = f.children.filter((c) => c.name === nm); let i = 0; return { hasNext: () => i < list.length, next: () => list[i++] }; },
       getFilesByName: () => ({ hasNext: () => false }),
       createFolder: (nm) => { const c = mk(`sub${++n}`, nm, f); f.children.push(c); return c; },
-      createFile: (nm) => { if (readOnly.includes(id)) throw new Error('Access denied'); const file = { name: nm, trashed: false, setTrashed(v) { this.trashed = v; }, getId: () => `file${++n}` }; f.files.push(file); return file; },
+      createFile: (nm) => { if (readOnly.includes(id)) throw new Error('Access denied'); const fid = `1FakeDriveFile${String(++n).padStart(19, '0')}`; /* Drive-like: stable and 33 chars */ const file = { name: nm, trashed: false, setTrashed(v) { this.trashed = v; }, getId: () => fid }; f.files.push(file); return file; },
     };
     folders.set(id, f);
     return f;
