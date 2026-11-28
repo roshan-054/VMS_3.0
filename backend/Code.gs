@@ -38,6 +38,7 @@ const CONFIG = {
   PACK_VERIFICATION_LOG_SHEET: 'PackVerificationLog',
   GTIN_CATALOG_SHEET: 'GTINCatalog',
   PACKAGE_DETAILS_SHEET: 'PackageDetails',
+  SHOPIFY_ORDERS_SHEET: 'ShopifyOrders',
 
   // Limits
   MAX_VIDEO_BYTES: 1024 * 1024 * 1024 * 20, // 20 GB technical ceiling; the admin limit (Branding MaxVideoSizeMb) applies below it
@@ -160,6 +161,11 @@ function doPost(e) {
       case 'saveBoxPreset': return output_(saveBoxPreset_(p));
       case 'deleteBoxPreset': return output_(deleteBoxPreset_(p));
       case 'savePackageDetails': return output_(savePackageDetails_(p));
+      case 'getShopifySettings': return output_(getShopifySettings_(p));
+      case 'saveShopifySettings': return output_(saveShopifySettings_(p));
+      case 'testShopifyConnection': return output_(testShopifyConnection_(p));
+      case 'shopifySyncNow': return output_(shopifySyncNow_(p));
+      case 'getShopifyOrders': return output_(getShopifyOrders_(p));
       case 'getDriveStorage': return output_(getDriveStorage_(p));
       case 'scanSheetCleanup': return output_(scanSheetCleanup_(p));
       case 'runSheetCleanup': return output_(runSheetCleanup_(p));
@@ -831,6 +837,7 @@ let REQ_ACCESS_ = null;
 const ACTION_PERMISSIONS_ = {
   getSupabaseConfig: 'superAdmin', saveSupabaseConfig: 'superAdmin', supabaseImport: 'superAdmin', supabaseSweep: 'superAdmin',
   setUserPermissions: 'superAdmin', setBoxFeature: 'superAdmin',
+  getShopifySettings: 'superAdmin', saveShopifySettings: 'superAdmin', testShopifyConnection: 'superAdmin',
   adminCreateUser: 'canManageUsers', adminManageUser: 'canManageUsers', adminResetPassword: 'canManageUsers', adminDeleteUser: 'canManageUsers',
   deleteLogEntry: 'canDeleteData', removeUploadLog: 'canDeleteData', deleteOrderLog: 'canDeleteData',
   scanDuplicates: 'canDeleteData', scanDuplicateRecords: 'canDeleteData', cleanDuplicates: 'canDeleteData',
@@ -1404,7 +1411,8 @@ function applySheetDateFormats_(force) {
 const DATE_FORMATTED_SHEETS_ = function() {
   return [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET, CONFIG.DOWNLOAD_LOG_SHEET,
     CONFIG.SECURITY_LOG_SHEET, CONFIG.TRASH_LOG_SHEET, CONFIG.PACK_VERIFICATION_LOG_SHEET, CONFIG.USERS_SHEET,
-    CONFIG.ORDER_MANIFEST_SHEET, CONFIG.GTIN_CATALOG_SHEET, CONFIG.BRANDING_SHEET, CONFIG.PACKAGE_DETAILS_SHEET];
+    CONFIG.ORDER_MANIFEST_SHEET, CONFIG.GTIN_CATALOG_SHEET, CONFIG.BRANDING_SHEET, CONFIG.PACKAGE_DETAILS_SHEET,
+    CONFIG.SHOPIFY_ORDERS_SHEET];
 };
 function isDateFormattedSheet_(name) {
   return DATE_FORMATTED_SHEETS_().indexOf(name) !== -1 || / Archive$/.test(String(name || ''));
@@ -5202,6 +5210,23 @@ function getOrderManifests_(p) {
       });
     }
 
+    // The Sheet keeps products as "Name [SKU] x 2" without the barcode. Give each product its
+    // barcode from the GTIN catalog by SKU, so every station can scan-verify it, even one that
+    // has never loaded the catalog.
+    var catalog = null;
+    for (var m = 0; m < manifests.length; m++) {
+      var list = manifests[m].items || [];
+      for (var n = 0; n < list.length; n++) {
+        var it = list[n];
+        if (String(it.gtin || '').trim() || !String(it.sku || '').trim()) continue;
+        if (!catalog) catalog = catalogBySku_();
+        var hit = catalog[String(it.sku).trim().toUpperCase()];
+        if (!hit) continue;
+        it.gtin = hit.gtin;
+        if (!it.imageUrl && hit.imageUrl) it.imageUrl = hit.imageUrl;
+      }
+    }
+
     return { success: true, manifests: manifests, version: version };
   } catch (err) {
     return { success: false, error: 'Could not parse manifests: ' + err.message, manifests: [] };
@@ -6949,10 +6974,12 @@ function restoreCleanupArchive_(p) {
 
 const SB_TABS_ = [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET, CONFIG.DOWNLOAD_LOG_SHEET,
   CONFIG.SECURITY_LOG_SHEET, CONFIG.TRASH_LOG_SHEET, CONFIG.PACK_VERIFICATION_LOG_SHEET, CONFIG.USERS_SHEET,
-  CONFIG.ORDER_MANIFEST_SHEET, CONFIG.GTIN_CATALOG_SHEET, CONFIG.BRANDING_SHEET, CONFIG.PACKAGE_DETAILS_SHEET];
+  CONFIG.ORDER_MANIFEST_SHEET, CONFIG.GTIN_CATALOG_SHEET, CONFIG.BRANDING_SHEET, CONFIG.PACKAGE_DETAILS_SHEET,
+  CONFIG.SHOPIFY_ORDERS_SHEET];
 // Tabs only this script writes: the Sheet is the source of truth, so the sweep may remove rows from Supabase.
 const SB_SHEET_PRIMARY_TABS_ = [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET,
-  CONFIG.SECURITY_LOG_SHEET, CONFIG.TRASH_LOG_SHEET, CONFIG.USERS_SHEET, CONFIG.BRANDING_SHEET, CONFIG.PACKAGE_DETAILS_SHEET];
+  CONFIG.SECURITY_LOG_SHEET, CONFIG.TRASH_LOG_SHEET, CONFIG.USERS_SHEET, CONFIG.BRANDING_SHEET, CONFIG.PACKAGE_DETAILS_SHEET,
+  CONFIG.SHOPIFY_ORDERS_SHEET];
 const SB_SWEEP_MINUTES_ = 60;
 const SB_TRIGGER_HANDLER_ = 'sbSyncTick';
 
@@ -6982,7 +7009,8 @@ const SB_ACTION_TABS_ = {
   deleteGtinProductsBatch: [CONFIG.GTIN_CATALOG_SHEET], saveGtinCatalogBatch: [CONFIG.GTIN_CATALOG_SHEET],
   syncExternalGtinSheet: [CONFIG.GTIN_CATALOG_SHEET],
   setBoxFeature: [CONFIG.BRANDING_SHEET], saveBoxPreset: [CONFIG.BRANDING_SHEET], deleteBoxPreset: [CONFIG.BRANDING_SHEET],
-  savePackageDetails: [CONFIG.PACKAGE_DETAILS_SHEET]
+  savePackageDetails: [CONFIG.PACKAGE_DETAILS_SHEET],
+  saveShopifySettings: [CONFIG.BRANDING_SHEET]
 };
 SB_ACTION_TABS_.removeUploadLog = SB_ACTION_TABS_.deleteLogEntry;
 SB_ACTION_TABS_.deleteOrderLog = SB_ACTION_TABS_.deleteLogEntry;
@@ -7078,6 +7106,7 @@ function rowKey_(tab, row) {
     case CONFIG.GTIN_CATALOG_SHEET: if (k(row[1])) return 'g:' + k(row[1]); break;
     case CONFIG.UPLOAD_LOG_SHEET: if (k(row[6])) return 'up:' + k(row[6]); break;
     case CONFIG.PACKAGE_DETAILS_SHEET: if (k(row[1])) return 'pk:' + k(row[1]) + '|' + k(row[3]); break;
+    case CONFIG.SHOPIFY_ORDERS_SHEET: if (k(row[1])) return 'sp:' + k(row[1]); break;
   }
   return 'r:' + [k(row[0]), k(row[1]), k(row[2]), k(row[3])].join('|');
 }
@@ -7741,4 +7770,563 @@ function packageDetailsByOrder_() {
     };
   }
   return out;
+}
+
+/* =====================================================================================
+ * SHOPIFY ORDERS (Super Admin switch)
+ * Every 5 minutes (and on "Sync now") the backend asks Shopify for orders created or changed
+ * since the last run and keeps one row per order in the ShopifyOrders tab, which is copied to
+ * Supabase like every other tab. Order Processing reads these rows: when a team member types or
+ * picks a Shopify order, its products, SKUs and quantities fill in by themselves, and each SKU
+ * gets its barcode from the GTIN catalog. Nothing about customers (names, addresses, phones)
+ * is stored.
+ * Credentials live in Script Properties only and are never sent back to the browser:
+ *   SHOPIFY_SHOP (xxxx.myshopify.com), and either SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET
+ *   (Dev Dashboard app, client credentials grant, token renewed every 24 h) or
+ *   SHOPIFY_ADMIN_TOKEN (an older custom app's Admin API token, shpat_...).
+ * Branding tab: ShopifyOrdersEnabled (Super Admin only).
+ * ===================================================================================== */
+const SHOPIFY_ORDERS_SHEET_ = CONFIG.SHOPIFY_ORDERS_SHEET;
+const SHOPIFY_ORDERS_HEADERS_ = ['Synced At', 'Order ID', 'Order Date', 'Payment', 'Fulfillment', 'Order Status',
+  'Total Items Count', 'Items List', 'Items JSON', 'Shopify Order ID', 'Shopify Updated At',
+  'Payment Mode', 'Payment Gateway', 'Tags', 'Customer Name', 'Customer Phone', 'Customer Email',
+  'Shipping Pincode', 'Shipping City', 'Shipping State', 'Courier', 'Tracking Number'];
+const SHOPIFY_API_VERSION_ = '2026-10';
+const SHOPIFY_TRIGGER_HANDLER_ = 'shopifySyncTick';
+const SHOPIFY_PAGE_SIZE_ = 50;
+const SHOPIFY_MAX_PAGES_ = 20;          // up to 1000 orders per run; the next run carries on
+const SHOPIFY_RUN_BUDGET_MS_ = 240000;  // stay well inside the 6-minute Apps Script limit
+const SHOPIFY_DEFAULT_BACKFILL_DAYS_ = 3;
+// Customer fields need the read_customers scope and Shopify's protected customer data access
+// (name, email, phone, address). Without them the sync carries on with the order fields only.
+const SHOPIFY_CUSTOMER_FIELDS_ = 'email phone customer{displayName} shippingAddress{name phone zip city province} ';
+function shopifyOrdersQuery_(withCustomer) {
+  return 'query($q:String!,$after:String){orders(first:' + SHOPIFY_PAGE_SIZE_ +
+    ',after:$after,sortKey:UPDATED_AT,query:$q){pageInfo{hasNextPage endCursor}nodes{id name createdAt updatedAt cancelledAt ' +
+    'displayFinancialStatus displayFulfillmentStatus paymentGatewayNames tags ' + (withCustomer ? SHOPIFY_CUSTOMER_FIELDS_ : '') +
+    'fulfillments(first:5){trackingInfo(first:3){company number}} ' +
+    'lineItems(first:100){nodes{id sku name title variantTitle quantity currentQuantity requiresShipping image{url}}}}}}';
+}
+
+/** "COD" when paid on delivery, otherwise "Prepaid". */
+function shopifyPaymentMode_(o) {
+  const gw = (o.paymentGatewayNames || []).join(' | ');
+  if (/cash on delivery|\bcod\b/i.test(gw)) return 'COD';
+  if (!gw && String(o.displayFinancialStatus || '').toUpperCase() === 'PENDING') return 'COD';
+  return 'Prepaid';
+}
+
+function shopifyTracking_(o) {
+  const out = { company: [], number: [] };
+  (o.fulfillments || []).forEach(function(f) {
+    ((f && f.trackingInfo) || []).forEach(function(t) {
+      if (t && t.company && out.company.indexOf(t.company) === -1) out.company.push(String(t.company));
+      if (t && t.number && out.number.indexOf(t.number) === -1) out.number.push(String(t.number));
+    });
+  });
+  return { company: out.company.join(', '), number: out.number.join(', ') };
+}
+
+function shopifyConfig_() {
+  const props = scriptProps_();
+  const days = Number(props.getProperty('SHOPIFY_BACKFILL_DAYS'));
+  return {
+    shop: String(props.getProperty('SHOPIFY_SHOP') || '').trim(),
+    clientId: String(props.getProperty('SHOPIFY_CLIENT_ID') || '').trim(),
+    clientSecret: String(props.getProperty('SHOPIFY_CLIENT_SECRET') || '').trim(),
+    adminToken: String(props.getProperty('SHOPIFY_ADMIN_TOKEN') || '').trim(),
+    apiVersion: String(props.getProperty('SHOPIFY_API_VERSION') || SHOPIFY_API_VERSION_).trim(),
+    backfillDays: isFinite(days) && days >= 1 && days <= 60 ? Math.round(days) : SHOPIFY_DEFAULT_BACKFILL_DAYS_
+  };
+}
+
+/** "ewkjt0-20", "ewkjt0-20.myshopify.com" or "https://ewkjt0-20.myshopify.com/admin" -> "ewkjt0-20.myshopify.com". */
+function normalizeShopDomain_(raw) {
+  let s = String(raw || '').trim().toLowerCase();
+  if (!s) return '';
+  s = s.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  const adminStore = String(raw || '').match(/admin\.shopify\.com\/store\/([a-z0-9][a-z0-9-]*)/i);
+  if (adminStore) s = adminStore[1].toLowerCase();
+  if (/^[a-z0-9][a-z0-9-]*$/.test(s)) s += '.myshopify.com';
+  if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(s)) {
+    throw new Error('Use the store\'s myshopify.com address (for example yourstore.myshopify.com). You can see it in Shopify under Settings > Domains.');
+  }
+  return s;
+}
+
+function shopifyEnabled_(values) {
+  const raw = brandingValue_(values || brandingValues_(), 'ShopifyOrdersEnabled');
+  return raw === true || /^(true|yes|1|on)$/i.test(String(raw || '').trim());
+}
+
+function shopifyHasCredentials_(c) {
+  return !!(c.shop && (c.adminToken || (c.clientId && c.clientSecret)));
+}
+
+function shopifyLastResult_() {
+  try { return JSON.parse(scriptProps_().getProperty('SHOPIFY_LAST_RESULT') || 'null'); } catch (_) { return null; }
+}
+
+/** An Admin API access token: the saved one, or a 24-hour one from the client credentials grant. */
+function shopifyAccessToken_(c, forceNew) {
+  if (c.adminToken) return c.adminToken;
+  if (!c.clientId || !c.clientSecret) throw new Error('Shopify is not connected yet. The Super Admin can add the app\'s client ID and secret in Settings > Shopify orders.');
+  const props = scriptProps_();
+  if (!forceNew) {
+    try {
+      const hit = JSON.parse(props.getProperty('SHOPIFY_TOKEN_CACHE') || 'null');
+      if (hit && hit.t && hit.shop === c.shop && hit.id === c.clientId && Number(hit.exp) > Date.now() + 10 * 60000) return hit.t;
+    } catch (_) {}
+  }
+  const res = UrlFetchApp.fetch('https://' + c.shop + '/admin/oauth/access_token', {
+    method: 'post',
+    payload: { client_id: c.clientId, client_secret: c.clientSecret, grant_type: 'client_credentials' },
+    muteHttpExceptions: true
+  });
+  const code = res.getResponseCode();
+  const text = res.getContentText();
+  let body = null;
+  try { body = JSON.parse(text); } catch (_) { body = null; }
+  if (code >= 300 || !body || !body.access_token) {
+    const why = body ? String(body.error_description || body.error || '') : String(text || '').slice(0, 200);
+    if (/shop_not_permitted/i.test(why + text)) {
+      throw new Error('Shopify refused the app for this store. Create the app in the Dev Dashboard of the same Shopify organization as the store, install it on the store, then try again.');
+    }
+    if (code === 400 || code === 401 || /invalid_client|client/i.test(why)) {
+      throw new Error('Shopify did not accept the client ID and secret (HTTP ' + code + '). Copy them again from the Dev Dashboard > your app > Settings.');
+    }
+    throw new Error('Could not get a Shopify access token (HTTP ' + code + ')' + (why ? ': ' + why : '.'));
+  }
+  const exp = Date.now() + Math.max(600, Number(body.expires_in) || 86399) * 1000;
+  try { props.setProperty('SHOPIFY_TOKEN_CACHE', JSON.stringify({ t: body.access_token, exp: exp, shop: c.shop, id: c.clientId })); } catch (_) {}
+  return body.access_token;
+}
+
+/** One Admin GraphQL call with token renewal and throttle retries. */
+function shopifyGraphql_(c, query, variables) {
+  let token = shopifyAccessToken_(c, false);
+  let renewed = false;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const res = UrlFetchApp.fetch('https://' + c.shop + '/admin/api/' + c.apiVersion + '/graphql.json', {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { 'X-Shopify-Access-Token': token },
+      payload: JSON.stringify({ query: query, variables: variables || {} }),
+      muteHttpExceptions: true
+    });
+    const code = res.getResponseCode();
+    const text = res.getContentText();
+    let body = null;
+    try { body = JSON.parse(text); } catch (_) { body = null; }
+    if (code === 401 && !c.adminToken && !renewed) { token = shopifyAccessToken_(c, true); renewed = true; continue; }
+    if (code === 401 || code === 403) {
+      throw new Error('Shopify refused the request (HTTP ' + code + '). Check that the app is installed on the store and has the read_orders and read_products access scopes.');
+    }
+    const throttled = code === 429 || (body && body.errors && JSON.stringify(body.errors).indexOf('THROTTLED') !== -1);
+    if (throttled || code >= 500) { Utilities.sleep(1500 * (attempt + 1)); continue; }
+    if (code >= 300) throw new Error('Shopify request failed (HTTP ' + code + '): ' + String(text || '').slice(0, 200));
+    if (body && body.errors && body.errors.length) {
+      const msg = body.errors.map(function(e) { return e && e.message ? e.message : String(e); }).join('; ');
+      if (/access denied|access scope|read_orders/i.test(msg)) {
+        throw new Error('The Shopify app needs the read_orders and read_products access scopes: ' + msg.slice(0, 200));
+      }
+      throw new Error('Shopify: ' + msg.slice(0, 300));
+    }
+    return body ? body.data : null;
+  }
+  throw new Error('Shopify is busy right now. The next sync will try again.');
+}
+
+function shopifyOrderStatus_(o) {
+  if (o.cancelledAt) return 'Cancelled';
+  const f = String(o.displayFulfillmentStatus || '').toUpperCase();
+  if (f === 'FULFILLED') return 'Fulfilled';
+  return 'Open';
+}
+
+/** Line items that need packing: shippable, with the quantity left after edits and refunds. */
+function shopifyItems_(o) {
+  const nodes = (o.lineItems && o.lineItems.nodes) || [];
+  const items = [];
+  nodes.forEach(function(li) {
+    if (!li || li.requiresShipping === false) return;
+    const qty = Number(li.currentQuantity !== undefined && li.currentQuantity !== null ? li.currentQuantity : li.quantity);
+    if (!(qty > 0)) return;
+    items.push({
+      sku: String(li.sku || '').trim(),
+      name: String(li.name || li.title || '').trim(),
+      variant: String(li.variantTitle || '').trim(),
+      quantity: Math.round(qty),
+      imageUrl: li.image && li.image.url ? String(li.image.url) : ''
+    });
+  });
+  return items;
+}
+
+function shopifyOrdersSheet_() {
+  const ss = ss_();
+  let sh = ss.getSheetByName(SHOPIFY_ORDERS_SHEET_);
+  if (!sh) {
+    sh = ss.insertSheet(SHOPIFY_ORDERS_SHEET_);
+    sh.getRange(1, 1, 1, SHOPIFY_ORDERS_HEADERS_.length).setValues([SHOPIFY_ORDERS_HEADERS_]);
+    try { sh.setFrozenRows(1); sh.getRange(1, 1, 1, SHOPIFY_ORDERS_HEADERS_.length).setFontWeight('bold'); } catch (_) {}
+  } else {
+    // Columns added in later versions go on the right; existing columns never move.
+    const head = sh.getRange(1, 1, 1, SHOPIFY_ORDERS_HEADERS_.length).getValues()[0];
+    if (head.some(function(h, i) { return String(h || '') !== SHOPIFY_ORDERS_HEADERS_[i]; })) {
+      sh.getRange(1, 1, 1, SHOPIFY_ORDERS_HEADERS_.length).setValues([SHOPIFY_ORDERS_HEADERS_]);
+      try { sbTouchTabs_([SHOPIFY_ORDERS_SHEET_]); } catch (_) {}
+    }
+  }
+  return sh;
+}
+
+function shopifyRowValues_(o, items) {
+  const total = items.reduce(function(s, it) { return s + it.quantity; }, 0);
+  const listed = items.map(function(it) { return { shortName: it.name, sku: it.sku, quantity: it.quantity }; });
+  const ship = o.shippingAddress || null;
+  const track = shopifyTracking_(o);
+  return [
+    new Date(),
+    canonicalOrderId_(o.name, 'D2C'),
+    o.createdAt ? new Date(o.createdAt) : '',
+    String(o.displayFinancialStatus || ''),
+    String(o.displayFulfillmentStatus || ''),
+    shopifyOrderStatus_(o),
+    total,
+    formatItemsList_(listed),
+    JSON.stringify(items),
+    String(o.id || ''),
+    o.updatedAt ? new Date(o.updatedAt) : '',
+    shopifyPaymentMode_(o),
+    (o.paymentGatewayNames || []).join(', '),
+    (o.tags || []).join(', '),
+    String((ship && ship.name) || (o.customer && o.customer.displayName) || ''),
+    String((ship && ship.phone) || o.phone || ''),
+    String(o.email || ''),
+    String((ship && ship.zip) || ''),
+    String((ship && ship.city) || ''),
+    String((ship && ship.province) || ''),
+    track.company,
+    track.number
+  ];
+}
+
+/**
+ * A Shopify order was cancelled: an order already assigned in Order Processing and not packed yet
+ * is marked Cancelled there too, so the packer is stopped at scan time.
+ */
+function shopifyCancelManifests_(orderKeys) {
+  if (!orderKeys.length) return 0;
+  const sh = ss_().getSheetByName(CONFIG.ORDER_MANIFEST_SHEET);
+  if (!sh) return 0;
+  const data = sh.getDataRange().getValues();
+  const want = {};
+  orderKeys.forEach(function(k) { want[k] = true; });
+  let n = 0;
+  for (let i = 1; i < data.length; i++) {
+    if (!want[normalizeOrderId_(data[i][1])]) continue;
+    const st = String(data[i][9] || 'Pending').trim();
+    if (st !== 'Pending' && st !== 'In Progress') continue;
+    const note = String(data[i][10] || '');
+    sh.getRange(i + 1, 10, 1, 2).setValues([['Cancelled', (note ? note + ' | ' : '') + 'Cancelled in Shopify']]);
+    try { sbTouch_(sh, i + 1); } catch (_) {}
+    n++;
+  }
+  if (n) { try { bumpManifestVersion_(); } catch (_) {} }
+  return n;
+}
+
+/** Fetch new and changed Shopify orders into the ShopifyOrders tab. */
+function shopifySync_(opts) {
+  opts = opts || {};
+  const started = Date.now();
+  const c = shopifyConfig_();
+  if (!shopifyHasCredentials_(c)) throw new Error('Shopify is not connected yet. The Super Admin can connect it in Settings > Shopify orders.');
+  const props = scriptProps_();
+  return withScriptLock_(function() {
+    const cursor = String(props.getProperty('SHOPIFY_SYNC_CURSOR') || '');
+    let q;
+    const firstRun = !cursor;
+    if (firstRun) {
+      const from = new Date(Date.now() - c.backfillDays * 86400000);
+      q = "created_at:>='" + from.toISOString() + "'";
+    } else {
+      // Look back two minutes so an order saved while the last run was reading is not missed.
+      q = "updated_at:>='" + new Date(new Date(cursor).getTime() - 120000).toISOString() + "'";
+    }
+    const sh = shopifyOrdersSheet_();
+    const data = sh.getDataRange().getValues();
+    const rowOf = {};
+    for (let i = 1; i < data.length; i++) {
+      const k = normalizeOrderId_(data[i][1]);
+      if (k && !rowOf[k]) rowOf[k] = i + 1;
+    }
+    let after = null, pages = 0, fetched = 0, added = 0, updated = 0, unchanged = 0, skipped = 0;
+    let withCustomer = true, customerNote = '';
+    let maxUpdated = cursor, more = false;
+    const cancelledKeys = [];
+    do {
+      let d;
+      try {
+        d = shopifyGraphql_(c, shopifyOrdersQuery_(withCustomer), { q: q, after: after });
+      } catch (e) {
+        // No access to customer data yet: keep importing orders without it.
+        if (!withCustomer || !/customer|protected|access denied|scope|shippingAddress|email|phone/i.test(String(e && e.message))) throw e;
+        withCustomer = false;
+        customerNote = 'Customer name, phone, email and address were not saved: ' + String(e.message).slice(0, 200);
+        d = shopifyGraphql_(c, shopifyOrdersQuery_(false), { q: q, after: after });
+      }
+      const conn = d && d.orders;
+      if (!conn) break;
+      pages++;
+      (conn.nodes || []).forEach(function(o) {
+        if (!o || !o.name) return;
+        fetched++;
+        if (o.updatedAt && (!maxUpdated || o.updatedAt > maxUpdated)) maxUpdated = o.updatedAt;
+        const key = normalizeOrderId_(canonicalOrderId_(o.name, 'D2C'));
+        const items = shopifyItems_(o);
+        const vals = shopifyRowValues_(o, items);
+        const at = rowOf[key];
+        if (at) {
+          const old = data[at - 1] || [];
+          if (!withCustomer) for (let j = 14; j <= 19; j++) vals[j] = old[j] === undefined ? '' : old[j]; // keep what was saved
+          const cell = function(v) { return v instanceof Date ? String(v.getTime()) : String(v === null || v === undefined ? '' : v); };
+          let same = true;
+          for (let j = 1; j < vals.length; j++) if (cell(old[j]) !== cell(vals[j])) { same = false; break; }
+          if (same) { unchanged++; return; }
+          vals[0] = old[0] instanceof Date ? old[0] : vals[0]; // keep when the order first arrived
+          sh.getRange(at, 1, 1, vals.length).setValues([vals]);
+          formatDateRows_(sh, at, 1);
+          try { sbTouch_(sh, at); } catch (_) {}
+          if (vals[5] === 'Cancelled' && String(old[5] || '') !== 'Cancelled') cancelledKeys.push(key);
+          data[at - 1] = vals;
+          updated++;
+        } else {
+          // Orders that are already cancelled or shipped before they ever reached VMS are not added.
+          if (vals[5] !== 'Open' || !items.length) { skipped++; return; }
+          logAppend_(sh, vals);
+          rowOf[key] = sh.getLastRow();
+          data[rowOf[key] - 1] = vals;
+          added++;
+        }
+      });
+      more = !!(conn.pageInfo && conn.pageInfo.hasNextPage);
+      after = more ? conn.pageInfo.endCursor : null;
+    } while (more && pages < SHOPIFY_MAX_PAGES_ && Date.now() - started < SHOPIFY_RUN_BUDGET_MS_);
+    let cancelledManifests = 0;
+    try { cancelledManifests = shopifyCancelManifests_(cancelledKeys); } catch (e) { console.warn('Shopify cancel manifests:', e); }
+    // Orders come sorted by update time, so the cursor only moves past what was really read.
+    if (maxUpdated) props.setProperty('SHOPIFY_SYNC_CURSOR', maxUpdated);
+    else if (firstRun) props.setProperty('SHOPIFY_SYNC_CURSOR', new Date(started).toISOString());
+    const result = {
+      success: true, at: new Date().toISOString(), fetched: fetched, added: added, updated: updated, unchanged: unchanged,
+      skipped: skipped, cancelledManifests: cancelledManifests, pages: pages, more: more, firstRun: firstRun,
+      ms: Date.now() - started, source: opts.source || 'manual', customerData: withCustomer, note: customerNote
+    };
+    try { props.setProperty('SHOPIFY_LAST_RESULT', JSON.stringify(result)); } catch (_) {}
+    return result;
+  }, 30000);
+}
+
+function shopifyRecordFailure_(e, source) {
+  const result = { success: false, at: new Date().toISOString(), error: e && e.message ? e.message : String(e), source: source };
+  try { scriptProps_().setProperty('SHOPIFY_LAST_RESULT', JSON.stringify(result)); } catch (_) {}
+  return result;
+}
+
+/** Time trigger, every 5 minutes. */
+function shopifySyncTick() {
+  if (!shopifyEnabled_()) return;
+  if (!shopifyHasCredentials_(shopifyConfig_())) return;
+  try { shopifySync_({ source: 'auto' }); }
+  catch (e) { console.warn('Shopify sync:', e); shopifyRecordFailure_(e, 'auto'); }
+  try { sbFlush_(false); } catch (e) { console.warn('Supabase copy after Shopify sync:', e); }
+}
+
+function shopifyEnsureTrigger_() {
+  const all = ScriptApp.getProjectTriggers();
+  for (let i = 0; i < all.length; i++) if (all[i].getHandlerFunction() === SHOPIFY_TRIGGER_HANDLER_) return true;
+  ScriptApp.newTrigger(SHOPIFY_TRIGGER_HANDLER_).timeBased().everyMinutes(5).create();
+  return true;
+}
+
+function shopifyRemoveTrigger_() {
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (t.getHandlerFunction() === SHOPIFY_TRIGGER_HANDLER_) ScriptApp.deleteTrigger(t);
+  });
+}
+
+function shopifyHasTrigger_() {
+  try { return ScriptApp.getProjectTriggers().some(function(t) { return t.getHandlerFunction() === SHOPIFY_TRIGGER_HANDLER_; }); }
+  catch (_) { return false; }
+}
+
+/** Super Admin: what is set up (secrets are only reported as saved / not saved). */
+function getShopifySettings_(p) {
+  session_(p.token);
+  const c = shopifyConfig_();
+  const tokenMode = c.adminToken ? 'adminToken' : (c.clientId && c.clientSecret ? 'clientCredentials' : '');
+  return {
+    success: true,
+    enabled: shopifyEnabled_(),
+    shop: c.shop,
+    clientId: c.clientId,
+    hasClientSecret: !!c.clientSecret,
+    hasAdminToken: !!c.adminToken,
+    connectedWith: tokenMode,
+    backfillDays: c.backfillDays,
+    autoSync: shopifyHasTrigger_(),
+    cursor: String(scriptProps_().getProperty('SHOPIFY_SYNC_CURSOR') || ''),
+    lastResult: shopifyLastResult_()
+  };
+}
+
+/** Super Admin: save the store address / credentials and switch the feature on or off. */
+function saveShopifySettings_(p) {
+  const user = session_(p.token);
+  const props = scriptProps_();
+  if (p.shop !== undefined) {
+    const shop = normalizeShopDomain_(p.shop);
+    if (shop !== String(props.getProperty('SHOPIFY_SHOP') || '')) {
+      props.deleteProperty('SHOPIFY_TOKEN_CACHE');
+      props.deleteProperty('SHOPIFY_SYNC_CURSOR'); // a different store starts with a fresh first import
+    }
+    if (shop) props.setProperty('SHOPIFY_SHOP', shop); else props.deleteProperty('SHOPIFY_SHOP');
+  }
+  if (p.clientId !== undefined) {
+    const id = String(p.clientId || '').trim();
+    if (id) props.setProperty('SHOPIFY_CLIENT_ID', id); else props.deleteProperty('SHOPIFY_CLIENT_ID');
+    props.deleteProperty('SHOPIFY_TOKEN_CACHE');
+  }
+  if (p.clientSecret) { props.setProperty('SHOPIFY_CLIENT_SECRET', String(p.clientSecret).trim()); props.deleteProperty('SHOPIFY_TOKEN_CACHE'); }
+  if (p.clearClientSecret === true) { props.deleteProperty('SHOPIFY_CLIENT_SECRET'); props.deleteProperty('SHOPIFY_TOKEN_CACHE'); }
+  if (p.adminToken) props.setProperty('SHOPIFY_ADMIN_TOKEN', String(p.adminToken).trim());
+  if (p.clearAdminToken === true) props.deleteProperty('SHOPIFY_ADMIN_TOKEN');
+  if (p.backfillDays !== undefined && p.backfillDays !== null && p.backfillDays !== '') {
+    const d = Number(p.backfillDays);
+    if (!isFinite(d) || d < 1 || d > 60) throw new Error('First import can go back 1 to 60 days.');
+    props.setProperty('SHOPIFY_BACKFILL_DAYS', String(Math.round(d)));
+  }
+  if (p.enabled !== undefined) {
+    const on = p.enabled === true || String(p.enabled) === 'true';
+    if (on && !shopifyHasCredentials_(shopifyConfig_())) {
+      throw new Error('Add the store address and the app\'s client ID and secret (or an Admin API token) before switching Shopify orders on.');
+    }
+    brandingSet_('ShopifyOrdersEnabled', on ? 'TRUE' : 'FALSE', 'Fetch Shopify orders into VMS every 5 minutes (Super Admin only)');
+    try { if (on) shopifyEnsureTrigger_(); else shopifyRemoveTrigger_(); } catch (e) { console.warn('Shopify trigger:', e); }
+    if (on) shopifyOrdersSheet_();
+    securityLog_(user.email, 'SHOPIFY_FEATURE', 'SUCCESS', on ? 'Enabled' : 'Disabled');
+  } else {
+    securityLog_(user.email, 'SHOPIFY_SETTINGS', 'SUCCESS', 'Connection details updated');
+  }
+  return getShopifySettings_(p);
+}
+
+/** Super Admin: check the connection without importing anything. */
+function testShopifyConnection_(p) {
+  session_(p.token);
+  const c = shopifyConfig_();
+  if (!shopifyHasCredentials_(c)) throw new Error('Add the store address and the app\'s client ID and secret (or an Admin API token) first.');
+  const d = shopifyGraphql_(c, '{shop{name myshopifyDomain}orders(first:1,sortKey:CREATED_AT,reverse:true){nodes{name createdAt}}}', {});
+  const last = d && d.orders && d.orders.nodes && d.orders.nodes[0];
+  return {
+    success: true,
+    shopName: d && d.shop ? d.shop.name : '',
+    shop: d && d.shop ? d.shop.myshopifyDomain : c.shop,
+    latestOrder: last ? canonicalOrderId_(last.name, 'D2C') : '',
+    latestOrderAt: last ? last.createdAt : ''
+  };
+}
+
+/** Any signed-in member: fetch new orders now (at most once every 20 seconds). */
+function shopifySyncNow_(p) {
+  session_(p.token);
+  if (!shopifyEnabled_()) throw new Error('Shopify orders are switched off. The Super Admin can switch them on in Settings.');
+  const last = shopifyLastResult_();
+  if (!p.force && last && last.success && Date.now() - new Date(last.at).getTime() < 20000) return last;
+  try { return shopifySync_({ source: 'manual' }); }
+  catch (e) { return shopifyRecordFailure_(e, 'manual'); }
+}
+
+/** GTIN catalog rows by SKU (upper case), from the GTINCatalog tab. */
+function catalogBySku_() {
+  const out = {};
+  let sh = null;
+  try { sh = ss_().getSheetByName(CONFIG.GTIN_CATALOG_SHEET); } catch (_) { sh = null; }
+  if (!sh) return out;
+  const v = sh.getDataRange().getValues();
+  if (v.length < 2) return out;
+  const col = detectCatalogColumns_(v[0]);
+  const gi = col.gtin !== undefined ? col.gtin : 1, si = col.sku !== undefined ? col.sku : 2;
+  const ni = col.name !== undefined ? col.name : 3, shi = col.shortName !== undefined ? col.shortName : 4;
+  const ii = col.image !== undefined ? col.image : 6;
+  for (let i = 1; i < v.length; i++) {
+    const sku = String(v[i][si] || '').trim().toUpperCase();
+    const gtin = String(v[i][gi] || '').trim().replace(/\.0+$/, '');
+    if (!sku || !gtin || out[sku]) continue;
+    out[sku] = { gtin: gtin, productName: String(v[i][ni] || ''), shortName: String(v[i][shi] || ''), imageUrl: String(v[i][ii] || '') };
+  }
+  return out;
+}
+
+/**
+ * Any signed-in member: Shopify orders with their products, each matched to its barcode in the
+ * GTIN catalog by SKU. status: 'open' (default), 'all'.
+ */
+function getShopifyOrders_(p) {
+  p = p || {};
+  session_(p.token);
+  const enabled = shopifyEnabled_();
+  if (!enabled) return { success: true, enabled: false, orders: [] };
+  let sh = null;
+  try { sh = ss_().getSheetByName(SHOPIFY_ORDERS_SHEET_); } catch (_) { sh = null; }
+  if (!sh) return { success: true, enabled: true, orders: [], lastSync: null };
+  const v = sh.getDataRange().getValues();
+  const catalog = catalogBySku_();
+  const want = String(p.status || 'open').toLowerCase();
+  const only = p.orderId ? normalizeOrderId_(p.orderId) : '';
+  const limit = Math.min(Math.max(Number(p.limit) || 1000, 1), 5000);
+  const iso = function(x) { return x instanceof Date ? (isNaN(x.getTime()) ? '' : x.toISOString()) : String(x || ''); };
+  const orders = [];
+  let lastSync = '';
+  for (let i = v.length - 1; i >= 1; i--) {
+    const r = v[i];
+    const orderId = String(r[1] || '').trim();
+    if (!orderId) continue;
+    const synced = iso(r[0]);
+    if (synced > lastSync) lastSync = synced;
+    if (only && normalizeOrderId_(orderId) !== only) continue;
+    const status = String(r[5] || 'Open');
+    if (!only && want === 'open' && status !== 'Open') continue;
+    let raw = [];
+    try { raw = JSON.parse(String(r[8] || '[]')); } catch (_) { raw = []; }
+    if (!Array.isArray(raw)) raw = [];
+    let missing = 0;
+    const items = raw.map(function(it, n) {
+      const sku = String(it.sku || '').trim();
+      const hit = sku ? catalog[sku.toUpperCase()] : null;
+      if (!hit) missing++;
+      return {
+        id: 'shopify-' + (n + 1),
+        sku: sku,
+        productName: (hit && hit.productName) || String(it.name || ''),
+        shortName: (hit && (hit.shortName || hit.productName)) || String(it.name || ''),
+        shopifyName: String(it.name || ''),
+        gtin: hit ? hit.gtin : '',
+        quantity: Math.max(1, Math.round(Number(it.quantity) || 1)),
+        imageUrl: (hit && hit.imageUrl) || String(it.imageUrl || ''),
+        inCatalog: !!hit
+      };
+    });
+    orders.push({
+      orderId: orderId, orderDate: iso(r[2]), payment: String(r[3] || ''), fulfillment: String(r[4] || ''), status: status,
+      paymentMode: String(r[11] || ''), tags: String(r[13] || ''),
+      totalItems: Number(r[6]) || items.reduce(function(s, it) { return s + it.quantity; }, 0),
+      items: items, missingGtin: missing, syncedAt: synced
+    });
+    if (orders.length >= limit) break;
+  }
+  orders.sort(function(a, b) { return String(b.orderDate).localeCompare(String(a.orderDate)); });
+  return { success: true, enabled: true, orders: orders, lastSync: lastSync || null };
 }

@@ -172,6 +172,23 @@ export const PackVerificationModal: React.FC<PackVerificationModalProps> = ({
         reason: 'QUANTITY_EXCEEDED',
         message: `Already scanned required quantity (${targetItem.quantity}/${targetItem.quantity}) for "${targetItem.shortName || targetItem.productName}". Do not pack excess items!`,
       });
+      // Extra scans are flagged in the Pack Verification Audit Log too.
+      logPackVerification({
+        timestamp: new Date().toISOString(),
+        orderId: manifest.orderId,
+        platform: manifest.platform,
+        assignedPacker: manifest.assignedPackerName,
+        verifiedByPacker: currentUser?.name || 'Packer',
+        packerEmail: currentUser?.email || 'packer@ops.local',
+        processedBy: manifest.processedByName,
+        status: 'OVER_PACK',
+        totalRequired: items.reduce((s, it) => s + it.quantity, 0),
+        totalScanned: items.reduce((s, it) => s + it.scannedCount, 0),
+        itemsSummary: items.map((it) => `${it.shortName || it.productName}: ${it.scannedCount}/${it.quantity}`).join(', '),
+        scannedGtinsLog: [codeUsed],
+        durationSeconds: Math.round((Date.now() - startTimeRef.current) / 1000),
+        notes: `Extra scan: ${codeUsed} (${targetItem.shortName || targetItem.productName}) already ${targetItem.quantity}/${targetItem.quantity}`,
+      });
       return;
     }
 

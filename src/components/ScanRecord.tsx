@@ -204,6 +204,13 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
             return;
           }
 
+          if (manifest.status === 'Cancelled') {
+            onShowToast(`⛔ Order ${clean} was cancelled${/shopify/i.test(manifest.notes || '') ? ' in Shopify' : ''}. Do not pack it.`, 'error');
+            setStatusMessage({ text: `Order ${clean} is cancelled. Do not pack it.`, type: 'error' });
+            onClearInitialOrderId?.();
+            return;
+          }
+
           if (manifest.status === 'Packed' || (manifest as any).status === 'Completed') {
             const packerInfo = manifest.packedByName || manifest.assignedPackerName || 'Packer';
             const packedTime = manifest.packedAt ? ` on ${fmtDateTime(manifest.packedAt)}` : '';
@@ -283,6 +290,13 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
           type: 'info'
         });
         return true;
+      }
+
+      // Guard 0: cancelled orders (for example cancelled in Shopify after they were assigned)
+      if (manifest.status === 'Cancelled') {
+        onShowToast(`⛔ Order ${clean} was cancelled${/shopify/i.test(manifest.notes || '') ? ' in Shopify' : ''}. Do not pack it.`, 'error');
+        setStatusMessage({ text: `Order ${clean} is cancelled. Do not pack it.`, type: 'error' });
+        return false;
       }
 
       // Guard 1: Already packed orders (Only for Forward packing)

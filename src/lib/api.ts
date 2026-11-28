@@ -79,6 +79,10 @@ const ACTION_TIMEOUT_MS: Record<string, number> = {
   getSupabaseConfig: 60000,
   supabaseSweep: 300000,
   syncSheetNow: 60000,
+  shopifySyncNow: 300000,
+  testShopifyConnection: 60000,
+  saveShopifySettings: 60000,
+  getShopifySettings: 60000,
 };
 export const DEFAULT_API_TIMEOUT_MS = 20000;
 export function apiTimeoutFor(action: string): number {
