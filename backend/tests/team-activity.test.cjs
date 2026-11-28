@@ -41,7 +41,7 @@ test('admin sees each approved user\'s work today and their last action', () => 
   const emails = res.users.map((u) => u.email.toLowerCase());
   assert.ok(!emails.includes('new@vms.com'), 'users waiting for approval are not listed');
   const v = res.users.find((u) => u.email === 'vineet@vms.com');
-  assert.deepEqual(v.today, { recorded: 2, returns: 1, uploaded: 1, uploadFailed: 1, packed: 1 });
+  assert.deepEqual(v.today, { assigned: 0, recorded: 2, returns: 1, uploaded: 1, uploadFailed: 1, packed: 1 });
   assert.equal(v.lastAction, 'Packed OD-4');
   const r = res.users.find((u) => u.email === 'ravi@vms.com');
   assert.equal(r.today.recorded, 1);
@@ -120,4 +120,27 @@ test('backlog: pending orders assigned to the packer and uploads that never fini
   // The backlog is the same whatever range is picked.
   const old = rt.call('getTeamActivity', { token: admin, from: '2020-01-01', to: '2020-01-02' });
   assert.equal(old.users.find((u) => u.email === 'vineet@vms.com').pendingOrderCount, 2);
+});
+
+test('assigned counts orders given to each packer in the range, not cancelled ones', () => {
+  const { rt, admin } = setup();
+  const now = Date.now();
+  const iso = (msAgo) => new Date(now - msAgo).toISOString();
+  const save = (orderId, email, msAgo, status) => {
+    const r = rt.call('saveOrderManifest', { token: admin, manifest: { orderId, platform: 'Amazon', assignedPackerName: email, assignedPackerEmail: email, processedAt: iso(msAgo), status: status || 'Pending', items: [{ gtin: '1', quantity: 1 }] } });
+    assert.equal(r.success, true, JSON.stringify(r));
+  };
+  save('AS-1', 'vineet@vms.com', 60000);
+  save('AS-2', 'Vineet@VMS.com', 120000, 'Packed');
+  save('AS-3', 'vineet@vms.com', 180000, 'Cancelled');
+  save('AS-4', 'ravi@vms.com', 60000);
+  save('AS-5', 'vineet@vms.com', 3 * 24 * 3600e3);
+  const pick = (res, e) => res.users.find((u) => u.email === e);
+  const today = rt.call('getTeamActivity', { token: admin });
+  assert.equal(pick(today, 'vineet@vms.com').today.assigned, 2);
+  assert.equal(pick(today, 'ravi@vms.com').today.assigned, 1);
+  assert.equal(pick(today, 'vineet@vms.com').pendingOrderCount, 2, 'pending backlog is still any date');
+  const day = (ms) => { const d = new Date(now - ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  const week = rt.call('getTeamActivity', { token: admin, from: day(6 * 24 * 3600e3), to: day(0) });
+  assert.equal(pick(week, 'vineet@vms.com').today.assigned, 3);
 });
