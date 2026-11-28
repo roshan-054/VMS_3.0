@@ -203,7 +203,7 @@ test('return analytics by Shopify tag and payment mode, with a tag filter', () =
   const pat = login(rt, 'pat@example.com');
   const sue = login(rt, 'sue@example.com');
   const now = new Date();
-  const rows = [['Synced At', 'Order ID', 'Order Date', 'Payment Mode', 'Tags', 'Customer Phone']];
+  const rows = [['Synced At', 'Order ID', 'Order Date', 'COD / Prepaid', 'Tags', 'Customer Phone']];
   rows.push([now, '#OD-1', now, 'COD', 'AiSensy_COD_Confirmed', '9000000001']);
   rows.push([now, '#OD-2', now, 'COD', 'AiSensy_COD_Confirmed, Source: Google', '9000000002']);
   rows.push([now, '#OD-3', now, 'COD', 'AiSensy_COD_Cancelled', '9000000003']);
