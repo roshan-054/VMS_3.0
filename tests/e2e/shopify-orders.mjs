@@ -148,6 +148,8 @@ try {
   await sa.selectOption('#shopify-filter-lines', '');
   await sa.selectOption('#shopify-filter-sku', 'NEW-SKU-9');
   check('product filter', (await rowsShown()) === '#OD-20003', await rowsShown());
+  check('clear button shows how many filters are on', /Clear 1 filter$/.test((await sa.locator('#shopify-filter-clear').innerText()).trim()), await sa.locator('#shopify-filter-clear').innerText());
+  await sa.screenshot({ path: `${SHOTS}/clear-filters.png` });
   await sa.locator('#shopify-filter-clear').click();
   const day = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
   await sa.fill('#shopify-filter-from', day(now + 86400e3));

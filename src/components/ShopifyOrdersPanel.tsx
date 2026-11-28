@@ -77,7 +77,10 @@ export const ShopifyOrdersPanel: React.FC<Props> = ({ manifests, packers, curren
     }
     return [...m.entries()].sort((a, b) => b[1].count - a[1].count || a[0].localeCompare(b[0]));
   }, [waiting]);
-  const filtered = JSON.stringify(filters) !== JSON.stringify(NO_FILTERS);
+  const activeCount = (Object.keys(NO_FILTERS) as (keyof ShopifyOrderFilters)[]).filter((k) => String(filters[k]).trim() !== '').length;
+  const filtered = activeCount > 0;
+  // A filter that is in use gets a blue outline, so it is clear what is narrowing the list.
+  const fieldOn = (v: string) => (v.trim() ? `${field} !bg-blue-50 !border-blue-500 ring-1 ring-blue-500 font-semibold text-blue-900` : field);
   // Only orders that are on screen can be assigned, so a filter change never assigns hidden orders.
   const shownIds = useMemo(() => new Set(shown.map((o) => o.orderId)), [shown]);
   const selectedShown = useMemo(() => [...selected].filter((id) => shownIds.has(id)), [selected, shownIds]);
@@ -178,31 +181,32 @@ export const ShopifyOrdersPanel: React.FC<Props> = ({ manifests, packers, curren
         <div className="relative">
           <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
           <input id="shopify-orders-search" type="text" value={filters.query} onChange={(e) => setF({ query: e.target.value })} placeholder="Order ID, SKU or product"
-            className="pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs w-56 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            className={`pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs w-56 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 ${filters.query.trim() ? '!bg-blue-50 !border-blue-500 ring-1 ring-blue-500' : ''}`} />
         </div>
         <label className="inline-flex items-center gap-1 text-[11px] text-slate-500">From
-          <input id="shopify-filter-from" type="date" value={filters.from} max={filters.to || undefined} onChange={(e) => setF({ from: e.target.value })} className={field} />
+          <input id="shopify-filter-from" type="date" value={filters.from} max={filters.to || undefined} onChange={(e) => setF({ from: e.target.value })} className={fieldOn(filters.from)} />
         </label>
         <label className="inline-flex items-center gap-1 text-[11px] text-slate-500">To
-          <input id="shopify-filter-to" type="date" value={filters.to} min={filters.from || undefined} onChange={(e) => setF({ to: e.target.value })} className={field} />
+          <input id="shopify-filter-to" type="date" value={filters.to} min={filters.from || undefined} onChange={(e) => setF({ to: e.target.value })} className={fieldOn(filters.to)} />
         </label>
-        <select id="shopify-filter-payment" value={filters.payment} onChange={(e) => setF({ payment: e.target.value as ShopifyOrderFilters['payment'] })} className={field}>
+        <select id="shopify-filter-payment" value={filters.payment} onChange={(e) => setF({ payment: e.target.value as ShopifyOrderFilters['payment'] })} className={fieldOn(filters.payment)}>
           <option value="">COD and Prepaid</option>
           <option value="COD">COD only</option>
           <option value="Prepaid">Prepaid only</option>
         </select>
-        <select id="shopify-filter-lines" value={filters.lines} onChange={(e) => setF({ lines: e.target.value as ShopifyOrderFilters['lines'] })} className={field}>
+        <select id="shopify-filter-lines" value={filters.lines} onChange={(e) => setF({ lines: e.target.value as ShopifyOrderFilters['lines'] })} className={fieldOn(filters.lines)}>
           <option value="">Any number of products</option>
           <option value="single">Single-product orders</option>
           <option value="multi">Multi-product orders</option>
         </select>
-        <select id="shopify-filter-sku" value={filters.sku} onChange={(e) => setF({ sku: e.target.value })} className={`${field} max-w-[14rem]`}>
+        <select id="shopify-filter-sku" value={filters.sku} onChange={(e) => setF({ sku: e.target.value })} className={`${fieldOn(filters.sku)} max-w-[14rem]`}>
           <option value="">All products</option>
           {skuOptions.map(([k, v]) => <option key={k} value={k}>{v.name ? `${v.name} [${k}]` : k} ({v.count})</option>)}
         </select>
         {filtered && (
-          <button id="shopify-filter-clear" type="button" onClick={() => setFilters(NO_FILTERS)} className={`${btn} text-slate-600 hover:bg-slate-100`}>
-            <X className="w-3.5 h-3.5" /> Clear filters
+          <button id="shopify-filter-clear" type="button" onClick={() => setFilters(NO_FILTERS)}
+            className={`${btn} bg-rose-600 text-white hover:bg-rose-700 shadow-sm`}>
+            <X className="w-3.5 h-3.5" /> Clear {activeCount} filter{activeCount === 1 ? '' : 's'}
           </button>
         )}
       </div>
