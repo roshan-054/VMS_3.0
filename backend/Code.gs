@@ -37,6 +37,7 @@ const CONFIG = {
   ORDER_MANIFEST_SHEET: 'OrderManifest',
   PACK_VERIFICATION_LOG_SHEET: 'PackVerificationLog',
   GTIN_CATALOG_SHEET: 'GTINCatalog',
+  PACKAGE_DETAILS_SHEET: 'PackageDetails',
 
   // Limits
   MAX_VIDEO_BYTES: 1024 * 1024 * 1024 * 20, // 20 GB technical ceiling; the admin limit (Branding MaxVideoSizeMb) applies below it
@@ -154,6 +155,11 @@ function doPost(e) {
       case 'reportStationQueue': return output_(reportStationQueue_(p));
       case 'getStationQueues': return output_(getStationQueues_(p));
       case 'getTeamActivity': return output_(getTeamActivity_(p));
+      case 'getBoxSettings': return output_(getBoxSettings_(p));
+      case 'setBoxFeature': return output_(setBoxFeature_(p));
+      case 'saveBoxPreset': return output_(saveBoxPreset_(p));
+      case 'deleteBoxPreset': return output_(deleteBoxPreset_(p));
+      case 'savePackageDetails': return output_(savePackageDetails_(p));
       case 'getDriveStorage': return output_(getDriveStorage_(p));
       case 'scanSheetCleanup': return output_(scanSheetCleanup_(p));
       case 'runSheetCleanup': return output_(runSheetCleanup_(p));
@@ -629,7 +635,8 @@ function setupSystem() {
     [CONFIG.TRASH_LOG_SHEET,['Timestamp','Order ID','Platform','Recording Type','Action','Original Sheet','Drive File ID','Playback URL','Cleaned By','Details']],
     [CONFIG.ORDER_MANIFEST_SHEET,['Timestamp','Order ID','Platform','Assigned Packer Name','Assigned Packer Email','Processed By Name','Processed By Email','Total Items Count','Items List','Status','Notes','Packed At','Packed By Name','Video Drive Link']],
     [CONFIG.PACK_VERIFICATION_LOG_SHEET,['Timestamp','Order ID','Platform','Assigned Packer','Verified By Packer','Packer Email','Processed By','Status','Total Required Items','Total Scanned Items','Items Summary','Scanned GTINs Log','Duration Seconds','Drive Video URL']],
-    [CONFIG.GTIN_CATALOG_SHEET,['Timestamp','GTIN','SKU','Product Name','Short Name','Category','Image URL','Default Quantity','Notes','Tag']]
+    [CONFIG.GTIN_CATALOG_SHEET,['Timestamp','GTIN','SKU','Product Name','Short Name','Category','Image URL','Default Quantity','Notes','Tag']],
+    [CONFIG.PACKAGE_DETAILS_SHEET,PACKAGE_DETAILS_HEADERS_]
   ];
   specs.forEach(([name,headers])=>{
     let sh=ss.getSheetByName(name);
@@ -823,7 +830,7 @@ let REQ_ACCESS_ = null;
 // 'admin' = Admin or Super Admin. Arrays mean any one of them.
 const ACTION_PERMISSIONS_ = {
   getSupabaseConfig: 'superAdmin', saveSupabaseConfig: 'superAdmin', supabaseImport: 'superAdmin', supabaseSweep: 'superAdmin',
-  setUserPermissions: 'superAdmin',
+  setUserPermissions: 'superAdmin', setBoxFeature: 'superAdmin',
   adminCreateUser: 'canManageUsers', adminManageUser: 'canManageUsers', adminResetPassword: 'canManageUsers', adminDeleteUser: 'canManageUsers',
   deleteLogEntry: 'canDeleteData', removeUploadLog: 'canDeleteData', deleteOrderLog: 'canDeleteData',
   scanDuplicates: 'canDeleteData', scanDuplicateRecords: 'canDeleteData', cleanDuplicates: 'canDeleteData',
@@ -1397,7 +1404,7 @@ function applySheetDateFormats_(force) {
 const DATE_FORMATTED_SHEETS_ = function() {
   return [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET, CONFIG.DOWNLOAD_LOG_SHEET,
     CONFIG.SECURITY_LOG_SHEET, CONFIG.TRASH_LOG_SHEET, CONFIG.PACK_VERIFICATION_LOG_SHEET, CONFIG.USERS_SHEET,
-    CONFIG.ORDER_MANIFEST_SHEET, CONFIG.GTIN_CATALOG_SHEET, CONFIG.BRANDING_SHEET];
+    CONFIG.ORDER_MANIFEST_SHEET, CONFIG.GTIN_CATALOG_SHEET, CONFIG.BRANDING_SHEET, CONFIG.PACKAGE_DETAILS_SHEET];
 };
 function isDateFormattedSheet_(name) {
   return DATE_FORMATTED_SHEETS_().indexOf(name) !== -1 || / Archive$/.test(String(name || ''));
@@ -3743,6 +3750,11 @@ function getReportData_(p){
   const video=String(p.video||'');
   const rows=[];
   const seenKeys={};
+  // Box dimensions & weights: added as columns when the feature is on or any order has them.
+  let boxByOrder = {};
+  try { boxByOrder = packageDetailsByOrder_(); } catch (_) { boxByOrder = {}; }
+  let boxOn = Object.keys(boxByOrder).length > 0;
+  try { boxOn = boxOn || boxSettings_().enabled; } catch (_) {}
 
   const sheetsToScan = [
     { name: CONFIG.ORDER_LOG_SHEET, defaultType: 'Forward', source: 'Order' },
@@ -3781,7 +3793,7 @@ function getReportData_(p){
         if (seenKeys[recKey]) continue;
         seenKeys[recKey] = true;
 
-        rows.push({
+        const reportRow = {
           'Timestamp': ts.toISOString(),
           'Source': target.source,
           'Order ID': oid,
@@ -3791,7 +3803,19 @@ function getReportData_(p){
           'Status': st,
           'Drive File ID': fid,
           'Video Playback URL': pUrl || (fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : '')
-        });
+        };
+        if (boxOn) {
+          const bx = boxByOrder[normalizeOrderId_(oid) + '|' + rt.toLowerCase()] || {};
+          const cell = function(x) { return x === undefined || x === null ? '' : x; };
+          reportRow['Box'] = cell(bx.box);
+          reportRow['Length (cm)'] = cell(bx.l);
+          reportRow['Breadth (cm)'] = cell(bx.b);
+          reportRow['Height (cm)'] = cell(bx.h);
+          reportRow['Actual Weight (kg)'] = cell(bx.actual);
+          reportRow['Volumetric Weight (kg)'] = cell(bx.volumetric);
+          reportRow['Chargeable Weight (kg)'] = cell(bx.chargeable);
+        }
+        rows.push(reportRow);
       }
     } catch(err) {
       console.warn('Report scan error for ' + target.name + ':', err);
@@ -6821,10 +6845,10 @@ function restoreCleanupArchive_(p) {
 
 const SB_TABS_ = [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET, CONFIG.DOWNLOAD_LOG_SHEET,
   CONFIG.SECURITY_LOG_SHEET, CONFIG.TRASH_LOG_SHEET, CONFIG.PACK_VERIFICATION_LOG_SHEET, CONFIG.USERS_SHEET,
-  CONFIG.ORDER_MANIFEST_SHEET, CONFIG.GTIN_CATALOG_SHEET, CONFIG.BRANDING_SHEET];
+  CONFIG.ORDER_MANIFEST_SHEET, CONFIG.GTIN_CATALOG_SHEET, CONFIG.BRANDING_SHEET, CONFIG.PACKAGE_DETAILS_SHEET];
 // Tabs only this script writes: the Sheet is the source of truth, so the sweep may remove rows from Supabase.
 const SB_SHEET_PRIMARY_TABS_ = [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET,
-  CONFIG.SECURITY_LOG_SHEET, CONFIG.TRASH_LOG_SHEET, CONFIG.USERS_SHEET, CONFIG.BRANDING_SHEET];
+  CONFIG.SECURITY_LOG_SHEET, CONFIG.TRASH_LOG_SHEET, CONFIG.USERS_SHEET, CONFIG.BRANDING_SHEET, CONFIG.PACKAGE_DETAILS_SHEET];
 const SB_SWEEP_MINUTES_ = 60;
 const SB_TRIGGER_HANDLER_ = 'sbSyncTick';
 
@@ -6852,7 +6876,9 @@ const SB_ACTION_TABS_ = {
   updateManifestStatus: [CONFIG.ORDER_MANIFEST_SHEET], deleteOrderManifest: [CONFIG.ORDER_MANIFEST_SHEET],
   saveGtinProduct: [CONFIG.GTIN_CATALOG_SHEET], deleteGtinProduct: [CONFIG.GTIN_CATALOG_SHEET],
   deleteGtinProductsBatch: [CONFIG.GTIN_CATALOG_SHEET], saveGtinCatalogBatch: [CONFIG.GTIN_CATALOG_SHEET],
-  syncExternalGtinSheet: [CONFIG.GTIN_CATALOG_SHEET]
+  syncExternalGtinSheet: [CONFIG.GTIN_CATALOG_SHEET],
+  setBoxFeature: [CONFIG.BRANDING_SHEET], saveBoxPreset: [CONFIG.BRANDING_SHEET], deleteBoxPreset: [CONFIG.BRANDING_SHEET],
+  savePackageDetails: [CONFIG.PACKAGE_DETAILS_SHEET]
 };
 SB_ACTION_TABS_.removeUploadLog = SB_ACTION_TABS_.deleteLogEntry;
 SB_ACTION_TABS_.deleteOrderLog = SB_ACTION_TABS_.deleteLogEntry;
@@ -6947,6 +6973,7 @@ function rowKey_(tab, row) {
     case CONFIG.ORDER_MANIFEST_SHEET: if (k(row[1])) return 'o:' + k(row[1]); break;
     case CONFIG.GTIN_CATALOG_SHEET: if (k(row[1])) return 'g:' + k(row[1]); break;
     case CONFIG.UPLOAD_LOG_SHEET: if (k(row[6])) return 'up:' + k(row[6]); break;
+    case CONFIG.PACKAGE_DETAILS_SHEET: if (k(row[1])) return 'pk:' + k(row[1]) + '|' + k(row[3]); break;
   }
   return 'r:' + [k(row[0]), k(row[1]), k(row[2]), k(row[3])].join('|');
 }
@@ -7381,4 +7408,233 @@ function supabaseImport_(p) {
 function syncSheetNow_() {
   if (!sbEnabled_()) return { success: true, skipped: 'Supabase is not set up' };
   return sbDrain_(20000);
+}
+
+/* =====================================================================================
+ * BOX DIMENSIONS & VOLUMETRIC WEIGHT
+ * While packing, a station records the box used (a saved preset such as "Box-1 10x10x3" or
+ * custom L x B x H in cm) and the actual weight in kg. Volumetric weight = L x B x H / divisor
+ * (5000 by default, the usual courier divisor for cm and kg); chargeable weight is the larger
+ * of the two. One row per order and recording type in the PackageDetails tab, and the values
+ * are added to the downloadable report.
+ * Settings (Branding tab): BoxDimensionsEnabled (Super Admin only), VolumetricDivisor
+ * (Super Admin only), BoxPresets (JSON list, any member can add; creator or admin can remove).
+ * ===================================================================================== */
+const PACKAGE_DETAILS_HEADERS_ = ['Timestamp', 'Order ID', 'Platform', 'Recording Type', 'Box', 'Length (cm)', 'Breadth (cm)',
+  'Height (cm)', 'Actual Weight (kg)', 'Volumetric Weight (kg)', 'Chargeable Weight (kg)', 'Volumetric Divisor', 'Packer Email'];
+const DEFAULT_VOLUMETRIC_DIVISOR_ = 5000;
+const MAX_BOX_PRESETS_ = 100;
+
+function brandingValues_() {
+  // getSheetByName (not sheet_): reading must never run setup (the browser engine cannot).
+  try {
+    const sh = ss_().getSheetByName(CONFIG.BRANDING_SHEET);
+    return sh ? sh.getDataRange().getValues() : [];
+  } catch (_) { return []; }
+}
+
+function brandingValue_(values, key) {
+  for (let i = 1; i < values.length; i++) {
+    if (String(values[i][0] || '').trim() === key) return values[i][1];
+  }
+  return undefined;
+}
+
+function brandingSet_(key, value, desc) {
+  const sh = sheet_(CONFIG.BRANDING_SHEET);
+  const data = sh.getDataRange().getValues();
+  const now = new Date();
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][0] || '').trim() === key) {
+      sh.getRange(i + 1, 2, 1, 2).setValues([[value, now]]);
+      return;
+    }
+  }
+  logAppend_(sh, [key, value, now, desc || '']);
+}
+
+function boxNumber_(v, max) {
+  if (v === null || v === undefined || String(v).trim() === '') return null;
+  const n = Number(String(v).replace(',', '.').trim());
+  if (!isFinite(n) || n <= 0 || n > max) return NaN;
+  return Math.round(n * 100) / 100;
+}
+
+function round2_(n) { return Math.round(n * 100) / 100; }
+
+function parseBoxPresets_(raw) {
+  let list = [];
+  try { list = JSON.parse(String(raw || '[]')); } catch (_) { list = []; }
+  if (!Array.isArray(list)) return [];
+  return list.filter(function(x) { return x && x.name && Number(x.l) > 0 && Number(x.b) > 0 && Number(x.h) > 0; })
+    .map(function(x) {
+      return { id: String(x.id || ''), name: String(x.name), l: Number(x.l), b: Number(x.b), h: Number(x.h), by: String(x.by || '') };
+    });
+}
+
+function boxSettingsFrom_(values) {
+  const rawEnabled = brandingValue_(values, 'BoxDimensionsEnabled');
+  const enabled = rawEnabled === true || /^(true|yes|1|on)$/i.test(String(rawEnabled || '').trim());
+  const d = Number(brandingValue_(values, 'VolumetricDivisor'));
+  return {
+    enabled: enabled,
+    divisor: isFinite(d) && d >= 1000 && d <= 10000 ? d : DEFAULT_VOLUMETRIC_DIVISOR_,
+    presets: parseBoxPresets_(brandingValue_(values, 'BoxPresets'))
+  };
+}
+
+function boxSettings_() { return boxSettingsFrom_(brandingValues_()); }
+
+/** Any signed-in member: is the feature on, the divisor and the saved box sizes. */
+function getBoxSettings_(p) {
+  session_(p.token);
+  const s = boxSettings_();
+  return { success: true, enabled: s.enabled, divisor: s.divisor, presets: s.presets };
+}
+
+/** Super Admin only: switch the feature on or off and set the volumetric divisor. */
+function setBoxFeature_(p) {
+  const user = session_(p.token);
+  if (p.enabled !== undefined) {
+    const on = p.enabled === true || String(p.enabled) === 'true';
+    brandingSet_('BoxDimensionsEnabled', on ? 'TRUE' : 'FALSE', 'Box dimensions & volumetric weight while packing (Super Admin only)');
+    securityLog_(user.email, 'BOX_FEATURE', 'SUCCESS', on ? 'Enabled' : 'Disabled');
+  }
+  if (p.divisor !== undefined && p.divisor !== null && p.divisor !== '') {
+    const d = Number(p.divisor);
+    if (!isFinite(d) || d < 1000 || d > 10000) throw new Error('Volumetric divisor must be between 1000 and 10000 (5000 is the usual courier value).');
+    brandingSet_('VolumetricDivisor', Math.round(d), 'Volumetric weight (kg) = L x B x H (cm) / this number');
+  }
+  return getBoxSettings_(p);
+}
+
+/** Any member (feature on): add a box size, or update one with the same name. */
+function saveBoxPreset_(p) {
+  const user = session_(p.token);
+  return withScriptLock_(function() {
+    const s = boxSettings_();
+    if (!s.enabled) throw new Error('Box dimensions are switched off. The Super Admin can switch them on in Settings.');
+    const name = String(p.name || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+    const l = boxNumber_(p.l, 1000), b = boxNumber_(p.b, 1000), h = boxNumber_(p.h, 1000);
+    if (!name) throw new Error('Give the box a name, for example Box-1.');
+    if (!(l > 0) || !(b > 0) || !(h > 0)) throw new Error('Length, breadth and height must be numbers above 0 (cm, up to 1000).');
+    const list = s.presets;
+    const at = list.findIndex(function(x) { return normalize_(x.name) === normalize_(name); });
+    const item = { id: at >= 0 ? list[at].id : Utilities.getUuid().slice(0, 8), name: name, l: l, b: b, h: h, by: at >= 0 ? list[at].by : normalize_(user.email) };
+    if (at >= 0) list[at] = item;
+    else {
+      if (list.length >= MAX_BOX_PRESETS_) throw new Error('Up to ' + MAX_BOX_PRESETS_ + ' box sizes can be saved. Remove one first.');
+      list.push(item);
+    }
+    brandingSet_('BoxPresets', JSON.stringify(list), 'Saved box sizes (cm) for packing');
+    return { success: true, preset: item, enabled: s.enabled, divisor: s.divisor, presets: list };
+  });
+}
+
+/** Remove a saved box size: the member who added it, or an Admin. */
+function deleteBoxPreset_(p) {
+  const user = session_(p.token);
+  const access = REQ_ACCESS_ && REQ_ACCESS_.access;
+  const isAdmin = isAdminRole_(access ? access.role : user.role);
+  return withScriptLock_(function() {
+    const s = boxSettings_();
+    const id = String(p.id || '').trim();
+    const at = s.presets.findIndex(function(x) { return x.id === id; });
+    if (at < 0) throw new Error('That box size was already removed.');
+    if (!isAdmin && s.presets[at].by && s.presets[at].by !== normalize_(user.email)) {
+      throw new Error('Only the member who added this box size or an Admin can remove it.');
+    }
+    s.presets.splice(at, 1);
+    brandingSet_('BoxPresets', JSON.stringify(s.presets), 'Saved box sizes (cm) for packing');
+    return { success: true, enabled: s.enabled, divisor: s.divisor, presets: s.presets };
+  });
+}
+
+function packageDetailsSheet_() {
+  const ss = ss_();
+  let sh = ss.getSheetByName(CONFIG.PACKAGE_DETAILS_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(CONFIG.PACKAGE_DETAILS_SHEET);
+    sh.getRange(1, 1, 1, PACKAGE_DETAILS_HEADERS_.length).setValues([PACKAGE_DETAILS_HEADERS_]);
+    try { sh.setFrozenRows(1); sh.getRange(1, 1, 1, PACKAGE_DETAILS_HEADERS_.length).setFontWeight('bold'); } catch (_) {}
+  }
+  return sh;
+}
+
+/** Volumetric and chargeable weight from the box size and actual weight. */
+function packageWeights_(l, b, h, actual, divisor) {
+  const vol = (l > 0 && b > 0 && h > 0) ? round2_(l * b * h / divisor) : null;
+  let charge = null;
+  if (vol !== null && actual > 0) charge = Math.max(vol, actual);
+  else if (vol !== null) charge = vol;
+  else if (actual > 0) charge = actual;
+  return { volumetric: vol, chargeable: charge === null ? null : round2_(charge) };
+}
+
+/**
+ * Save the box and weight of one packed order (one row per order and recording type; saving
+ * again replaces it). The server works out volumetric and chargeable weight.
+ */
+function savePackageDetails_(p) {
+  const user = session_(p.token);
+  const s = boxSettings_();
+  if (!s.enabled) throw new Error('Box dimensions are switched off. The Super Admin can switch them on in Settings.');
+  const platform = String(p.platform || '').trim();
+  const order = canonicalOrderId_(p.orderId, platform);
+  const rawType = normalize_(p.recordingType || 'Forward');
+  const type = rawType === 'return' ? 'Return' : 'Forward';
+  if (!order) throw new Error('Order ID is required to save box details.');
+  const l = boxNumber_(p.l, 1000), b = boxNumber_(p.b, 1000), h = boxNumber_(p.h, 1000);
+  const actual = boxNumber_(p.actualWeight, 1000);
+  if ([l, b, h, actual].some(function(x) { return x !== null && isNaN(x); })) {
+    throw new Error('Box sizes and weight must be numbers above 0 (cm and kg, up to 1000).');
+  }
+  const dims = [l, b, h].filter(function(x) { return x !== null; }).length;
+  if (dims > 0 && dims < 3) throw new Error('Enter all three: length, breadth and height.');
+  if (!dims && actual === null) throw new Error('Enter the box size or the actual weight.');
+  const box = String(p.boxName || '').trim().slice(0, 40) || (dims ? 'Custom' : '');
+  const w = packageWeights_(l, b, h, actual, s.divisor);
+  const row = [new Date(), order, platform, type, box, l === null ? '' : l, b === null ? '' : b, h === null ? '' : h,
+    actual === null ? '' : actual, w.volumetric === null ? '' : w.volumetric, w.chargeable === null ? '' : w.chargeable,
+    s.divisor, normalize_(user.email)];
+  return withScriptLock_(function() {
+    const sh = packageDetailsSheet_();
+    const values = sh.getDataRange().getValues();
+    const key = normalizeOrderId_(order) + '|' + type.toLowerCase();
+    let replaced = false;
+    for (let i = values.length - 1; i >= 1; i--) {
+      const rowType = normalize_(values[i][3]) === 'return' ? 'return' : 'forward';
+      if (normalizeOrderId_(values[i][1]) + '|' + rowType !== key) continue;
+      if (!replaced) {
+        sh.getRange(i + 1, 1, 1, row.length).setValues([row]);
+        try { sh.getRange(i + 1, 1).setNumberFormat('dd-mmm-yy hh:mm'); } catch (_) {}
+        replaced = true;
+      } else {
+        sh.deleteRow(i + 1); // an older second row of the same order and type
+      }
+    }
+    if (!replaced) logAppend_(sh, row);
+    return {
+      success: true, replaced: replaced, orderId: order, platform: platform, recordingType: type, box: box,
+      l: l, b: b, h: h, actualWeight: actual, volumetricWeight: w.volumetric, chargeableWeight: w.chargeable, divisor: s.divisor
+    };
+  });
+}
+
+/** Box details by order and type, for reports: key = normalized order id + '|' + forward/return. */
+function packageDetailsByOrder_() {
+  const out = {};
+  let sh = null;
+  try { sh = ss_().getSheetByName(CONFIG.PACKAGE_DETAILS_SHEET); } catch (_) { sh = null; }
+  if (!sh) return out;
+  const v = sh.getDataRange().getValues();
+  for (let i = 1; i < v.length; i++) {
+    const order = normalizeOrderId_(v[i][1]);
+    if (!order) continue;
+    const t = normalize_(v[i][3]) === 'return' ? 'return' : 'forward';
+    out[order + '|' + t] = {
+      box: v[i][4], l: v[i][5], b: v[i][6], h: v[i][7], actual: v[i][8], volumetric: v[i][9], chargeable: v[i][10]
+    };
+  }
+  return out;
 }

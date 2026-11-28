@@ -9,7 +9,7 @@ import { fmtDate } from '../dateFormat';
 
 /** Same order as the Sheet. */
 export const BACKUP_TABS = ['Users', 'OrderLog', 'ReturnLog', 'DownloadLog', 'UploadLog', 'SecurityLog', 'Branding', 'TrashLog',
-  'OrderManifest', 'PackVerificationLog', 'GTINCatalog'];
+  'OrderManifest', 'PackVerificationLog', 'GTINCatalog', 'PackageDetails'];
 /** Lists that are copied whole even for a date range (they are not time logs). */
 export const REFERENCE_TABS = ['Users', 'Branding', 'GTINCatalog'];
 
@@ -25,6 +25,8 @@ const DEFAULT_HEADERS: Record<string, string[]> = {
   OrderManifest: ['Timestamp', 'Order ID', 'Platform', 'Assigned Packer Name', 'Assigned Packer Email', 'Processed By Name', 'Processed By Email', 'Total Items Count', 'Items List', 'Status', 'Notes', 'Packed At', 'Packed By Name', 'Video Drive Link'],
   PackVerificationLog: ['Timestamp', 'Order ID', 'Platform', 'Assigned Packer', 'Verified By Packer', 'Packer Email', 'Processed By', 'Status', 'Total Required Items', 'Total Scanned Items', 'Items Summary', 'Scanned GTINs Log', 'Duration Seconds', 'Drive Video URL'],
   GTINCatalog: ['Timestamp', 'GTIN', 'SKU', 'Product Name', 'Short Name', 'Category', 'Image URL', 'Default Quantity', 'Notes', 'Tag'],
+  PackageDetails: ['Timestamp', 'Order ID', 'Platform', 'Recording Type', 'Box', 'Length (cm)', 'Breadth (cm)', 'Height (cm)',
+    'Actual Weight (kg)', 'Volumetric Weight (kg)', 'Chargeable Weight (kg)', 'Volumetric Divisor', 'Packer Email'],
 };
 
 export interface BackupTabData {

@@ -42,6 +42,7 @@ const ROUTES: Record<string, Route> = {
   },
   checkDuplicateOrder: { kind: 'read', run: R('checkDuplicateOrder_') },
   getTeamActivity: { kind: 'read', run: R('getTeamActivity_') },
+  getBoxSettings: { kind: 'read', run: R('getBoxSettings_') },
   saveOrderManifest: { kind: 'write', run: R('saveOrderManifest_'), manifest: true },
   saveOrderManifestsBatch: { kind: 'write', run: R('saveOrderManifestsBatch_'), manifest: true },
   updateManifestStatus: { kind: 'write', run: R('updateManifestStatus_'), manifest: true },
