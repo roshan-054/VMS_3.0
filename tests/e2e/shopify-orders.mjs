@@ -129,6 +129,35 @@ try {
   await sa.waitForFunction(() => !document.querySelector('#shopify-orders-panel tr[data-order="#OD-20001"]'));
   check('assigned order left the waiting list', true);
 
+  // 2b. Filters for bulk assign: COD/Prepaid, single product, product SKU, date; only shown orders get assigned.
+  const rowsShown = () => sa.locator('#shopify-orders-panel tr[data-order]').evaluateAll((rs) => rs.map((r) => r.getAttribute('data-order')).sort().join(','));
+  await sa.locator('tr[data-order="#OD-20003"] input[type=checkbox]').check();
+  await sa.selectOption('#shopify-filter-payment', 'COD');
+  check('COD filter shows only the COD order', (await rowsShown()) === '#OD-20002', await rowsShown());
+  check('count says 1 of 2', /Showing 1 of 2/.test(await sa.locator('#shopify-filter-count').innerText()));
+  await sa.locator('#shopify-select-filtered').click();
+  check('hidden ticked order not counted for assign', /Assign 1 selected/.test(await sa.locator('#shopify-assign-selected').innerText()), await sa.locator('#shopify-assign-selected').innerText());
+  await sa.screenshot({ path: `${SHOTS}/bulk-filters.png` });
+  await sa.selectOption('#shopify-filter-payment', 'Prepaid');
+  check('Prepaid filter', (await rowsShown()) === '#OD-20003', await rowsShown());
+  await sa.selectOption('#shopify-filter-payment', '');
+  await sa.selectOption('#shopify-filter-lines', 'single');
+  check('single-product filter', (await rowsShown()) === '#OD-20002,#OD-20003', await rowsShown());
+  await sa.selectOption('#shopify-filter-lines', 'multi');
+  check('multi-product filter', (await rowsShown()) === '', await rowsShown());
+  await sa.selectOption('#shopify-filter-lines', '');
+  await sa.selectOption('#shopify-filter-sku', 'NEW-SKU-9');
+  check('product filter', (await rowsShown()) === '#OD-20003', await rowsShown());
+  await sa.locator('#shopify-filter-clear').click();
+  const day = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  await sa.fill('#shopify-filter-from', day(now + 86400e3));
+  check('date filter (tomorrow) hides today\'s orders', (await rowsShown()) === '', await rowsShown());
+  await sa.fill('#shopify-filter-from', day(now - 900e3));
+  await sa.fill('#shopify-filter-to', day(now - 900e3));
+  check('date filter (order day) shows them', (await rowsShown()).includes('#OD-20003'), await rowsShown());
+  await sa.locator('#shopify-filter-clear').click();
+  await sa.locator('#shopify-select-none').click();
+
   // 3. Bulk assign: the order with an unknown SKU is held back.
   await sa.locator('tr[data-order="#OD-20002"] input[type=checkbox]').check();
   await sa.locator('tr[data-order="#OD-20003"] input[type=checkbox]').check();
