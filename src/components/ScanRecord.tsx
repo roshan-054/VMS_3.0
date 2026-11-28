@@ -59,6 +59,7 @@ import {
   getVerificationSettings,
 } from '../lib/manifestStorage';
 import { PackVerificationModal } from './PackVerificationModal';
+import { BoxDetailsPanel, type BoxDetailsPanelHandle, type BoxTarget } from './BoxDetailsPanel';
 import { fmtDateTime } from '../lib/dateFormat';
 
 const MIN_VIDEO_BYTES = 64 * 1024; // anything smaller has no real footage
@@ -96,6 +97,14 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   const [customPlatform, setCustomPlatform] = useState('');
   
   const effectivePlatform = platform === 'Custom' ? customPlatform.trim() || 'Custom' : platform;
+
+  // Box & weight panel: the order being scanned or recorded, else the order recorded last (so the
+  // weight can still be typed after the recording stops, until the next order is scanned).
+  const boxPanelRef = useRef<BoxDetailsPanelHandle>(null);
+  const [lastBoxTarget, setLastBoxTarget] = useState<BoxTarget | null>(null);
+  const boxTarget: BoxTarget | null = orderId.trim()
+    ? { orderId: formatOrderId(orderId.trim(), effectivePlatform), platform: effectivePlatform, recordingType }
+    : lastBoxTarget;
 
   // Camera & Stream State
   const [isCameraActive, setIsCameraActive] = useState(false);
@@ -1242,6 +1251,12 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       // (no camera warm-up or dark first second).
       releaseWakeLock();
 
+      // Box & weight typed during the recording are saved with the order now; the panel keeps
+      // showing this order so the weight can still be added after packing.
+      const boxFor: BoxTarget = { orderId: meta.orderId, platform: meta.effectivePlatform, recordingType: meta.recordingType };
+      setLastBoxTarget(boxFor);
+      boxPanelRef.current?.saveIfFilled().catch(() => undefined);
+
       const sizeMb = (blob.size / (1024 * 1024)).toFixed(2);
       let overLimit = exceedsMaxVideoSize(blob.size);
       if (overLimit) {
@@ -2008,6 +2023,14 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
               <LocalBackupFolderPicker onShowToast={onShowToast} />
             </div>
           </div>
+
+          <BoxDetailsPanel
+            ref={boxPanelRef}
+            target={boxTarget}
+            currentUser={currentUser}
+            onShowToast={onShowToast}
+            onScan={(code) => applyOrderCodeRef.current(code, 'scanner')}
+          />
         </div>
       </div>
 

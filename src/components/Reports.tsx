@@ -214,6 +214,16 @@ export const Reports: React.FC<ReportsProps> = ({ onShowToast }) => {
     return list;
   }, [previewRows, inTableSearch, sortColumn, sortDirection]);
 
+  // Every column any row has (box columns are added by the backend when that feature is on).
+  const reportHeaders = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    displayRows.forEach((r) => Object.keys(r).forEach((k) => {
+      if (!seen.has(k)) { seen.add(k); out.push(k); }
+    }));
+    return out;
+  }, [displayRows]);
+
   // Statistics Summary
   const stats = useMemo(() => {
     const total = displayRows.length;
@@ -241,7 +251,7 @@ export const Reports: React.FC<ReportsProps> = ({ onShowToast }) => {
       return;
     }
 
-    const headers = Object.keys(displayRows[0]);
+    const headers = reportHeaders;
     const csvContent = [
       headers.join(','),
       ...displayRows.map((row) =>
@@ -274,7 +284,7 @@ export const Reports: React.FC<ReportsProps> = ({ onShowToast }) => {
     try {
       const XLSX = await import('xlsx');
       const wb = XLSX.utils.book_new();
-      const ws = XLSX.utils.json_to_sheet(displayRows);
+      const ws = XLSX.utils.json_to_sheet(displayRows, { header: reportHeaders });
       XLSX.utils.book_append_sheet(wb, ws, 'Audit Report');
       XLSX.writeFile(wb, `Packing_Audit_Report_${fromDate}_to_${toDate}.xlsx`);
       onShowToast('Excel Report (.xlsx) exported successfully!', 'success');
@@ -579,7 +589,7 @@ export const Reports: React.FC<ReportsProps> = ({ onShowToast }) => {
               <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200 sticky top-0 z-10 shadow-2xs">
                 <tr>
                   <th className="px-3 py-3 w-10 text-center text-slate-400">#</th>
-                  {Object.keys(displayRows[0]).map((h, i) => (
+                  {reportHeaders.map((h, i) => (
                     <th
                       key={i}
                       onClick={() => toggleSort(h)}
@@ -607,7 +617,7 @@ export const Reports: React.FC<ReportsProps> = ({ onShowToast }) => {
                     <td className="px-3 py-2.5 text-center text-slate-400 text-[11px] font-sans">
                       {rIdx + 1}
                     </td>
-                    {Object.keys(displayRows[0]).map((h, cIdx) => {
+                    {reportHeaders.map((h, cIdx) => {
                       const val = String(row[h] ?? '');
                       const isLink = val.startsWith('http://') || val.startsWith('https://');
                       const isDriveId = h === 'Drive File ID' && val.length > 5;

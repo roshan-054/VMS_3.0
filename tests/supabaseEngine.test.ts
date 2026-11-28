@@ -24,6 +24,7 @@ const HEADERS: Record<string, string[]> = {
   OrderManifest: ['Timestamp', 'Order ID', 'Platform', 'Assigned Packer Name', 'Assigned Packer Email', 'Processed By Name', 'Processed By Email', 'Total Items Count', 'Items List', 'Status', 'Notes', 'Packed At', 'Packed By Name', 'Video Drive Link'],
   PackVerificationLog: ['Timestamp', 'Order ID', 'Platform', 'Assigned Packer', 'Verified By Packer', 'Packer Email', 'Processed By', 'Status', 'Total Required Items', 'Total Scanned Items', 'Items Summary', 'Scanned GTINs Log', 'Duration Seconds', 'Drive Video URL'],
   GTINCatalog: ['Timestamp', 'GTIN', 'SKU', 'Product Name', 'Short Name', 'Category', 'Image URL', 'Default Quantity', 'Notes', 'Tag'],
+  PackageDetails: ['Timestamp', 'Order ID', 'Platform', 'Recording Type', 'Box', 'Length (cm)', 'Breadth (cm)', 'Height (cm)', 'Actual Weight (kg)', 'Volumetric Weight (kg)', 'Chargeable Weight (kg)', 'Volumetric Divisor', 'Packer Email'],
 };
 
 // Deterministic pseudo-random data.
@@ -52,6 +53,7 @@ function fixtures(): Record<string, unknown[][]> {
     if (rnd() < 0.5) {
       t.UploadLog.push(pad([new Date(ts.getTime() - 60000), oid, pf, pe, oid + '_' + pf + '_' + type + '.mp4', '12 MB', 'up-' + i, 'Uploaded to Google Drive', 100, fid, 'Completed', '', type, 'Recorder', job], 15));
     }
+    if (i % 4 === 0) t.PackageDetails.push([new Date(ts.getTime() + 30000), oid, pf, type, i % 8 ? 'Box-1' : 'Custom', 10, 10, 3, 0.25, 0.06, 0.25, 5000, pe]);
     if (rnd() < 0.3) t.DownloadLog.push(pad([new Date(ts.getTime() + DAY), oid, pf, pick(PACKERS), oid + '.mp4', '12 MB', 'single', type], 8));
   }
   for (let i = 0; i < 40; i++) {
@@ -79,7 +81,7 @@ function makeHarness(data: Record<string, unknown[][]>) {
   // The harness formatDate only knows a few letters; use the full one (same as Apps Script).
   rt.sandbox.Utilities.formatDate = formatDate;
   for (const [name, rows] of Object.entries(data)) {
-    const sh = rt.sheets.get(name);
+    const sh = rt.sheets.get(name) || rt.sandbox.SpreadsheetApp.getActiveSpreadsheet().insertSheet(name);
     sh.rows.length = 0;
     sh.rows.push(HEADERS[name].slice(), ...rows.map((r) => r.map((v) => (v instanceof Date ? new Date(v.getTime()) : v))));
   }
@@ -207,6 +209,14 @@ for (const [name, action, payload, call, as] of READS) {
     assert.equal(ops.length, 0, 'a read must not write');
   });
 }
+
+test('report from Supabase carries the box and weight columns', () => {
+  const { engine } = both('getReportData', { fromDate: ago(45), toDate: today }, { call: (G, p) => G('getReportData_')(p) });
+  const withBox = engine.rows.filter((r: any) => r['Box']);
+  assert.ok(withBox.length > 10, 'orders with box details');
+  assert.equal(withBox[0]['Volumetric Weight (kg)'], 0.06);
+  assert.ok(engine.rows.every((r: any) => 'Chargeable Weight (kg)' in r));
+});
 
 const WRITES: Array<[string, string, any, (G: any, p: any) => any, string[]]> = [
   ['save new manifest', 'saveOrderManifest', { manifest: { orderId: 'NEW-77', platform: 'D2C', items: [{ productName: 'Soap', sku: 'S1', quantity: 2 }], processedByName: 'Office' } }, (G, p) => G('saveOrderManifest_')(p), ['OrderManifest']],
