@@ -184,6 +184,7 @@ const ago = (d: number) => formatDate(new Date(Date.now() - d * DAY), 'Asia/Kolk
 
 const READS: Array<[string, string, any, (G: any, p: any) => any, ('admin' | 'user')?]> = [
   ['search: newest', 'advancedSearch', {}, (G, p) => G('advancedSearch_')(p)],
+  ['return settings', 'getReturnSettings', {}, (G, p) => G('getReturnSettings_')(p), 'user'],
   ['search: order id part', 'advancedSearch', { orderId: '405-1000' }, (G, p) => G('advancedSearch_')(p)],
   ['search: platform + type', 'advancedSearch', { platform: 'Amazon', recordingType: 'Return' }, (G, p) => G('advancedSearch_')(p)],
   ['search: custom platform', 'advancedSearch', { platform: 'custom' }, (G, p) => G('advancedSearch_')(p)],

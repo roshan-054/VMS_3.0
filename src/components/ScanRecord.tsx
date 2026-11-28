@@ -60,6 +60,7 @@ import {
 } from '../lib/manifestStorage';
 import { PackVerificationModal } from './PackVerificationModal';
 import { BoxDetailsPanel, type BoxDetailsPanelHandle, type BoxTarget } from './BoxDetailsPanel';
+import { ReturnDetailsPanel, type ReturnDetailsPanelHandle } from './ReturnDetailsPanel';
 import { fmtDateTime } from '../lib/dateFormat';
 
 const MIN_VIDEO_BYTES = 64 * 1024; // anything smaller has no real footage
@@ -105,6 +106,11 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
   const boxTarget: BoxTarget | null = orderId.trim()
     ? { orderId: formatOrderId(orderId.trim(), effectivePlatform), platform: effectivePlatform, recordingType }
     : lastBoxTarget;
+  // Return details panel: shown in Return mode for the same order as the box panel.
+  const returnPanelRef = useRef<ReturnDetailsPanelHandle>(null);
+  const returnTarget = boxTarget && boxTarget.recordingType === 'Return'
+    ? { orderId: boxTarget.orderId, platform: boxTarget.platform }
+    : null;
 
   // Camera & Stream State
   const [isCameraActive, setIsCameraActive] = useState(false);
@@ -1270,6 +1276,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
       const boxFor: BoxTarget = { orderId: meta.orderId, platform: meta.effectivePlatform, recordingType: meta.recordingType };
       setLastBoxTarget(boxFor);
       boxPanelRef.current?.saveIfFilled().catch(() => undefined);
+      if (meta.recordingType === 'Return') returnPanelRef.current?.saveIfFilled().catch(() => undefined);
 
       const sizeMb = (blob.size / (1024 * 1024)).toFixed(2);
       let overLimit = exceedsMaxVideoSize(blob.size);
@@ -2037,6 +2044,16 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
               <LocalBackupFolderPicker onShowToast={onShowToast} />
             </div>
           </div>
+
+          {recordingType === 'Return' && (
+            <ReturnDetailsPanel
+              ref={returnPanelRef}
+              target={returnTarget}
+              currentUser={currentUser}
+              onShowToast={onShowToast}
+              onScan={(code) => applyOrderCodeRef.current(code, 'scanner')}
+            />
+          )}
 
           <BoxDetailsPanel
             ref={boxPanelRef}

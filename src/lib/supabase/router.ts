@@ -44,6 +44,7 @@ const ROUTES: Record<string, Route> = {
   getTeamActivity: { kind: 'read', run: R('getTeamActivity_') },
   getBoxSettings: { kind: 'read', run: R('getBoxSettings_') },
   getShopifyOrders: { kind: 'read', run: R('getShopifyOrders_') },
+  getReturnSettings: { kind: 'read', run: R('getReturnSettings_') },
   saveOrderManifest: { kind: 'write', run: R('saveOrderManifest_'), manifest: true },
   saveOrderManifestsBatch: { kind: 'write', run: R('saveOrderManifestsBatch_'), manifest: true },
   updateManifestStatus: { kind: 'write', run: R('updateManifestStatus_'), manifest: true },

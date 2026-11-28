@@ -26,10 +26,12 @@ import {
   CheckCircle,
   FileSpreadsheet,
   X,
-  Tag
+  Tag,
+  PackageX,
 } from 'lucide-react';
 import { AnalyticsData, DailyMetricItem, VideoRecord } from '../types';
 import { requestApi } from '../lib/api';
+import { ReturnsAnalytics } from './ReturnsAnalytics';
 import { computeLocalAnalyticsData } from '../lib/localAnalytics';
 import { getStoredManifests, getStoredGtinCatalog, enrichManifestItems } from '../lib/manifestStorage';
 import { getDirectImageUrl } from '../lib/branding';
@@ -442,7 +444,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast, userKey }) =>
   const [activeChartMode, setActiveChartMode] = useState<'total' | 'forward' | 'return'>('total');
 
   // Advanced Intelligence State & Memos
-  const [activeTab, setActiveTab] = useState<'overview' | 'intelligence'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'intelligence' | 'returns'>('overview');
   const [skuSearchQuery, setSkuSearchQuery] = useState('');
   const [skuSortMode, setSkuSortMode] = useState<'volume-desc' | 'name-asc'>('volume-desc');
   const [topSkuSearch, setTopSkuSearch] = useState('');
@@ -1431,9 +1433,23 @@ export const Analytics: React.FC<AnalyticsProps> = ({ onShowToast, userKey }) =>
           <Sparkles className="w-4 h-4" />
           Advanced Order & SKU Intelligence
         </button>
+        <button
+          id="analytics-returns-tab"
+          onClick={() => setActiveTab('returns')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer ${
+            activeTab === 'returns'
+              ? 'bg-amber-600 text-white shadow-xs'
+              : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+          }`}
+        >
+          <PackageX className="w-4 h-4" />
+          Returns & RTO
+        </button>
       </div>
 
-      {activeTab === 'intelligence' ? (
+      {activeTab === 'returns' ? (
+        <ReturnsAnalytics fromDate={fromDate} toDate={toDate} platform={platformFilter} onShowToast={onShowToast} />
+      ) : activeTab === 'intelligence' ? (
         <div className="space-y-6">
           {/* 1. Daily Order Process Count with Platform */}
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">

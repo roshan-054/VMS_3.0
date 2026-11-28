@@ -39,6 +39,7 @@ const CONFIG = {
   GTIN_CATALOG_SHEET: 'GTINCatalog',
   PACKAGE_DETAILS_SHEET: 'PackageDetails',
   SHOPIFY_ORDERS_SHEET: 'ShopifyOrders',
+  RETURN_DETAILS_SHEET: 'ReturnDetails',
 
   // Limits
   MAX_VIDEO_BYTES: 1024 * 1024 * 1024 * 20, // 20 GB technical ceiling; the admin limit (Branding MaxVideoSizeMb) applies below it
@@ -161,6 +162,12 @@ function doPost(e) {
       case 'saveBoxPreset': return output_(saveBoxPreset_(p));
       case 'deleteBoxPreset': return output_(deleteBoxPreset_(p));
       case 'savePackageDetails': return output_(savePackageDetails_(p));
+      case 'getReturnSettings': return output_(getReturnSettings_(p));
+      case 'saveLogisticsPartner': return output_(saveLogisticsPartner_(p));
+      case 'deleteLogisticsPartner': return output_(deleteLogisticsPartner_(p));
+      case 'saveReturnDetails': return output_(saveReturnDetails_(p));
+      case 'getReturnOrderInfo': return output_(getReturnOrderInfo_(p));
+      case 'getReturnAnalytics': return output_(getReturnAnalytics_(p));
       case 'getShopifySettings': return output_(getShopifySettings_(p));
       case 'saveShopifySettings': return output_(saveShopifySettings_(p));
       case 'testShopifyConnection': return output_(testShopifyConnection_(p));
@@ -642,7 +649,8 @@ function setupSystem() {
     [CONFIG.ORDER_MANIFEST_SHEET,['Timestamp','Order ID','Platform','Assigned Packer Name','Assigned Packer Email','Processed By Name','Processed By Email','Total Items Count','Items List','Status','Notes','Packed At','Packed By Name','Video Drive Link']],
     [CONFIG.PACK_VERIFICATION_LOG_SHEET,['Timestamp','Order ID','Platform','Assigned Packer','Verified By Packer','Packer Email','Processed By','Status','Total Required Items','Total Scanned Items','Items Summary','Scanned GTINs Log','Duration Seconds','Drive Video URL']],
     [CONFIG.GTIN_CATALOG_SHEET,['Timestamp','GTIN','SKU','Product Name','Short Name','Category','Image URL','Default Quantity','Notes','Tag']],
-    [CONFIG.PACKAGE_DETAILS_SHEET,PACKAGE_DETAILS_HEADERS_]
+    [CONFIG.PACKAGE_DETAILS_SHEET,PACKAGE_DETAILS_HEADERS_],
+    [CONFIG.RETURN_DETAILS_SHEET,RETURN_DETAILS_HEADERS_]
   ];
   specs.forEach(([name,headers])=>{
     let sh=ss.getSheetByName(name);
@@ -851,7 +859,7 @@ const ACTION_PERMISSIONS_ = {
   scanSheetCleanup: 'canManageSettings', runSheetCleanup: 'canManageSettings', getSheetCleanupProgress: 'canManageSettings',
   listCleanupArchive: 'canManageSettings', restoreCleanupArchive: 'canManageSettings',
   getBackendUpdateStatus: 'canManageSettings', updateBackend: 'canManageSettings', rollbackBackend: 'canManageSettings',
-  getStationQueues: 'admin', getTeamActivity: 'admin'
+  getStationQueues: 'admin', getTeamActivity: 'admin', getReturnAnalytics: 'canAccessAnalytics'
 };
 
 function roleDefaultPermissions_(role){
@@ -1412,7 +1420,7 @@ const DATE_FORMATTED_SHEETS_ = function() {
   return [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET, CONFIG.DOWNLOAD_LOG_SHEET,
     CONFIG.SECURITY_LOG_SHEET, CONFIG.TRASH_LOG_SHEET, CONFIG.PACK_VERIFICATION_LOG_SHEET, CONFIG.USERS_SHEET,
     CONFIG.ORDER_MANIFEST_SHEET, CONFIG.GTIN_CATALOG_SHEET, CONFIG.BRANDING_SHEET, CONFIG.PACKAGE_DETAILS_SHEET,
-    CONFIG.SHOPIFY_ORDERS_SHEET];
+    CONFIG.SHOPIFY_ORDERS_SHEET, CONFIG.RETURN_DETAILS_SHEET];
 };
 function isDateFormattedSheet_(name) {
   return DATE_FORMATTED_SHEETS_().indexOf(name) !== -1 || / Archive$/.test(String(name || ''));
@@ -3867,6 +3875,11 @@ function getReportData_(p){
   try { boxByOrder = packageDetailsByOrder_(); } catch (_) { boxByOrder = {}; }
   let boxOn = Object.keys(boxByOrder).length > 0;
   try { boxOn = boxOn || boxSettings_().enabled; } catch (_) {}
+  // Return details (type, logistics partner, condition, customer): added when any return has them.
+  let retByOrder = {};
+  try { retByOrder = returnDetailsByOrder_(); } catch (_) { retByOrder = {}; }
+  const retOn = Object.keys(retByOrder).length > 0;
+
 
   const sheetsToScan = [
     { name: CONFIG.ORDER_LOG_SHEET, defaultType: 'Forward', source: 'Order' },
@@ -3926,6 +3939,18 @@ function getReportData_(p){
           reportRow['Actual Weight (kg)'] = cell(bx.actual);
           reportRow['Volumetric Weight (kg)'] = cell(bx.volumetric);
           reportRow['Chargeable Weight (kg)'] = cell(bx.chargeable);
+        }
+        if (retOn) {
+          const rd = rt === 'Return' ? (retByOrder[normalizeOrderId_(oid)] || {}) : {};
+          reportRow['Return Type'] = rd.returnType || '';
+          reportRow['Logistics Partner'] = rd.partner || '';
+          reportRow['Return Condition'] = rd.condition || '';
+          reportRow['Return Notes'] = rd.notes || '';
+          reportRow['Not Received Claim'] = rd.key ? (rd.claim ? 'Yes' : 'No') : '';
+          reportRow['Pincode'] = rd.pincode || '';
+          reportRow['Customer Name'] = rd.name || '';
+          reportRow['Customer Phone'] = rd.phone || '';
+          reportRow['Customer Email'] = rd.email || '';
         }
         rows.push(reportRow);
       }
@@ -6975,11 +7000,11 @@ function restoreCleanupArchive_(p) {
 const SB_TABS_ = [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET, CONFIG.DOWNLOAD_LOG_SHEET,
   CONFIG.SECURITY_LOG_SHEET, CONFIG.TRASH_LOG_SHEET, CONFIG.PACK_VERIFICATION_LOG_SHEET, CONFIG.USERS_SHEET,
   CONFIG.ORDER_MANIFEST_SHEET, CONFIG.GTIN_CATALOG_SHEET, CONFIG.BRANDING_SHEET, CONFIG.PACKAGE_DETAILS_SHEET,
-  CONFIG.SHOPIFY_ORDERS_SHEET];
+  CONFIG.SHOPIFY_ORDERS_SHEET, CONFIG.RETURN_DETAILS_SHEET];
 // Tabs only this script writes: the Sheet is the source of truth, so the sweep may remove rows from Supabase.
 const SB_SHEET_PRIMARY_TABS_ = [CONFIG.ORDER_LOG_SHEET, CONFIG.RETURN_LOG_SHEET, CONFIG.UPLOAD_LOG_SHEET,
   CONFIG.SECURITY_LOG_SHEET, CONFIG.TRASH_LOG_SHEET, CONFIG.USERS_SHEET, CONFIG.BRANDING_SHEET, CONFIG.PACKAGE_DETAILS_SHEET,
-  CONFIG.SHOPIFY_ORDERS_SHEET];
+  CONFIG.SHOPIFY_ORDERS_SHEET, CONFIG.RETURN_DETAILS_SHEET];
 const SB_SWEEP_MINUTES_ = 60;
 const SB_TRIGGER_HANDLER_ = 'sbSyncTick';
 
@@ -7010,7 +7035,9 @@ const SB_ACTION_TABS_ = {
   syncExternalGtinSheet: [CONFIG.GTIN_CATALOG_SHEET],
   setBoxFeature: [CONFIG.BRANDING_SHEET], saveBoxPreset: [CONFIG.BRANDING_SHEET], deleteBoxPreset: [CONFIG.BRANDING_SHEET],
   savePackageDetails: [CONFIG.PACKAGE_DETAILS_SHEET],
-  saveShopifySettings: [CONFIG.BRANDING_SHEET]
+  saveShopifySettings: [CONFIG.BRANDING_SHEET],
+  saveLogisticsPartner: [CONFIG.BRANDING_SHEET], deleteLogisticsPartner: [CONFIG.BRANDING_SHEET],
+  saveReturnDetails: [CONFIG.RETURN_DETAILS_SHEET, CONFIG.BRANDING_SHEET]
 };
 SB_ACTION_TABS_.removeUploadLog = SB_ACTION_TABS_.deleteLogEntry;
 SB_ACTION_TABS_.deleteOrderLog = SB_ACTION_TABS_.deleteLogEntry;
@@ -7107,6 +7134,7 @@ function rowKey_(tab, row) {
     case CONFIG.UPLOAD_LOG_SHEET: if (k(row[6])) return 'up:' + k(row[6]); break;
     case CONFIG.PACKAGE_DETAILS_SHEET: if (k(row[1])) return 'pk:' + k(row[1]) + '|' + k(row[3]); break;
     case CONFIG.SHOPIFY_ORDERS_SHEET: if (k(row[1])) return 'sp:' + k(row[1]); break;
+    case CONFIG.RETURN_DETAILS_SHEET: if (k(row[1])) return 'rd:' + k(row[1]); break;
   }
   return 'r:' + [k(row[0]), k(row[1]), k(row[2]), k(row[3])].join('|');
 }
@@ -8329,4 +8357,481 @@ function getShopifyOrders_(p) {
   }
   orders.sort(function(a, b) { return String(b.orderDate).localeCompare(String(a.orderDate)); });
   return { success: true, enabled: true, orders: orders, lastSync: lastSync || null };
+}
+
+/* =====================================================================================
+ * RETURN DETAILS & RTO ANALYTICS
+ * When a Return video is recorded, the station also notes what kind of return it is (RTO =
+ * the courier brought back an order that was never delivered, or a customer return), which
+ * logistics partner brought it back, the condition it came back in, notes, whether the
+ * customer said they never received it, and the customer's pincode / name / phone (filled in
+ * from the Shopify order when that data is there). One row per order in the ReturnDetails tab.
+ * Logistics partners are a shared list in the Branding tab (LogisticsPartners, JSON): any
+ * member can add one; the member who added it or an Admin can remove it.
+ * getReturnAnalytics_ turns this into return / RTO counts and rates by logistics partner,
+ * pincode, condition and customer, plus repeat and suspicious customers.
+ * ===================================================================================== */
+const RETURN_DETAILS_HEADERS_ = ['Timestamp', 'Order ID', 'Platform', 'Return Type', 'Logistics Partner', 'Return Condition',
+  'Notes', 'Pincode', 'Customer Name', 'Customer Phone', 'Customer Email', 'Not Received Claim', 'Recorded By'];
+const RETURN_TYPES_ = ['RTO', 'Customer Return'];
+const RETURN_CONDITIONS_ = ['Good / resellable', 'Opened / used', 'Damaged', 'Missing items', 'Wrong item', 'Empty box'];
+const DEFAULT_LOGISTICS_PARTNERS_ = ['Delhivery', 'Blue Dart', 'DTDC', 'Ekart', 'Xpressbees', 'Shadowfax', 'Ecom Express', 'India Post'];
+const MAX_LOGISTICS_PARTNERS_ = 100;
+const SHOPIFY_ORDERS_TAB_ = 'ShopifyOrders';
+
+function parseLogisticsPartners_(raw) {
+  if (raw === undefined || raw === null || String(raw).trim() === '') {
+    return DEFAULT_LOGISTICS_PARTNERS_.map(function(n, i) { return { id: 'd' + (i + 1), name: n, by: '' }; });
+  }
+  let list = [];
+  try { list = JSON.parse(String(raw)); } catch (_) { list = []; }
+  if (!Array.isArray(list)) return [];
+  return list.filter(function(x) { return x && String(x.name || '').trim(); })
+    .map(function(x) { return { id: String(x.id || ''), name: String(x.name).trim(), by: String(x.by || '') }; });
+}
+
+function returnSettings_() {
+  return {
+    partners: parseLogisticsPartners_(brandingValue_(brandingValues_(), 'LogisticsPartners')),
+    conditions: RETURN_CONDITIONS_.slice(),
+    returnTypes: RETURN_TYPES_.slice()
+  };
+}
+
+/** Any signed-in member: the logistics partner list and the return conditions. */
+function getReturnSettings_(p) {
+  session_(p.token);
+  const s = returnSettings_();
+  return { success: true, partners: s.partners, conditions: s.conditions, returnTypes: s.returnTypes };
+}
+
+/** Any member: add a logistics partner (kept for everyone). Same name again returns the existing one. */
+function saveLogisticsPartner_(p) {
+  const user = session_(p.token);
+  return withScriptLock_(function() {
+    const s = returnSettings_();
+    const name = String(p.name || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+    if (!name) throw new Error('Type the logistics partner name, for example Delhivery.');
+    const list = s.partners;
+    let item = list.find(function(x) { return normalize_(x.name) === normalize_(name); });
+    if (!item) {
+      if (list.length >= MAX_LOGISTICS_PARTNERS_) throw new Error('Up to ' + MAX_LOGISTICS_PARTNERS_ + ' logistics partners can be saved. Remove one first.');
+      item = { id: Utilities.getUuid().slice(0, 8), name: name, by: normalize_(user.email) };
+      list.push(item);
+      brandingSet_('LogisticsPartners', JSON.stringify(list), 'Logistics partners that bring back returns (shared list)');
+    }
+    return { success: true, partner: item, partners: list, conditions: s.conditions, returnTypes: s.returnTypes };
+  });
+}
+
+/** Remove a logistics partner: the member who added it, or an Admin. Saved returns keep their name. */
+function deleteLogisticsPartner_(p) {
+  const user = session_(p.token);
+  const access = REQ_ACCESS_ && REQ_ACCESS_.access;
+  const isAdmin = isAdminRole_(access ? access.role : user.role);
+  return withScriptLock_(function() {
+    const s = returnSettings_();
+    const id = String(p.id || '').trim();
+    const at = s.partners.findIndex(function(x) { return x.id === id; });
+    if (at < 0) throw new Error('That logistics partner was already removed.');
+    const by = s.partners[at].by;
+    if (!isAdmin && (!by || by !== normalize_(user.email))) {
+      throw new Error('Only the member who added this logistics partner or an Admin can remove it.');
+    }
+    s.partners.splice(at, 1);
+    brandingSet_('LogisticsPartners', JSON.stringify(s.partners), 'Logistics partners that bring back returns (shared list)');
+    return { success: true, partners: s.partners, conditions: s.conditions, returnTypes: s.returnTypes };
+  });
+}
+
+function returnDetailsSheet_() {
+  const ss = ss_();
+  let sh = ss.getSheetByName(CONFIG.RETURN_DETAILS_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(CONFIG.RETURN_DETAILS_SHEET);
+    sh.getRange(1, 1, 1, RETURN_DETAILS_HEADERS_.length).setValues([RETURN_DETAILS_HEADERS_]);
+    try { sh.setFrozenRows(1); sh.getRange(1, 1, 1, RETURN_DETAILS_HEADERS_.length).setFontWeight('bold'); } catch (_) {}
+  }
+  return sh;
+}
+
+/** Indian mobile numbers compare on the last 10 digits (+91 / 0 prefixes dropped). */
+function normalizePhone_(v) {
+  const d = String(v || '').replace(/\D+/g, '');
+  return d.length > 10 ? d.slice(-10) : d;
+}
+
+function normalizePincode_(v) {
+  const d = String(v || '').replace(/\D+/g, '');
+  return d.length >= 6 ? d.slice(0, 6) : d;
+}
+
+function returnTypeOf_(v) {
+  const t = normalize_(v);
+  if (!t) return '';
+  if (t === 'rto' || t.indexOf('rto') === 0 || t.indexOf('not delivered') >= 0 || t.indexOf('undelivered') >= 0) return 'RTO';
+  return 'Customer Return';
+}
+
+function truthy_(v) {
+  return v === true || /^(true|yes|1|y)$/i.test(String(v || '').trim());
+}
+
+/** Save the return details of one order (one row per order; saving again replaces it). */
+function saveReturnDetails_(p) {
+  const user = session_(p.token);
+  const platform = String(p.platform || '').trim();
+  const order = canonicalOrderId_(p.orderId, platform);
+  if (!order) throw new Error('Order ID is required to save return details.');
+  const type = returnTypeOf_(p.returnType);
+  const partner = String(p.logisticsPartner || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+  const condition = String(p.condition || '').trim().slice(0, 40);
+  const notes = String(p.notes || '').trim().replace(/[\r\n]+/g, ' ').slice(0, 500);
+  const rawPin = String(p.pincode || '').trim();
+  const pin = normalizePincode_(rawPin);
+  if (rawPin && !/^\d{6}$/.test(pin)) throw new Error('Pincode must be 6 digits.');
+  const name = String(p.customerName || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+  const phone = normalizePhone_(p.customerPhone);
+  if (p.customerPhone && String(p.customerPhone).trim() && phone.length < 10) throw new Error('Customer phone must have 10 digits.');
+  const email = normalize_(p.customerEmail).slice(0, 120);
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Customer email does not look right.');
+  const claim = truthy_(p.notReceivedClaim);
+  if (!type && !partner && !condition && !notes && !pin && !name && !phone && !claim) {
+    throw new Error('Fill in at least one return detail.');
+  }
+  // Partner names typed here that are not on the list yet are added for everyone.
+  if (partner) {
+    try {
+      const s = returnSettings_();
+      if (!s.partners.some(function(x) { return normalize_(x.name) === normalize_(partner); })) saveLogisticsPartner_({ token: p.token, name: partner });
+    } catch (_) {}
+  }
+  const row = [new Date(), order, platform, type, partner, condition, notes, pin, name, phone, email, claim ? 'Yes' : 'No', normalize_(user.email)];
+  return withScriptLock_(function() {
+    const sh = returnDetailsSheet_();
+    const values = sh.getDataRange().getValues();
+    const key = normalizeOrderId_(order);
+    let replaced = false;
+    for (let i = values.length - 1; i >= 1; i--) {
+      if (normalizeOrderId_(values[i][1]) !== key) continue;
+      if (!replaced) {
+        sh.getRange(i + 1, 1, 1, row.length).setValues([row]);
+        try { sh.getRange(i + 1, 1).setNumberFormat(SHEET_DATE_FORMAT_); } catch (_) {}
+        replaced = true;
+      } else {
+        sh.deleteRow(i + 1);
+      }
+    }
+    if (!replaced) logAppend_(sh, row);
+    try { bumpAnalyticsVersion_(); } catch (_) {}
+    return {
+      success: true, replaced: replaced, orderId: order, platform: platform, returnType: type, logisticsPartner: partner,
+      condition: condition, notes: notes, pincode: pin, customerName: name, customerPhone: phone, customerEmail: email,
+      notReceivedClaim: claim
+    };
+  });
+}
+
+function returnDetailsRows_() {
+  const out = [];
+  let sh = null;
+  try { sh = ss_().getSheetByName(CONFIG.RETURN_DETAILS_SHEET); } catch (_) { sh = null; }
+  if (!sh) return out;
+  const v = sh.getDataRange().getValues();
+  for (let i = 1; i < v.length; i++) {
+    const order = String(v[i][1] || '').trim();
+    if (!order) continue;
+    out.push({
+      ts: rowDate_(v[i][0]), orderId: order, key: normalizeOrderId_(order), platform: String(v[i][2] || '').trim(),
+      returnType: returnTypeOf_(v[i][3]), partner: String(v[i][4] || '').trim(), condition: String(v[i][5] || '').trim(),
+      notes: String(v[i][6] || '').trim(), pincode: normalizePincode_(v[i][7]), name: String(v[i][8] || '').trim(),
+      phone: normalizePhone_(v[i][9]), email: normalize_(v[i][10]), claim: truthy_(v[i][11]), by: String(v[i][12] || '').trim()
+    });
+  }
+  return out;
+}
+
+function returnDetailsByOrder_() {
+  const out = {};
+  returnDetailsRows_().forEach(function(r) { out[r.key] = r; });
+  return out;
+}
+
+/**
+ * Orders with customer data, read from the ShopifyOrders tab by header name (so it keeps working
+ * as columns are added). Returns { available, hasCustomer, hasPincode, hasCourier, byOrder, list }.
+ */
+function orderDirectory_() {
+  const out = { available: false, hasCustomer: false, hasPincode: false, hasCourier: false, byOrder: {}, list: [] };
+  let sh = null;
+  try { sh = ss_().getSheetByName(SHOPIFY_ORDERS_TAB_); } catch (_) { sh = null; }
+  if (!sh) return out;
+  const v = sh.getDataRange().getValues();
+  if (v.length < 1) return out;
+  const h = v[0].map(function(x) { return String(x || '').trim().toLowerCase(); });
+  const find = function(res) {
+    for (let r = 0; r < res.length; r++) for (let i = 0; i < h.length; i++) if (res[r].test(h[i])) return i;
+    return -1;
+  };
+  const c = {
+    order: find([/^order\s*(id|no|number|name)$/, /^order$/]),
+    date: find([/^order\s*date/, /^created/, /^synced\s*at/]),
+    name: find([/^customer\s*name$/, /^shipping\s*name$/, /^customer$/, /^name$/]),
+    phone: find([/phone|mobile/]),
+    email: find([/e-?mail/]),
+    pin: find([/pin\s*code|pincode|zip|postal/]),
+    city: find([/city/]),
+    state: find([/^(shipping\s*)?state$|province/]),
+    courier: find([/courier|carrier|tracking\s*company|logistic/]),
+    status: find([/^order\s*status$/, /^fulfil?ment(\s*status)?$/])
+  };
+  if (c.order < 0) return out;
+  out.available = true;
+  out.hasCustomer = c.phone >= 0 || c.email >= 0 || c.name >= 0;
+  out.hasPincode = c.pin >= 0;
+  out.hasCourier = c.courier >= 0;
+  const cell = function(row, i) { return i >= 0 ? row[i] : ''; };
+  for (let i = 1; i < v.length; i++) {
+    const order = String(cell(v[i], c.order) || '').trim();
+    if (!order) continue;
+    const o = {
+      orderId: order, key: normalizeOrderId_(order), date: rowDate_(cell(v[i], c.date)),
+      name: String(cell(v[i], c.name) || '').trim(), phone: normalizePhone_(cell(v[i], c.phone)),
+      email: normalize_(cell(v[i], c.email)), pincode: normalizePincode_(cell(v[i], c.pin)),
+      city: String(cell(v[i], c.city) || '').trim(), state: String(cell(v[i], c.state) || '').trim(),
+      courier: String(cell(v[i], c.courier) || '').trim(), status: String(cell(v[i], c.status) || '').trim()
+    };
+    out.byOrder[o.key] = o;
+    out.list.push(o);
+  }
+  return out;
+}
+
+/** Return details already saved for an order, and the customer from the order data (if any). */
+function getReturnOrderInfo_(p) {
+  session_(p.token);
+  const key = normalizeOrderId_(canonicalOrderId_(p.orderId, p.platform));
+  if (!key) throw new Error('Order ID is required.');
+  const saved = returnDetailsByOrder_()[key] || null;
+  let order = null;
+  try { order = orderDirectory_().byOrder[key] || null; } catch (_) { order = null; }
+  const pub = function(r) {
+    return r ? {
+      returnType: r.returnType || '', logisticsPartner: r.partner || r.courier || '', condition: r.condition || '', notes: r.notes || '',
+      pincode: r.pincode || '', customerName: r.name || '', customerPhone: r.phone || '', customerEmail: r.email || '',
+      notReceivedClaim: !!r.claim, city: r.city || '', state: r.state || ''
+    } : null;
+  };
+  return { success: true, saved: pub(saved), order: pub(order) };
+}
+
+/** Who a customer is across orders: phone first, then email, then name + pincode. */
+function customerKey_(r) {
+  if (r.phone && r.phone.length >= 10) return 'p:' + r.phone;
+  if (r.email) return 'e:' + r.email;
+  if (r.name && r.pincode) return 'n:' + normalize_(r.name).replace(/\s+/g, ' ') + '|' + r.pincode;
+  return '';
+}
+
+function maskPhone_(ph) {
+  return ph && ph.length >= 10 ? ph.slice(0, 2) + 'xxxxxx' + ph.slice(-2) : ph || '';
+}
+
+/**
+ * Return & RTO analytics for a date range (by return date; order counts by order date).
+ * Rates use the order data when it has the field (pincode, courier, customer); otherwise
+ * the forward videos recorded in the same range are the denominator for the overall rate.
+ */
+function getReturnAnalytics_(p) {
+  const user = session_(p.token);
+  const from = parseDateStart_(p.fromDate), to = parseDateEnd_(p.toDate);
+  if (isNaN(from) || isNaN(to)) throw new Error('Invalid dates.');
+  if (from > to) throw new Error('From Date cannot be after To Date.');
+  const minFlags = Math.max(2, Number(p.suspiciousThreshold) || 2);
+  const platform = normalize_(p.platform);
+  const dir = orderDirectory_();
+  const details = returnDetailsByOrder_();
+
+  // Every Return video in range (ReturnLog), with its details if saved.
+  const returns = [];
+  const seen = {};
+  const addReturn = function(key, orderId, pf, ts, by) {
+    if (!key || seen[key]) return;
+    if (platform && normalize_(pf) !== platform) return;
+    seen[key] = true;
+    const d = details[key] || {};
+    const o = dir.byOrder[key] || {};
+    returns.push({
+      key: key, orderId: orderId, platform: pf, ts: ts, by: by,
+      returnType: d.returnType || '', partner: d.partner || o.courier || '', condition: d.condition || '', notes: d.notes || '',
+      claim: !!d.claim, pincode: d.pincode || o.pincode || '', name: d.name || o.name || '', phone: d.phone || o.phone || '',
+      email: d.email || o.email || '', city: o.city || '', state: o.state || '', hasDetails: !!details[key]
+    });
+  };
+  try {
+    const sh = ss_().getSheetByName(CONFIG.RETURN_LOG_SHEET);
+    const v = sh ? sh.getDataRange().getValues() : [];
+    for (let i = 1; i < v.length; i++) {
+      const ts = rowDate_(v[i][0]);
+      if (isNaN(ts) || !inRange_(ts, from, to)) continue;
+      addReturn(normalizeOrderId_(v[i][1]), String(v[i][1] || '').trim(), String(v[i][2] || '').trim(), ts, String(v[i][3] || '').trim());
+    }
+  } catch (_) {}
+  // Details saved without a video row (yet) still count.
+  Object.keys(details).forEach(function(k) {
+    const d = details[k];
+    if (!isNaN(d.ts) && inRange_(d.ts, from, to)) addReturn(k, d.orderId, d.platform, d.ts, d.by);
+  });
+
+  // Forward videos packed in range (denominator when there is no order data).
+  let forwardCount = 0;
+  try {
+    const sh = ss_().getSheetByName(CONFIG.ORDER_LOG_SHEET);
+    const v = sh ? sh.getDataRange().getValues() : [];
+    const fseen = {};
+    for (let i = 1; i < v.length; i++) {
+      const ts = rowDate_(v[i][0]);
+      if (isNaN(ts) || !inRange_(ts, from, to)) continue;
+      if (platform && normalize_(v[i][2]) !== platform) continue;
+      const k = normalizeOrderId_(v[i][1]);
+      if (!k || fseen[k]) continue;
+      fseen[k] = true;
+      forwardCount++;
+    }
+  } catch (_) {}
+
+  // Orders in range from the order data (by order date).
+  const ordersInRange = dir.list.filter(function(o) { return !isNaN(o.date) && o.date >= from && o.date <= to; });
+
+  const totals = { returns: returns.length, rto: 0, customerReturns: 0, untyped: 0, notReceivedClaims: 0, damaged: 0,
+    withDetails: 0, forwardPacked: forwardCount, ordersInData: ordersInRange.length };
+  const bump = function(map, k, fn) { if (!map[k]) map[k] = fn(); return map[k]; };
+  const byPartner = {}, byPin = {}, byCondition = {}, customers = {};
+  const newGroup = function() { return { returns: 0, rto: 0, customerReturns: 0, claims: 0, damaged: 0, orders: 0 }; };
+  returns.forEach(function(r) {
+    if (r.returnType === 'RTO') totals.rto++;
+    else if (r.returnType === 'Customer Return') totals.customerReturns++;
+    else totals.untyped++;
+    if (r.claim) totals.notReceivedClaims++;
+    const bad = /damag|missing|wrong|empty|used|opened/i.test(r.condition);
+    if (/damag/i.test(r.condition)) totals.damaged++;
+    if (r.hasDetails) totals.withDetails++;
+    const groups = [bump(byPartner, r.partner || 'Not recorded', newGroup), bump(byPin, r.pincode || 'Not recorded', newGroup)];
+    groups.forEach(function(g) {
+      g.returns++;
+      if (r.returnType === 'RTO') g.rto++;
+      if (r.returnType === 'Customer Return') g.customerReturns++;
+      if (r.claim) g.claims++;
+      if (bad) g.damaged++;
+    });
+    byPin[r.pincode || 'Not recorded'].city = byPin[r.pincode || 'Not recorded'].city || r.city;
+    const c = bump(byCondition, r.condition || 'Not recorded', function() { return { count: 0 }; });
+    c.count++;
+  });
+  ordersInRange.forEach(function(o) {
+    if (dir.hasPincode && o.pincode) { const g = bump(byPin, o.pincode, newGroup); g.orders++; g.city = g.city || o.city; }
+    if (dir.hasCourier && o.courier) bump(byPartner, o.courier, newGroup).orders++;
+  });
+
+  // Customers: everyone with a return in range, plus all their orders in the order data.
+  const custOf = function(k, r) {
+    return bump(customers, k, function() {
+      return { key: k, name: '', phone: '', email: '', pincode: '', city: '', orders: 0, orderIds: [], returns: 0, rto: 0,
+        customerReturns: 0, claims: 0, damaged: 0, lastReturn: null, returnOrders: [] };
+    });
+  };
+  returns.forEach(function(r) {
+    const k = customerKey_(r);
+    if (!k) return;
+    const c = custOf(k, r);
+    c.name = c.name || r.name; c.phone = c.phone || r.phone; c.email = c.email || r.email; c.pincode = c.pincode || r.pincode; c.city = c.city || r.city;
+    c.returns++;
+    if (r.returnType === 'RTO') c.rto++;
+    if (r.returnType === 'Customer Return') c.customerReturns++;
+    if (r.claim) c.claims++;
+    if (/damag|missing|wrong|empty/i.test(r.condition)) c.damaged++;
+    if (!c.lastReturn || r.ts > c.lastReturn) c.lastReturn = r.ts;
+    c.returnOrders.push({ orderId: r.orderId, date: r.ts.toISOString(), type: r.returnType, partner: r.partner, condition: r.condition, claim: r.claim });
+  });
+  // Order counts per customer: all orders in the data (history matters for repeat / suspicious).
+  if (dir.hasCustomer) {
+    dir.list.forEach(function(o) {
+      const k = customerKey_(o);
+      if (!k) return;
+      const c = customers[k];
+      if (c) { c.orders++; if (c.orderIds.length < 50) c.orderIds.push(o.orderId); }
+    });
+  }
+  const custList = Object.keys(customers).map(function(k) {
+    const c = customers[k];
+    const flags = c.rto + c.claims;
+    const reasons = [];
+    if (c.rto >= 2) reasons.push(c.rto + ' RTOs');
+    if (c.claims >= 1) reasons.push(c.claims + (c.claims === 1 ? ' not-received claim' : ' not-received claims'));
+    if (c.damaged >= 2) reasons.push(c.damaged + ' bad-condition returns');
+    if (c.orders >= 2 && c.returns / c.orders >= 0.5) reasons.push(Math.round(100 * c.returns / c.orders) + '% of orders returned');
+    const suspicious = flags >= minFlags || (c.orders >= 2 && (c.rto + c.claims) / c.orders >= 0.5 && flags >= 1) || c.damaged >= minFlags;
+    return {
+      name: c.name, phone: maskPhone_(c.phone), phoneFull: isAdminRole_(user.role) ? c.phone : '', email: c.email, pincode: c.pincode,
+      city: c.city, orders: c.orders || c.returns, returns: c.returns, rto: c.rto, customerReturns: c.customerReturns, claims: c.claims,
+      damaged: c.damaged, returnRate: c.orders ? Math.round(1000 * c.returns / c.orders) / 10 : null,
+      lastReturn: c.lastReturn ? c.lastReturn.toISOString() : '', suspicious: suspicious, reasons: reasons,
+      score: c.rto * 2 + c.claims * 3 + c.damaged, returnOrders: c.returnOrders.slice(-20)
+    };
+  });
+  custList.sort(function(a, b) { return b.score - a.score || b.returns - a.returns; });
+
+  // Repeat buyers from the order data (2+ orders in range), with how many came back.
+  const repeat = [];
+  if (dir.hasCustomer) {
+    const buyers = {};
+    ordersInRange.forEach(function(o) {
+      const k = customerKey_(o);
+      if (!k) return;
+      const b = bump(buyers, k, function() { return { name: o.name, phone: o.phone, email: o.email, pincode: o.pincode, city: o.city, orders: 0 }; });
+      b.orders++;
+    });
+    Object.keys(buyers).forEach(function(k) {
+      const b = buyers[k];
+      if (b.orders < 2) return;
+      const c = customers[k];
+      repeat.push({ name: b.name, phone: maskPhone_(b.phone), phoneFull: isAdminRole_(user.role) ? b.phone : '', email: b.email,
+        pincode: b.pincode, city: b.city, orders: b.orders, returns: c ? c.returns : 0, rto: c ? c.rto : 0 });
+    });
+    repeat.sort(function(a, b) { return b.orders - a.orders; });
+  } else {
+    custList.filter(function(c) { return c.returns >= 2; }).forEach(function(c) {
+      repeat.push({ name: c.name, phone: c.phone, phoneFull: c.phoneFull, email: c.email, pincode: c.pincode, city: c.city,
+        orders: c.orders, returns: c.returns, rto: c.rto });
+    });
+  }
+
+  const rate = function(n, d) { return d ? Math.round(1000 * n / d) / 10 : null; };
+  const groupList = function(map, useOrders) {
+    return Object.keys(map).map(function(k) {
+      const g = map[k];
+      return { name: k, city: g.city || '', returns: g.returns, rto: g.rto, customerReturns: g.customerReturns, claims: g.claims,
+        damaged: g.damaged, orders: useOrders ? g.orders : null, returnRate: useOrders ? rate(g.returns, g.orders) : null,
+        rtoRate: useOrders ? rate(g.rto, g.orders) : null, share: rate(g.returns, totals.returns) };
+    }).filter(function(g) { return g.returns > 0 || g.orders > 0; })
+      .sort(function(a, b) { return b.returns - a.returns || (b.orders || 0) - (a.orders || 0); });
+  };
+  const denom = ordersInRange.length || forwardCount;
+  return {
+    success: true, fromDate: p.fromDate, toDate: p.toDate,
+    orderData: { available: dir.available, hasCustomer: dir.hasCustomer, hasPincode: dir.hasPincode, hasCourier: dir.hasCourier },
+    totals: totals,
+    returnRate: rate(totals.returns, denom), rtoRate: rate(totals.rto, denom), rateBase: ordersInRange.length ? 'orders' : 'packed',
+    byPartner: groupList(byPartner, dir.hasCourier).slice(0, 100),
+    byPincode: groupList(byPin, dir.hasPincode).slice(0, 300),
+    byCondition: Object.keys(byCondition).map(function(k) { return { name: k, count: byCondition[k].count }; })
+      .sort(function(a, b) { return b.count - a.count; }),
+    customers: custList.slice(0, 500),
+    suspicious: custList.filter(function(c) { return c.suspicious; }).slice(0, 200),
+    repeatCustomers: repeat.slice(0, 300),
+    recent: returns.sort(function(a, b) { return b.ts - a.ts; }).slice(0, 300).map(function(r) {
+      return { orderId: r.orderId, platform: r.platform, date: r.ts.toISOString(), returnType: r.returnType, partner: r.partner,
+        condition: r.condition, notes: r.notes, claim: r.claim, pincode: r.pincode, name: r.name, phone: maskPhone_(r.phone) };
+    })
+  };
 }
