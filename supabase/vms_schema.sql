@@ -376,8 +376,17 @@ end $$;
 create or replace function vms_private.status_json() returns jsonb
 language sql stable security definer set search_path = vms_private, public as $$
   select jsonb_build_object(
-    'schemaVersion', 2,
+    'schemaVersion', 3,
     'now', now(),
+    -- Storage used, for the Settings page: the whole database (what the plan limit counts),
+    -- the VMS tables with their indexes, and the data size of each Sheet tab.
+    'storage', jsonb_build_object(
+      'databaseBytes', pg_database_size(current_database()),
+      'vmsBytes', (select coalesce(sum(pg_total_relation_size(c.oid)), 0) from pg_class c
+                   join pg_namespace n on n.oid = c.relnamespace
+                   where n.nspname = 'vms_private' and c.relkind = 'r'),
+      'tabBytes', coalesce((select jsonb_object_agg(tab, b) from (select tab, sum(pg_column_size(vals))::bigint b
+                   from vms_private.rows group by tab) x), '{}'::jsonb)),
     'tabs', coalesce((select jsonb_object_agg(tab, n) from (select tab, count(*) n from vms_private.rows where deleted_at is null group by tab) x), '{}'::jsonb),
     'pendingSheetWrites', (select count(*) from vms_private.outbox),
     'oldestPending', (select min(created_at) from vms_private.outbox),

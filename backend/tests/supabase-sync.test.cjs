@@ -83,7 +83,9 @@ test('Supabase sync with the Google Sheet', async (t) => {
   rt.props.set('SUPABASE_SERVICE_KEY', sb.serviceKey); rt.props.set('SUPABASE_ENABLED', 'true');
   const cfg = rt.call('getSupabaseConfig', { token: login0.token });
   assert.equal(cfg.connected, true, JSON.stringify(cfg));
-  assert.equal(cfg.status.schemaVersion, 2);
+  assert.equal(cfg.status.schemaVersion, 3);
+  assert.ok(cfg.status.storage.databaseBytes > 0 && cfg.status.storage.vmsBytes > 0, JSON.stringify(cfg.status.storage));
+  assert.equal(typeof cfg.status.storage.tabBytes, "object");
 
   // --- branding tells every station where Supabase is (anon key only)
   const br = rt.call('getBranding', {});

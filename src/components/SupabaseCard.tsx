@@ -6,6 +6,10 @@ import { fmtDateTime } from '../lib/dateFormat';
 import { getSupabaseConfig, isSupabaseOffHere, setSupabaseOffHere, normalizeSupabaseUrl } from '../lib/supabase/client';
 import { supabaseRouteStatus, resetSupabaseCopy } from '../lib/supabase/router';
 import { downloadBackup, REFERENCE_TABS } from '../lib/supabase/backup';
+import { SupabaseStorage, type SupabaseStorageInfo } from './SupabaseStorage';
+
+/** The database script version this app expects (supabase/vms_schema.sql). */
+const SCHEMA_NEEDED = 3;
 
 interface Props {
   onShowToast: (message: string, type: 'success' | 'error' | 'info') => void;
@@ -24,6 +28,7 @@ interface Config {
   status?: {
     tabs: Record<string, number>;
     schemaVersion?: number;
+    storage?: SupabaseStorageInfo;
     pendingSheetWrites: number;
     oldestPending: string | null;
     state: Record<string, any>;
@@ -189,11 +194,15 @@ export const SupabaseCard: React.FC<Props> = ({ onShowToast }) => {
         </dl>
       )}
 
-      {cfg && connected && Number(cfg.status?.schemaVersion || 0) < 2 && (
+      {cfg && connected && cfg.status && (
+        <SupabaseStorage storage={cfg.status.storage} schemaVersion={Number(cfg.status.schemaVersion || 1)} />
+      )}
+
+      {cfg && connected && Number(cfg.status?.schemaVersion || 0) < SCHEMA_NEEDED && (
         <div id="supabase-schema-old" className="flex gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
           <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
           <div className="space-y-2">
-            <div>The database script has a newer version (Supabase has version {Number(cfg.status?.schemaVersion || 1)}, this app needs version 2). Copy it, paste it in the Supabase SQL Editor as a new query, click <b>Run</b> and wait for <b>Success</b>, then click <b>Check</b> above. Your data is kept.</div>
+            <div>The database script has a newer version (Supabase has version {Number(cfg.status?.schemaVersion || 1)}, this app needs version {SCHEMA_NEEDED}, which also shows storage used). Copy it, paste it in the Supabase SQL Editor as a new query, click <b>Run</b> and wait for <b>Success</b>, then click <b>Check</b> above. Your data is kept.</div>
             <div className="flex flex-wrap gap-2">
               <button id="supabase-copy-sql-note" type="button" onClick={copySql} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-600 text-white font-semibold hover:bg-amber-700 cursor-pointer">
                 <Copy className="w-3 h-3" /> Copy database script
