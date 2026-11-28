@@ -149,9 +149,9 @@ test('sync saves open orders with shippable items, matches SKUs to GTINs and ski
   assert.equal(r.pages, 2);
   assert.match(state.queries[0], /^created_at:>='/);
   const sh = rt.sheets.get('ShopifyOrders');
-  assert.deepEqual(sh.rows[0], ['Synced At', 'Order ID', 'Order Date', 'Payment', 'Fulfillment', 'Order Status',
+  assert.deepEqual(sh.rows[0], ['Synced At', 'Order ID', 'Order Date', 'Payment Status', 'Fulfillment Status', 'Order Status',
     'Total Items Count', 'Items List', 'Items JSON', 'Shopify Order ID', 'Shopify Updated At',
-    'Payment Mode', 'Payment Gateway', 'Tags', 'Customer Name', 'Customer Phone', 'Customer Email',
+    'COD / Prepaid', 'Payment Gateway', 'Tags', 'Customer Name', 'Customer Phone', 'Customer Email',
     'Shipping Pincode', 'Shipping City', 'Shipping State', 'Courier', 'Tracking Number']);
   assert.deepEqual(sh.rows.slice(1).map((x) => x[1]), ['#OD-10360', '#OD-10363'], 'D2C IDs always #OD-…');
   assert.equal(sh.rows[1][6], 3, 'the tip and the refunded line are left out');
@@ -273,8 +273,8 @@ test('customer details, Prepaid/COD, tags and courier are saved; members do not 
   const col = (r, h) => r[H.indexOf(h)];
   const cod = sh.rows.find((r) => r[1] === '#OD-10370');
   const pre = sh.rows.find((r) => r[1] === '#OD-10371');
-  assert.equal(col(cod, 'Payment Mode'), 'COD');
-  assert.equal(col(pre, 'Payment Mode'), 'Prepaid');
+  assert.equal(col(cod, 'COD / Prepaid'), 'COD');
+  assert.equal(col(pre, 'COD / Prepaid'), 'Prepaid');
   assert.equal(col(cod, 'Tags'), 'AiSensy_COD_Confirmed, Bad Address');
   assert.deepEqual(['Customer Name', 'Customer Phone', 'Customer Email', 'Shipping Pincode', 'Shipping City', 'Shipping State'].map((h) => col(cod, h)),
     ['Ravi Kumar', '+919900000000', 'buyer@example.com', '110037', 'New Delhi', 'Delhi']);
@@ -310,4 +310,18 @@ test('without customer data access the orders still arrive, and saved customer d
   const row = sh.rows.find((x) => x[1] === '#OD-10380');
   assert.equal(row[3], 'REFUNDED');
   assert.equal(row[sh.rows[0].indexOf('Shipping Pincode')], '400001', 'kept');
+});
+
+test('an existing ShopifyOrders tab gets the clearer headers on the next sync; data stays in place', () => {
+  const { rt, state, sue } = setupRuntime();
+  rt.call('saveShopifySettings', { token: sue, shop: 'teststore', clientId: 'cid', clientSecret: 'right-secret' });
+  rt.call('saveShopifySettings', { token: sue, enabled: true });
+  state.pages = [[order(10390, { paymentGatewayNames: ['Cash on Delivery (COD)'], displayFinancialStatus: 'PENDING' })]];
+  rt.call('shopifySyncNow', { token: sue });
+  const sh = rt.sheets.get('ShopifyOrders');
+  sh.rows[0][3] = 'Payment'; sh.rows[0][4] = 'Fulfillment'; sh.rows[0][11] = 'Payment Mode'; // as saved by the first version
+  state.pages = [[]];
+  rt.call('shopifySyncNow', { token: sue, force: true });
+  assert.deepEqual([sh.rows[0][3], sh.rows[0][4], sh.rows[0][11]], ['Payment Status', 'Fulfillment Status', 'COD / Prepaid']);
+  assert.deepEqual([sh.rows[1][3], sh.rows[1][11]], ['PENDING', 'COD']);
 });
