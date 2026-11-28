@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { HardDrive, Palette, Database, Code2, Eraser as EraserIcon, Box } from 'lucide-react';
+import { HardDrive, Palette, Database, Code2, Eraser as EraserIcon, Box, ShoppingBag } from 'lucide-react';
 import { AdminPanel } from './AdminPanel';
 import { Eraser, RefreshCw, Archive, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { BackendUpdateCard } from './BackendUpdateCard';
@@ -7,6 +7,7 @@ import { SupabaseCard, BackupCard } from './SupabaseCard';
 import { ArchivedRowsCard } from './ArchivedRowsCard';
 import { OrderIdFormatCard } from './OrderIdFormatCard';
 import { BoxSettingsCard } from './BoxSettingsCard';
+import { ShopifySettingsCard } from './ShopifySettingsCard';
 import { canUserSeeSupabaseSettings, canUserManageSettings, canUserManageBranding, isSuperAdmin } from '../lib/permissions';
 import type { User } from '../types';
 import { scanSheetCleanup, runSheetCleanup, getSheetCleanupProgress, SheetCleanupScan, SheetCleanupResult, SheetCleanupLiveProgress } from '../lib/api';
@@ -19,7 +20,7 @@ interface Props {
 const card = 'bg-white rounded-2xl border border-slate-200 shadow-xs p-5 space-y-4';
 const btn = 'inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold disabled:opacity-50 cursor-pointer';
 
-type SectionId = 'app' | 'branding' | 'data' | 'packing' | 'database' | 'backend';
+type SectionId = 'app' | 'branding' | 'data' | 'packing' | 'shopify' | 'database' | 'backend';
 const SECTION_KEY = 'vms_settings_section';
 
 /** Settings: every app setting in one place, grouped into sections. */
@@ -30,6 +31,8 @@ export const SettingsPage: React.FC<Props> = ({ onShowToast, currentUser }) => {
     { id: 'data' as SectionId, label: 'Data & Cleanup', icon: EraserIcon, show: canUserManageSettings(currentUser) },
     // Box & weight on/off: Super Admin only (the backend refuses everyone else too).
     { id: 'packing' as SectionId, label: 'Packing box', icon: Box, show: isSuperAdmin(currentUser) },
+    // Shopify connection and on/off: Super Admin only (the backend refuses everyone else too).
+    { id: 'shopify' as SectionId, label: 'Shopify orders', icon: ShoppingBag, show: isSuperAdmin(currentUser) },
     // Supabase keys and tools: Super Admin only (the backend refuses everyone else too).
     { id: 'database' as SectionId, label: 'Supabase', icon: Database, show: canUserSeeSupabaseSettings(currentUser) },
     { id: 'backend' as SectionId, label: 'Backend update', icon: Code2, show: canUserManageSettings(currentUser) },
@@ -127,6 +130,7 @@ export const SettingsPage: React.FC<Props> = ({ onShowToast, currentUser }) => {
       )}
 
       {section === 'packing' && <BoxSettingsCard onShowToast={onShowToast} />}
+      {section === 'shopify' && <ShopifySettingsCard onShowToast={onShowToast} />}
 
       {section === 'database' && <SupabaseCard onShowToast={onShowToast} />}
 
