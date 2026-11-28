@@ -1,5 +1,6 @@
 // E2E: Live Team shows an "Assigned" tile on each packer card and in the summary row, counting the
-// orders assigned to that packer in the page's date range (Today, This Month, ...).
+// orders assigned to that packer in the page's date range (Today, This Month, ...), and a
+// "Remaining" tile: the assigned orders in that range still waiting to be packed.
 import { createRequire } from 'node:module';
 import crypto from 'node:crypto';
 const require = createRequire(import.meta.url);
@@ -47,6 +48,10 @@ check('Vineet assigned today = 3 (cancelled left out)', (await assigned('vineet@
 check('Ravi assigned today = 1', (await assigned('ravi@test.local')) === '1', await assigned('ravi@test.local'));
 check('card tile reads "Assigned today"', /Assigned today/.test(await card('vineet@test.local').innerText()));
 check('summary tile shows 4 assigned today', (await page.locator('#team-assigned').innerText()).trim() === '4', await page.locator('#team-assigned').innerText());
+const remaining = async (e) => card(e).locator('[data-remaining]').getAttribute('data-remaining');
+check('Vineet remaining today = 2 (packed and cancelled left out)', (await remaining('vineet@test.local')) === '2', await remaining('vineet@test.local'));
+check('Ravi remaining today = 1', (await remaining('ravi@test.local')) === '1', await remaining('ravi@test.local'));
+check('summary remaining today = 3', (await page.locator('#team-remaining').innerText()).trim() === '3', await page.locator('#team-remaining').innerText());
 const cardText = await card('vineet@test.local').innerText();
 check('other tiles still there', ['Recorded today', 'Uploaded today', 'Packed today', 'Failed today'].every((w) => cardText.includes(w)));
 if (SHOT) await page.screenshot({ path: `${SHOT}-today.png` });
@@ -58,6 +63,8 @@ const want = sameMonthEarlier ? '4' : '3';
 check(`Vineet assigned this month = ${want}`, (await assigned('vineet@test.local')) === want, await assigned('vineet@test.local'));
 check('tile label follows the filter', /Assigned this month/.test(await card('vineet@test.local').innerText()));
 check('summary tile follows the filter', (await page.locator('#team-assigned').innerText()).trim() === (sameMonthEarlier ? '6' : '4'), await page.locator('#team-assigned').innerText());
+check('remaining this month = 2 (earlier order was packed)', (await remaining('vineet@test.local')) === '2', await remaining('vineet@test.local'));
+check('Remaining tile label follows the filter', /Remaining this month/.test(await card('vineet@test.local').innerText()));
 if (SHOT) await page.screenshot({ path: `${SHOT}-month.png` });
 check('no page errors', errors.length === 0, errors.join(' | '));
 console.table(results);

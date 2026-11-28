@@ -9,7 +9,7 @@ interface TeamUser {
   email: string;
   name: string;
   role: string;
-  today: { assigned?: number; recorded: number; returns: number; uploaded: number; uploadFailed: number; packed: number };
+  today: { assigned?: number; remaining?: number; recorded: number; returns: number; uploaded: number; uploadFailed: number; packed: number };
   lastAction: string;
   lastActionAt: number;
   pendingOrders?: { orderId: string; platform: string; at: number }[];
@@ -26,6 +26,17 @@ const PRESETS: { key: Preset; label: string }[] = [
   { key: 'THIS_MONTH', label: 'This Month' },
   { key: 'CUSTOM', label: 'Custom Range' },
 ];
+
+/**
+ * Orders assigned in the range and not packed yet. The backend counts it from the assigned orders
+ * still Pending; an older backend has no such count, so fall back to assigned minus packed.
+ */
+export function remainingOf(u: Pick<TeamUser, 'today'>): number | null {
+  const t = u.today;
+  if (typeof t.remaining === 'number') return t.remaining;
+  if (typeof t.assigned !== 'number') return null;
+  return Math.max(0, t.assigned - t.packed);
+}
 
 /** yyyy-MM-dd on this computer's calendar. */
 export function dayKey(d: Date): string {
@@ -310,6 +321,7 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
         online: t.online + (r.online ? 1 : 0),
         recording: t.recording + (r.state === 'recording' ? 1 : 0),
         assigned: t.assigned + (r.team?.today.assigned || 0),
+        remaining: t.remaining + (r.team ? remainingOf(r.team) || 0 : 0),
         recorded: t.recorded + (r.team ? r.team.today.recorded + r.team.today.returns : 0),
         uploaded: t.uploaded + (r.team?.today.uploaded || 0),
         packed: t.packed + (r.team?.today.packed || 0),
@@ -318,7 +330,7 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
         pending: t.pending + (r.team?.pendingOrderCount ?? r.team?.pendingOrders?.length ?? 0),
       };
     },
-    { online: 0, recording: 0, assigned: 0, recorded: 0, uploaded: 0, packed: 0, waiting: 0, failed: 0, pending: 0 },
+    { online: 0, recording: 0, assigned: 0, remaining: 0, recorded: 0, uploaded: 0, packed: 0, waiting: 0, failed: 0, pending: 0 },
   );
 
   const Stat = ({ id, label, value, tone }: { id: string; label: string; value: number; tone: string }) => (
@@ -379,10 +391,11 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
             </button>
           </div>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-9 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-5 xl:grid-cols-10 gap-2">
           <Stat id="team-online" label="Online now" value={sum.online} tone="bg-emerald-50 border-emerald-200 text-emerald-800" />
           <Stat id="team-recording" label="Recording now" value={sum.recording} tone="bg-red-50 border-red-200 text-red-700" />
           <Stat id="team-assigned" label={`Assigned ${rangeWord}`} value={sum.assigned} tone="bg-violet-50 border-violet-200 text-violet-800" />
+          <Stat id="team-remaining" label={`Remaining ${rangeWord}`} value={sum.remaining} tone="bg-orange-50 border-orange-200 text-orange-800" />
           <Stat id="team-recorded" label={`Recorded ${rangeWord}`} value={sum.recorded} tone="bg-slate-50 border-slate-200 text-slate-800" />
           <Stat id="team-uploaded" label={`Uploaded ${rangeWord}`} value={sum.uploaded} tone="bg-blue-50 border-blue-200 text-blue-800" />
           <Stat id="team-packed" label={`Packed ${rangeWord}`} value={sum.packed} tone="bg-indigo-50 border-indigo-200 text-indigo-800" />
@@ -449,10 +462,11 @@ export const LiveTeam: React.FC<{ onShowToast?: (m: string, t: 'success' | 'erro
                 )}
               </div>
 
-              <div className="grid grid-cols-5 gap-1.5 text-center" data-today={r.team ? `${r.team.today.recorded}/${r.team.today.uploaded}/${r.team.today.packed}` : ''}
-                data-assigned={r.team ? String(r.team.today.assigned ?? '') : ''}>
+              <div className="grid grid-cols-6 gap-1.5 text-center" data-today={r.team ? `${r.team.today.recorded}/${r.team.today.uploaded}/${r.team.today.packed}` : ''}
+                data-assigned={r.team ? String(r.team.today.assigned ?? '') : ''} data-remaining={r.team ? String(remainingOf(r.team) ?? '') : ''}>
                 {[
                   ['Assigned', r.team ? r.team.today.assigned ?? null : null],
+                  ['Remaining', r.team ? remainingOf(r.team) : null],
                   ['Recorded', r.team ? r.team.today.recorded + r.team.today.returns : null],
                   ['Uploaded', r.team ? r.team.today.uploaded : null],
                   ['Packed', r.team ? r.team.today.packed : null],
