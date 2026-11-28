@@ -200,7 +200,7 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
   const [selectedPreviewImage, setSelectedPreviewImage] = useState<string | null>(null);
 
   // --- Date Filter State ---
-  const [dateFilterPreset, setDateFilterPreset] = useState<'ALL' | 'TODAY' | 'YESTERDAY' | 'LAST_7_DAYS' | 'THIS_MONTH' | 'CUSTOM'>('ALL');
+  const [dateFilterPreset, setDateFilterPreset] = useState<'ALL' | 'TODAY' | 'YESTERDAY' | 'LAST_7_DAYS' | 'THIS_MONTH' | 'CUSTOM'>('TODAY'); // One shared filter for the stat cards and the Manifest Order Queue; opens on Today
   const [customStartDate, setCustomStartDate] = useState<string>('');
   const [customEndDate, setCustomEndDate] = useState<string>('');
 
@@ -1457,9 +1457,12 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
               <span>Date Range Filter</span>
               {dateFilterPreset !== 'ALL' && (
                 <span className="px-2 py-0.2 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800 uppercase">
-                  Active Filter
+                  {dateFilterPreset.replace(/_/g, ' ')}
                 </span>
               )}
+            </div>
+            <div className="text-[11px] text-slate-500 font-medium">
+              Applies to the summary cards and the Manifest Order Queue
             </div>
           </div>
         </div>
@@ -1516,18 +1519,18 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
             </div>
           )}
 
-          {dateFilterPreset !== 'ALL' && (
+          {dateFilterPreset !== 'TODAY' && (
             <button
               type="button"
               onClick={() => {
-                setDateFilterPreset('ALL');
+                setDateFilterPreset('TODAY');
                 setCustomStartDate('');
                 setCustomEndDate('');
               }}
               className="px-2.5 py-1 text-xs font-bold text-rose-600 hover:text-rose-700 hover:bg-rose-50 rounded-lg border border-rose-200/80 transition cursor-pointer"
-              title="Reset Date Filter"
+              title="Back to Today"
             >
-              Reset Date
+              Reset to Today
             </button>
           )}
         </div>
@@ -2198,87 +2201,6 @@ export const OrderProcessing: React.FC<OrderProcessingProps> = ({
                   </button>
                 )}
               </div>
-            </div>
-          </div>
-
-          {/* Date Range Filter Bar inside Manifest Queue Sub-tab */}
-          <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3 flex flex-col md:flex-row md:items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0">
-                <Calendar className="w-3.5 h-3.5" />
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-bold text-slate-800">Date Range Filter:</span>
-                {dateFilterPreset !== 'ALL' && (
-                  <span className="px-2 py-0.2 rounded-full text-[10px] font-bold bg-indigo-600 text-white uppercase tracking-wider">
-                    {dateFilterPreset.replace(/_/g, ' ')}
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-1.5">
-              {(
-                [
-                  { key: 'ALL', label: 'All Time' },
-                  { key: 'TODAY', label: 'Today' },
-                  { key: 'YESTERDAY', label: 'Yesterday' },
-                  { key: 'LAST_7_DAYS', label: 'Last 7 Days' },
-                  { key: 'THIS_MONTH', label: 'This Month' },
-                  { key: 'CUSTOM', label: 'Custom Range' }
-                ] as const
-              ).map((p) => {
-                const isActive = dateFilterPreset === p.key;
-                return (
-                  <button
-                    key={p.key}
-                    type="button"
-                    onClick={() => setDateFilterPreset(p.key)}
-                    className={`px-2.5 py-1 text-xs font-bold rounded-lg transition cursor-pointer ${
-                      isActive
-                        ? 'bg-indigo-600 text-white shadow-2xs'
-                        : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
-                    }`}
-                  >
-                    {p.label}
-                  </button>
-                );
-              })}
-
-              {dateFilterPreset === 'CUSTOM' && (
-                <div className="flex items-center gap-1 bg-white border border-slate-200 p-1 rounded-lg">
-                  <input
-                    type="date"
-                    value={customStartDate}
-                    onChange={(e) => setCustomStartDate(e.target.value)}
-                    className="px-1.5 py-0.5 text-xs font-bold text-slate-800 focus:outline-none"
-                    title="Start Date"
-                  />
-                  <span className="text-xs text-slate-400 font-bold">-</span>
-                  <input
-                    type="date"
-                    value={customEndDate}
-                    onChange={(e) => setCustomEndDate(e.target.value)}
-                    className="px-1.5 py-0.5 text-xs font-bold text-slate-800 focus:outline-none"
-                    title="End Date"
-                  />
-                </div>
-              )}
-
-              {dateFilterPreset !== 'ALL' && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDateFilterPreset('ALL');
-                    setCustomStartDate('');
-                    setCustomEndDate('');
-                  }}
-                  className="px-2 py-1 text-xs font-bold text-rose-600 hover:bg-rose-50 rounded-lg border border-rose-200 transition cursor-pointer"
-                  title="Reset Date Filter"
-                >
-                  Reset Date
-                </button>
-              )}
             </div>
           </div>
 
