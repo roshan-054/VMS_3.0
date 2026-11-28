@@ -1455,6 +1455,27 @@ function ensureGtinCatalogHeaders_(sh) {
   return blank;
 }
 
+/**
+ * Rows of one order in a log tab, newest (bottom) first, as { i, v } where v[i] is the row, so
+ * callers keep the v[i][col] shape. Only the Order ID column is read for the search, then just the
+ * matching rows: a scan per order stays fast when the tab has tens of thousands of rows (before,
+ * every check read every column of OrderLog, ReturnLog and UploadLog).
+ */
+function orderRowsDesc_(sh, normTarget, width) {
+  const out = [];
+  const last = sh.getLastRow();
+  if (!normTarget || last < 2) return out;
+  const ids = sh.getRange(2, 2, last - 1, 1).getValues();
+  for (let k = ids.length - 1; k >= 0; k--) {
+    if (normalizeOrderId_(ids[k][0]) !== normTarget) continue;
+    const v = [];
+    v[k + 1] = sh.getRange(k + 2, 1, 1, width).getValues()[0];
+    out.push({ i: k + 1, v: v });
+    if (out.length >= 20) break; // an order never has more rows than this that matter
+  }
+  return out;
+}
+
 function completedDuplicate_(order,platform,type){
   const normTargetOrder = normalizeOrderId_(order);
   if (!normTargetOrder) return null;
@@ -1466,8 +1487,9 @@ function completedDuplicate_(order,platform,type){
     try {
       const orderSheet = sheet_(CONFIG.ORDER_LOG_SHEET);
       if (orderSheet) {
-        const v = orderSheet.getDataRange().getValues();
-        for (let i = v.length - 1; i >= 1; i--) {
+        const hits = orderRowsDesc_(orderSheet, normTargetOrder, 12);
+        for (let h = 0; h < hits.length; h++) {
+          const i = hits[h].i, v = hits[h].v;
           const rawOrder = v[i][1];
           const normRowOrder = normalizeOrderId_(rawOrder);
           if (!normRowOrder || normRowOrder !== normTargetOrder) continue;
@@ -1489,6 +1511,7 @@ function completedDuplicate_(order,platform,type){
               timestamp: rowIso_(v[i][0]),
               packerEmail: String(v[i][3] || ''),
               fileId: fileId,
+              queueJobId: String(v[i][9] || ''),
               playbackUrl: String(v[i][5] || (fileId ? 'https://drive.google.com/file/d/' + fileId + '/preview' : ''))
             };
           }
@@ -1504,8 +1527,9 @@ function completedDuplicate_(order,platform,type){
     try {
       const returnSheet = sheet_(CONFIG.RETURN_LOG_SHEET);
       if (returnSheet) {
-        const r = returnSheet.getDataRange().getValues();
-        for (let i = r.length - 1; i >= 1; i--) {
+        const hits = orderRowsDesc_(returnSheet, normTargetOrder, 12);
+        for (let h = 0; h < hits.length; h++) {
+          const i = hits[h].i, r = hits[h].v;
           const rawOrder = r[i][1];
           const normRowOrder = normalizeOrderId_(rawOrder);
           if (!normRowOrder || normRowOrder !== normTargetOrder) continue;
@@ -1527,6 +1551,7 @@ function completedDuplicate_(order,platform,type){
               timestamp: rowIso_(r[i][0]),
               packerEmail: String(r[i][3] || ''),
               fileId: fileId,
+              queueJobId: String(r[i][9] || ''),
               playbackUrl: String(r[i][5] || (fileId ? 'https://drive.google.com/file/d/' + fileId + '/preview' : ''))
             };
           }
@@ -1541,8 +1566,9 @@ function completedDuplicate_(order,platform,type){
   try {
     const uploadSheet = sheet_(CONFIG.UPLOAD_LOG_SHEET);
     if (uploadSheet) {
-      const u = uploadSheet.getDataRange().getValues();
-      for (let i = u.length - 1; i >= 1; i--) {
+      const hits = orderRowsDesc_(uploadSheet, normTargetOrder, 15);
+      for (let h = 0; h < hits.length; h++) {
+        const i = hits[h].i, u = hits[h].v;
         const rawOrder = u[i][1];
         const normRowOrder = normalizeOrderId_(rawOrder);
         if (!normRowOrder || normRowOrder !== normTargetOrder) continue;
@@ -1566,6 +1592,7 @@ function completedDuplicate_(order,platform,type){
             timestamp: rowIso_(u[i][0]),
             packerEmail: String(u[i][3] || ''),
             fileId: fileId,
+            queueJobId: String(u[i][14] || ''),
             playbackUrl: fileId ? 'https://drive.google.com/file/d/' + fileId + '/preview' : ''
           };
         }
@@ -2926,6 +2953,8 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
 
     let keptRow = null; // the row that already holds this order's video
     let duplicateOrder = false;
+    let sameOrderRow = null; // the newest row holding another video of this order + type
+    let replacedOlder = ''; // 'merged' / 'row' when this video replaced a smaller older one
     if (fid || s.queueJobId || normTargetOrder) {
       const existingData = targetLogSheet.getDataRange().getValues();
       for (let i = existingData.length - 1; i >= 1; i--) {
@@ -2940,14 +2969,38 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
           break;
         }
 
-        // Strict duplicate guard: if an identical order and recording type is ALREADY logged and not explicitly bypassed
-        if (normTargetOrder && rowOrder === normTargetOrder && rowType === targetType && !s.bypassDuplicate && rowFid) {
-          console.warn('finalizeCompletedUpload_: Duplicate order ' + s.order + ' already logged at row ' + (i+1));
-          alreadyLogged = true;
-          duplicateOrder = true;
-          keptRow = existingData[i];
-          break;
+        // One video per order and recording type. Before, a bypassed upload ("Upload Anyway",
+        // queue "Bypass", Upload Logs "Resume") was logged as a second row and kept a second video.
+        if (normTargetOrder && rowOrder === normTargetOrder && rowType === targetType && rowFid && !sameOrderRow) {
+          sameOrderRow = { index: i, row: existingData[i] };
         }
+      }
+    }
+
+    if (!alreadyLogged && sameOrderRow) {
+      // Two videos of one order: keep the bigger (complete) one, move the other to Drive's trash
+      // (restorable for 30 days) and keep a single row in every log.
+      const oldFid = String(sameOrderRow.row[4] || '').trim();
+      let oldBytes = parseSizeBytes_(sameOrderRow.row[6]);
+      if (oldBytes <= 0) oldBytes = driveFileBytes_(oldFid);
+      const newBytes = Number(s.size || 0) > 0 ? Number(s.size) : driveFileBytes_(fid);
+      if (!(Number(s.size) > 0) && newBytes > 0) s.size = newBytes;
+      const keepNew = newBytes > oldBytes;
+      alreadyLogged = true;
+      if (keepNew) {
+        const newDate = s.createdAt ? new Date(s.createdAt) : new Date();
+        targetLogSheet.getRange(sameOrderRow.index + 1, 1, 1, 12).setValues([[
+          newDate, s.order, s.platform, s.packerEmail || (user ? user.email : ''), fid, playback,
+          formatFileSize_(s.size) || '', 'Completed', s.type, s.queueJobId || '', s.mime || 'video/mp4', 'READY'
+        ]]);
+        formatDateRows_(targetLogSheet, sameOrderRow.index + 1, 1);
+        sbTouch_(targetLogSheet, sameOrderRow.index + 1);
+        try { DriveApp.getFileById(oldFid).setTrashed(true); } catch (_) {}
+        replacedOlder = mergeUploadLogRows_(s, uploadId, oldFid, { fileId: fid, keepNew: true }) ? 'merged' : 'row';
+        bumpAnalyticsVersion_();
+      } else {
+        duplicateOrder = true;
+        keptRow = sameOrderRow.row;
       }
     }
 
@@ -2987,7 +3040,9 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
     if (keptFid && keptFid !== fid) {
       if (duplicateOrder || (s.queueJobId && String(keptRow[9] || '').trim() === s.queueJobId)) {
         try { DriveApp.getFileById(fid).setTrashed(true); } catch (_) {}
-        updateUploadLog_(uploadId, 'Duplicate removed: order already in Drive', 100, keptFid, 'Completed', '', s.queueJobId, s.order, s.type, s.createdAt);
+        if (!mergeUploadLogRows_(s, uploadId, keptFid, { fileId: keptFid, keepNew: false })) {
+          updateUploadLog_(uploadId, 'Duplicate removed: order already in Drive', 100, keptFid, 'Completed', '', s.queueJobId, s.order, s.type, s.createdAt);
+        }
         if(s.reservationKey) releaseReservation_(s.reservationKey);
         releaseReservation_(reservationKey_(s.order, s.platform, s.type));
         const keptPlay = String(keptRow[5] || '') || ('https://drive.google.com/file/d/' + keptFid + '/preview');
@@ -3006,7 +3061,9 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
         };
       }
     }
-    updateUploadLog_(uploadId, 'Uploaded to Google Drive', 100, fid, 'Completed', '', s.queueJobId, s.order, s.type, s.createdAt);
+    if (replacedOlder !== 'merged') {
+      updateUploadLog_(uploadId, replacedOlder ? 'Uploaded to Google Drive (replaced older video)' : 'Uploaded to Google Drive', 100, fid, 'Completed', '', s.queueJobId, s.order, s.type, s.createdAt);
+    }
     if (!alreadyLogged) bumpAnalyticsVersion_();
     if(s.reservationKey) releaseReservation_(s.reservationKey);
     releaseReservation_(reservationKey_(s.order, s.platform, s.type));
@@ -3038,11 +3095,58 @@ function finalizeCompletedUpload_(s, uploadId, fid, user) {
       downloadUrl: 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(fid),
       stage: 'Uploaded to Google Drive',
       status: 'Completed',
+      replacedOlderVideo: !!replacedOlder,
       orderId: s.order,
       platform: s.platform,
       recordingType: s.type
     };
   }, 10000);
+}
+
+/** Size in bytes of a Drive file, 0 when it cannot be read. */
+function driveFileBytes_(fid) {
+  try { return Number(DriveApp.getFileById(fid).getSize()) || 0; } catch (_) { return 0; }
+}
+
+/**
+ * Keeps ONE UploadLog row for an order + recording type when a second video of it finishes.
+ * The row already holding the order's video (oldFid) is kept; when the new video wins it is
+ * updated to the new file. This upload's own attempt row is then removed, so the sheet does not
+ * show the order twice. Returns false when there is no older row to merge into.
+ */
+function mergeUploadLogRows_(s, uploadId, oldFid, keep) {
+  try {
+    const sh = sheet_(CONFIG.UPLOAD_LOG_SHEET);
+    const v = sh.getDataRange().getValues();
+    const order = normalizeOrderId_(s.order);
+    const type = normalize_(s.type || 'Forward');
+    const myId = normalize_(uploadId);
+    let target = -1, mine = -1;
+    for (let i = v.length - 1; i >= 1; i--) {
+      if (normalizeOrderId_(v[i][1]) !== order) continue;
+      if (normalize_(v[i][12] || 'Forward') !== type) continue;
+      if (myId && normalize_(v[i][6]) === myId) { if (mine < 0) mine = i; continue; }
+      const f = String(v[i][9] || '').trim();
+      if (f && (f === oldFid || f === keep.fileId) && target < 0) target = i;
+    }
+    if (target < 0) return false;
+    if (keep.keepNew) {
+      const newDate = s.createdAt ? new Date(s.createdAt) : new Date();
+      sh.getRange(target + 1, 1, 1, 15).setValues([[
+        newDate, s.order, s.platform, s.packerEmail || '', s.name || v[target][4], formatFileSize_(s.size) || v[target][5],
+        uploadId || v[target][6], 'Uploaded to Google Drive (replaced older video)', 100, keep.fileId, 'Completed', '',
+        s.type, s.source || v[target][13] || '', s.queueJobId || ''
+      ]]);
+      formatDateRows_(sh, target + 1, 1);
+      sbTouch_(sh, target + 1);
+    }
+    if (mine >= 0 && mine !== target) sh.deleteRow(mine + 1);
+    SpreadsheetApp.flush();
+    return true;
+  } catch (e) {
+    console.warn('mergeUploadLogRows_ note:', e);
+    return false;
+  }
 }
 
 /**

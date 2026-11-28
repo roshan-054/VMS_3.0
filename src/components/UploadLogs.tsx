@@ -1897,11 +1897,14 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
                         <div className="flex items-center justify-end gap-1.5">
                           {/* Resume / Retry Button for Local & Matched Queue Items */}
                           {(() => {
+                            // Match this row's own video only. Matching any queued video of the same
+                            // order showed "Resume" on an already-uploaded row and uploaded a second copy.
+                            const rowHasVideo = Boolean(log.playbackUrl || log.driveFileId || isCompleted);
                             const localItem = localQueue.find(
                               (q) =>
                                 (log.queueJobId && q.id === log.queueJobId) ||
                                 (log.uploadId && (q.uploadId === log.uploadId || q.id === log.uploadId)) ||
-                                (log.orderId && q.orderId === log.orderId)
+                                (!rowHasVideo && !log.queueJobId && log.orderId && q.orderId === log.orderId)
                             );
                             const isPendingOrFailed =
                               localItem &&
@@ -1916,7 +1919,8 @@ export const UploadLogs: React.FC<UploadLogsProps> = ({ onShowToast, onNavigateT
                               return (
                                 <button
                                   onClick={async () => {
-                                    await retryUploadItem(localItem.id, true);
+                                    // Never skip the duplicate check from here: a resume continues the same video.
+                                    await retryUploadItem(localItem.id, false);
                                     onShowToast(`Resuming upload for Order ${log.orderId}…`, 'success');
                                     loadData(false);
                                   }}

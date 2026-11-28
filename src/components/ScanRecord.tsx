@@ -1954,7 +1954,7 @@ export const ScanRecord: React.FC<ScanRecordProps> = ({
                         className="w-3.5 h-3.5 rounded text-amber-600 border-amber-300 focus:ring-amber-500"
                       />
                       <span className="text-[11px] font-semibold text-amber-900">
-                        Re-record & Upload Anyway (Bypass Duplicate Guard)
+                        Re-record & Upload Anyway (the bigger video is kept)
                       </span>
                     </label>
                   </div>

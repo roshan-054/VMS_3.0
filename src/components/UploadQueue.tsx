@@ -243,7 +243,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
     await retryUploadItem(item.id, true);
     loadQueue();
     onQueueChanged();
-    onShowToast(`Duplicate check bypassed for Order ${item.orderId}. Starting upload…`, 'info');
+    onShowToast(`Uploading Order ${item.orderId}. The bigger of the two videos is kept, the other goes to Drive trash.`, 'info');
   };
 
   const [isBypassingAll, setIsBypassingAll] = useState(false);
@@ -253,7 +253,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
       const count = await bypassAllDuplicates();
       loadQueue();
       onQueueChanged();
-      onShowToast(`🚀 Bypassed duplicate protection for ${count} order(s). Starting upload…`, 'success');
+      onShowToast(`Uploading ${count} blocked order(s). For each order the bigger video is kept.`, 'success');
     } catch (e: any) {
       onShowToast(`Error bypassing duplicates: ${e?.message || e}`, 'error');
     } finally {
@@ -490,7 +490,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
               onClick={handleBypassAllDuplicates}
               disabled={isBypassingAll}
               className="px-3.5 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition inline-flex items-center gap-1.5 shadow-2xs cursor-pointer"
-              title="Unblock and upload all duplicate-blocked orders"
+              title="Upload all blocked orders. For each order only the bigger video is kept; the other goes to Drive trash."
             >
               <ShieldCheck className="w-3.5 h-3.5" />
               {isBypassingAll ? 'Unblocking…' : `Unblock All (${duplicateCount})`}
@@ -565,10 +565,10 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
               onClick={handleBypassAllDuplicates}
               disabled={isBypassingAll}
               className="px-3.5 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-xs"
-              title="Force bypass duplicate protection and upload all blocked items"
+              title="Upload all blocked orders. For each order only the bigger video is kept; the other goes to Drive trash."
             >
               <ShieldCheck className="w-4 h-4" />
-              {isBypassingAll ? 'Bypassing…' : `Bypass & Upload All (${duplicateCount})`}
+              {isBypassingAll ? 'Bypassing…' : `Upload & Keep Bigger (${duplicateCount})`}
             </button>
             <button
               id="remove-all-duplicates-banner-btn"
@@ -948,10 +948,10 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({
                       <button
                         onClick={() => handleForceBypassDuplicate(item)}
                         className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer shadow-2xs"
-                        title="Bypass duplicate protection and force upload now"
+                        title="Upload this video. Only the bigger of the two videos is kept; the other goes to Drive trash."
                       >
                         <ShieldCheck className="w-4 h-4" />
-                        Bypass & Upload
+                        Upload & Keep Bigger
                       </button>
                     )}
 

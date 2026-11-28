@@ -219,6 +219,8 @@ export async function requestAppsScript<T = any>(
       const serverErr: any = new Error(errMsg);
       serverErr.serverError = true;
       if ((data as any).code) serverErr.code = (data as any).code;
+      if ((data as any).alreadyUploaded) serverErr.alreadyUploaded = true;
+      if ((data as any).existing) serverErr.existing = (data as any).existing;
       throw serverErr;
     }
 
