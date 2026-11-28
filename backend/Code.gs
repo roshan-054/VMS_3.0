@@ -8585,7 +8585,7 @@ function orderDirectory_() {
     courier: find([/courier|carrier|tracking\s*company|logistic/]),
     status: find([/^order\s*status$/, /^fulfil?ment(\s*status)?$/]),
     tags: find([/^tags?$/, /^order\s*tags?$/]),
-    payMode: find([/^payment\s*mode$/, /^payment\s*method$/])
+    payMode: find([/^cod\s*\/\s*prepaid$/, /^payment\s*mode$/, /^payment\s*method$/])
   };
   if (c.order < 0) return out;
   out.available = true;

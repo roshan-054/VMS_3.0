@@ -20,7 +20,7 @@ users.rows[1][4] = 'Super Admin';
 users.appendRow([new Date(), 'Pat Packer', 'pat@test.local', sha('PackerPass1'), 'User', 'Approved']);
 const now = new Date();
 backend.rt.addSheet('ShopifyOrders', [
-  ['Synced At', 'Order ID', 'Order Date', 'Payment', 'Customer Name', 'Customer Phone', 'Customer Email', 'Shipping Pincode', 'Shipping City', 'Courier', 'Payment Mode', 'Tags'],
+  ['Synced At', 'Order ID', 'Order Date', 'Payment', 'Customer Name', 'Customer Phone', 'Customer Email', 'Shipping Pincode', 'Shipping City', 'Courier', 'COD / Prepaid', 'Tags'],
   [now, '#OD-5001', now, 'COD', 'Raj Mehta', '9111111111', 'raj@example.com', '400001', 'Mumbai', 'Delhivery', 'COD', 'AiSensy_COD_Confirmed'],
   [now, '#OD-5002', now, 'COD', 'Raj Mehta', '9111111111', 'raj@example.com', '400001', 'Mumbai', 'Delhivery', 'COD', 'AiSensy_COD_Confirmed, Bad Address'],
   [now, '#OD-5003', now, 'Prepaid', 'Anu Rao', '9222222222', 'anu@example.com', '560001', 'Bengaluru', 'Blue Dart', 'Prepaid', 'Source: Facebook'],
