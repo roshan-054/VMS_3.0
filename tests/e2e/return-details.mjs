@@ -20,10 +20,10 @@ users.rows[1][4] = 'Super Admin';
 users.appendRow([new Date(), 'Pat Packer', 'pat@test.local', sha('PackerPass1'), 'User', 'Approved']);
 const now = new Date();
 backend.rt.addSheet('ShopifyOrders', [
-  ['Synced At', 'Order ID', 'Order Date', 'Payment', 'Customer Name', 'Customer Phone', 'Customer Email', 'Shipping Pincode', 'Shipping City', 'Courier'],
-  [now, '#OD-5001', now, 'COD', 'Raj Mehta', '9111111111', 'raj@example.com', '400001', 'Mumbai', 'Delhivery'],
-  [now, '#OD-5002', now, 'COD', 'Raj Mehta', '9111111111', 'raj@example.com', '400001', 'Mumbai', 'Delhivery'],
-  [now, '#OD-5003', now, 'Prepaid', 'Anu Rao', '9222222222', 'anu@example.com', '560001', 'Bengaluru', 'Blue Dart'],
+  ['Synced At', 'Order ID', 'Order Date', 'Payment', 'Customer Name', 'Customer Phone', 'Customer Email', 'Shipping Pincode', 'Shipping City', 'Courier', 'Payment Mode', 'Tags'],
+  [now, '#OD-5001', now, 'COD', 'Raj Mehta', '9111111111', 'raj@example.com', '400001', 'Mumbai', 'Delhivery', 'COD', 'AiSensy_COD_Confirmed'],
+  [now, '#OD-5002', now, 'COD', 'Raj Mehta', '9111111111', 'raj@example.com', '400001', 'Mumbai', 'Delhivery', 'COD', 'AiSensy_COD_Confirmed, Bad Address'],
+  [now, '#OD-5003', now, 'Prepaid', 'Anu Rao', '9222222222', 'anu@example.com', '560001', 'Bengaluru', 'Blue Dart', 'Prepaid', 'Source: Facebook'],
 ]);
 // An earlier RTO for the same customer (so two RTOs make them suspicious).
 backend.rt.sheets.get('ReturnLog').appendRow([now, '#OD-5002', 'D2C', 'pat@test.local', 'FILE_RET_5002', '', '1 MB', 'Completed', 'Return', 'r0', 'video/mp4', 'READY']);
@@ -125,7 +125,19 @@ check('Raj in repeat customers', /Raj Mehta/.test(await sa.locator('#returns-rep
 const pins = await sa.locator('#returns-pincode-table').innerText();
 check('pincode 400001 with 100% return rate', /400001/.test(pins) && /100%/.test(pins), pins.replace(/\s+/g, ' '));
 check('partner table has Shiprocket and Delhivery', /Shiprocket/.test(await sa.locator('#returns-partner-table').innerText()) && /Delhivery/.test(await sa.locator('#returns-partner-table').innerText()));
+const tags = await sa.locator('#returns-tag-table').innerText();
+check('tag table: AiSensy (all) 2 orders 2 returns', /AiSensy \(all\)\s+2\s+\d+\s+2\s+2/.test(tags), tags.replace(/\s+/g, ' '));
+check('payment table has COD and Prepaid', /COD/.test(await sa.locator('#returns-payment-table').innerText()) && /Prepaid/.test(await sa.locator('#returns-payment-table').innerText()));
 await sa.screenshot({ path: `${SHOTS}/analytics-returns.png`, fullPage: true });
+await sa.selectOption('#returns-tag-filter', 'Source: Facebook');
+await sa.waitForSelector('#returns-tag-active');
+await sa.waitForFunction(() => /Returns\s*0/.test(document.querySelector('#ret-total')?.textContent || ''), null, { timeout: 10000 }).catch(() => undefined);
+check('Facebook filter: 0 returns', /Returns\s*0/.test(await sa.locator('#ret-total').innerText()), await sa.locator('#ret-total').innerText());
+await sa.selectOption('#returns-tag-filter', 'AiSensy (all)');
+await sa.waitForFunction(() => /Returns\s*2/.test(document.querySelector('#ret-total')?.textContent || ''), null, { timeout: 10000 }).catch(() => undefined);
+check('AiSensy filter: 2 returns of 2 orders', /Returns\s*2/.test(await sa.locator('#ret-total').innerText()) && /2 orders/.test(await sa.locator('#returns-tag-active').innerText()), await sa.locator('#returns-tag-active').innerText());
+await sa.screenshot({ path: `${SHOTS}/analytics-returns-aisensy.png`, fullPage: false });
+await sa.selectOption('#returns-tag-filter', '');
 const dl2 = sa.waitForEvent('download');
 await sa.locator('#returns-export').click();
 const xname = (await dl2).suggestedFilename();
