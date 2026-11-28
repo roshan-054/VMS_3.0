@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { HardDrive, Palette, Database, Code2, Eraser as EraserIcon, Box, ShoppingBag } from 'lucide-react';
+import { HardDrive, Palette, Database, Code2, Eraser as EraserIcon, Box, ShoppingBag, ChevronLeft, ChevronRight } from 'lucide-react';
 import { AdminPanel } from './AdminPanel';
 import { Eraser, RefreshCw, Archive, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { BackendUpdateCard } from './BackendUpdateCard';
@@ -23,28 +23,102 @@ const btn = 'inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs fon
 type SectionId = 'app' | 'branding' | 'data' | 'packing' | 'shopify' | 'database' | 'backend';
 const SECTION_KEY = 'vms_settings_section';
 
-/** Settings: every app setting in one place, grouped into sections. */
-export const SettingsPage: React.FC<Props> = ({ onShowToast, currentUser }) => {
-  const sections: { id: SectionId; label: string; icon: any; show: boolean }[] = [
-    { id: 'app' as SectionId, label: 'App & Drive', icon: HardDrive, show: canUserManageSettings(currentUser) },
-    { id: 'branding' as SectionId, label: 'Logo & Favicon', icon: Palette, show: canUserManageBranding(currentUser) },
-    { id: 'data' as SectionId, label: 'Data & Cleanup', icon: EraserIcon, show: canUserManageSettings(currentUser) },
+type ToastFn = Props['onShowToast'];
+interface SectionContext {
+  onShowToast: ToastFn;
+  currentUser?: User | null;
+  /** The sheet cleanup card; its state lives in SettingsPage so a running cleanup survives a section switch. */
+  cleanupCard: React.ReactNode;
+}
+interface SettingsSection {
+  id: SectionId;
+  label: string;
+  /** One short line shown under the name in the menu. */
+  description: string;
+  group: string;
+  icon: React.ComponentType<{ className?: string }>;
+  /** Who can see the section. The backend checks permissions again on every call. */
+  canSee: (user?: User | null) => boolean;
+  render: (ctx: SectionContext) => React.ReactNode;
+}
+
+/**
+ * Every Settings section, in menu order. To add a section, add one entry here:
+ * it shows up in the left menu (and the mobile list) under its group.
+ */
+export const SETTINGS_SECTIONS: SettingsSection[] = [
+  {
+    id: 'app', group: 'General', label: 'App & Drive', icon: HardDrive,
+    description: 'Drive folder, video size limit and storage',
+    canSee: canUserManageSettings,
+    render: (c) => <AdminPanel onShowToast={c.onShowToast} currentUser={c.currentUser as any} section="settings" />,
+  },
+  {
+    id: 'branding', group: 'General', label: 'Logo & Favicon', icon: Palette,
+    description: 'App name, logo and browser icon',
+    canSee: canUserManageBranding,
+    render: (c) => <AdminPanel onShowToast={c.onShowToast} currentUser={c.currentUser as any} section="branding" />,
+  },
+  {
     // Box & weight on/off: Super Admin only (the backend refuses everyone else too).
-    { id: 'packing' as SectionId, label: 'Packing box', icon: Box, show: isSuperAdmin(currentUser) },
+    id: 'packing', group: 'Orders & packing', label: 'Packing box', icon: Box,
+    description: 'Box dimensions and volumetric weight',
+    canSee: isSuperAdmin,
+    render: (c) => <BoxSettingsCard onShowToast={c.onShowToast} />,
+  },
+  {
     // Shopify connection and on/off: Super Admin only (the backend refuses everyone else too).
-    { id: 'shopify' as SectionId, label: 'Shopify orders', icon: ShoppingBag, show: isSuperAdmin(currentUser) },
+    id: 'shopify', group: 'Orders & packing', label: 'Shopify orders', icon: ShoppingBag,
+    description: 'Store connection and order sync',
+    canSee: isSuperAdmin,
+    render: (c) => <ShopifySettingsCard onShowToast={c.onShowToast} />,
+  },
+  {
+    id: 'data', group: 'Data', label: 'Data & Cleanup', icon: EraserIcon,
+    description: 'Backup, duplicate rows, order IDs, archive',
+    canSee: canUserManageSettings,
+    render: (c) => (<>
+      <BackupCard onShowToast={c.onShowToast} />
+      {c.cleanupCard}
+      <OrderIdFormatCard onShowToast={c.onShowToast} />
+      <ArchivedRowsCard onShowToast={c.onShowToast} />
+    </>),
+  },
+  {
     // Supabase keys and tools: Super Admin only (the backend refuses everyone else too).
-    { id: 'database' as SectionId, label: 'Supabase', icon: Database, show: canUserSeeSupabaseSettings(currentUser) },
-    { id: 'backend' as SectionId, label: 'Backend update', icon: Code2, show: canUserManageSettings(currentUser) },
-  ].filter((x) => x.show);
+    id: 'database', group: 'Data', label: 'Supabase', icon: Database,
+    description: 'Fast database keys and tools',
+    canSee: canUserSeeSupabaseSettings,
+    render: (c) => <SupabaseCard onShowToast={c.onShowToast} />,
+  },
+  {
+    id: 'backend', group: 'System', label: 'Backend update', icon: Code2,
+    description: 'Update Code.gs and run backend tools',
+    canSee: canUserManageSettings,
+    render: (c) => <BackendUpdateCard onShowToast={c.onShowToast} />,
+  },
+];
+
+/** Settings: a Shopify-style left menu of sections; the picked section opens in the main pane. */
+export const SettingsPage: React.FC<Props> = ({ onShowToast, currentUser }) => {
+  const sections = SETTINGS_SECTIONS.filter((x) => x.canSee(currentUser));
   const [picked, setPicked] = useState<SectionId>(() => {
     try { return (localStorage.getItem(SECTION_KEY) as SectionId) || 'app'; } catch (_) { return 'app'; }
   });
+  // Phones: the menu fills the screen and opens one section at a time, with a Back button.
+  const [mobileOpen, setMobileOpen] = useState(false);
   const section: SectionId | undefined = sections.some((x) => x.id === picked) ? picked : sections[0]?.id;
+  const current = sections.find((x) => x.id === section);
   const pick = (id: SectionId) => {
     setPicked(id);
+    setMobileOpen(true);
     try { localStorage.setItem(SECTION_KEY, id); } catch (_) {}
   };
+  const groups = sections.reduce<{ name: string; items: SettingsSection[] }[]>((acc, x) => {
+    const g = acc.find((a) => a.name === x.group);
+    if (g) g.items.push(x); else acc.push({ name: x.group, items: [x] });
+    return acc;
+  }, []);
 
   const [scan, setScan] = useState<SheetCleanupScan | null>(null);
   const [scanning, setScanning] = useState(false);
@@ -107,38 +181,7 @@ export const SettingsPage: React.FC<Props> = ({ onShowToast, currentUser }) => {
     }
   };
 
-  return (
-    <div className="max-w-7xl mx-auto space-y-5">
-      <div className="flex flex-col gap-3 pb-4 border-b border-slate-200">
-        <h2 className="text-xl font-bold text-slate-900">Settings</h2>
-        <div id="settings-sections" role="tablist" className="flex flex-wrap items-center bg-slate-200/80 p-1 rounded-xl gap-1 self-start">
-          {sections.map((x) => {
-            const Icon = x.icon;
-            return (
-              <button key={x.id} id={`settings-section-${x.id}`} role="tab" aria-selected={section === x.id} type="button"
-                onClick={() => pick(x.id)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition cursor-pointer ${section === x.id ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}>
-                <Icon className="w-3.5 h-3.5" /> {x.label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {(section === 'app' || section === 'branding') && (
-        <AdminPanel onShowToast={onShowToast} currentUser={currentUser as any} section={section === 'app' ? 'settings' : 'branding'} />
-      )}
-
-      {section === 'packing' && <BoxSettingsCard onShowToast={onShowToast} />}
-      {section === 'shopify' && <ShopifySettingsCard onShowToast={onShowToast} />}
-
-      {section === 'database' && <SupabaseCard onShowToast={onShowToast} />}
-
-      {section === 'backend' && <BackendUpdateCard onShowToast={onShowToast} />}
-
-      {section === 'data' && (<>
-      <BackupCard onShowToast={onShowToast} />
-
+  const cleanupCard = (
       <section id="sheet-cleanup-card" className={card}>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
@@ -319,11 +362,58 @@ export const SettingsPage: React.FC<Props> = ({ onShowToast, currentUser }) => {
           </div>
         )}
       </section>
+  );
 
-      <OrderIdFormatCard onShowToast={onShowToast} />
+  return (
+    <div className="max-w-7xl mx-auto">
+      <div className="pb-4 mb-5 border-b border-slate-200">
+        <h2 className="text-xl font-bold text-slate-900">Settings</h2>
+      </div>
+      <div className="flex flex-col md:flex-row gap-5 items-start">
+        <nav id="settings-sections" role="tablist" aria-orientation="vertical" aria-label="Settings sections"
+          className={`${mobileOpen ? 'hidden md:block' : 'block'} w-full md:w-64 md:shrink-0 md:sticky md:top-4 bg-white rounded-2xl border border-slate-200 shadow-xs p-2 space-y-3`}>
+          {groups.map((g) => (
+            <div key={g.name}>
+              <div className="px-2.5 pt-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{g.name}</div>
+              <div className="space-y-0.5">
+                {g.items.map((x) => {
+                  const Icon = x.icon;
+                  const active = section === x.id;
+                  return (
+                    <button key={x.id} id={`settings-section-${x.id}`} role="tab" aria-selected={active} type="button"
+                      onClick={() => pick(x.id)}
+                      className={`w-full text-left flex items-start gap-3 px-2.5 py-2 rounded-lg transition cursor-pointer ${active ? 'bg-slate-100 text-slate-900' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}>
+                      <Icon className={`w-4 h-4 mt-0.5 shrink-0 ${active ? 'text-blue-600' : 'text-slate-500'}`} />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[13px] font-semibold leading-5">{x.label}</span>
+                        <span className="block text-[11px] text-slate-500 leading-4">{x.description}</span>
+                      </span>
+                      <ChevronRight className="w-4 h-4 mt-0.5 shrink-0 text-slate-400 md:hidden" />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </nav>
 
-      <ArchivedRowsCard onShowToast={onShowToast} />
-      </>)}
+        <main id="settings-pane" role="tabpanel" aria-labelledby={current ? `settings-section-${current.id}` : undefined}
+          className={`${mobileOpen ? 'block' : 'hidden md:block'} flex-1 min-w-0 w-full space-y-5`}>
+          {current && (
+            <div className="flex items-center gap-2">
+              <button id="settings-back" type="button" onClick={() => setMobileOpen(false)}
+                className="md:hidden inline-flex items-center gap-1 px-2 py-1.5 -ml-2 rounded-lg text-xs font-semibold text-slate-600 hover:bg-slate-100 cursor-pointer">
+                <ChevronLeft className="w-4 h-4" /> Settings
+              </button>
+              <h3 id="settings-pane-title" className="hidden md:flex items-center gap-2 text-base font-bold text-slate-900">
+                <current.icon className="w-4 h-4 text-slate-500" /> {current.label}
+              </h3>
+            </div>
+          )}
+          {current && <h3 className="md:hidden text-base font-bold text-slate-900">{current.label}</h3>}
+          {current?.render({ onShowToast, currentUser, cleanupCard })}
+        </main>
+      </div>
     </div>
   );
 };
