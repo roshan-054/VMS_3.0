@@ -143,7 +143,7 @@ test('return analytics: rates by partner and pincode, repeat and suspicious cust
 
   const a = rt.call('getReturnAnalytics', { token: sue, fromDate: today(), toDate: today() });
   assert.equal(a.success, true, a.error);
-  assert.deepEqual(a.orderData, { available: true, hasCustomer: true, hasPincode: true, hasCourier: true });
+  assert.deepEqual(a.orderData, { available: true, hasCustomer: true, hasPincode: true, hasCourier: true, hasTags: false, hasPayMode: false });
   assert.equal(a.totals.returns, 4);
   assert.equal(a.totals.rto, 2);
   assert.equal(a.totals.customerReturns, 2);
@@ -196,4 +196,44 @@ test('return analytics without order data: counts from returns, rate from packed
   assert.equal(a.byPincode[0].returnRate, null);
   assert.equal(a.suspicious.length, 1, 'two RTOs for one phone');
   assert.equal(a.repeatCustomers.length, 1);
+});
+
+test('return analytics by Shopify tag and payment mode, with a tag filter', () => {
+  const rt = createRuntime({ users: users() });
+  const pat = login(rt, 'pat@example.com');
+  const sue = login(rt, 'sue@example.com');
+  const now = new Date();
+  const rows = [['Synced At', 'Order ID', 'Order Date', 'Payment Mode', 'Tags', 'Customer Phone']];
+  rows.push([now, '#OD-1', now, 'COD', 'AiSensy_COD_Confirmed', '9000000001']);
+  rows.push([now, '#OD-2', now, 'COD', 'AiSensy_COD_Confirmed, Source: Google', '9000000002']);
+  rows.push([now, '#OD-3', now, 'COD', 'AiSensy_COD_Cancelled', '9000000003']);
+  rows.push([now, '#OD-4', now, 'Prepaid', 'Source: Facebook', '9000000004']);
+  rows.push([now, '#OD-5', now, 'Prepaid', '', '9000000005']);
+  rt.addSheet('ShopifyOrders', rows);
+  ['#OD-1', '#OD-2', '#OD-4', '#OD-5'].forEach((o) => rt.sheets.get('OrderLog').rows.push(forwardRow(o)));
+  rt.sheets.get('ReturnLog').rows.push(returnRow('#OD-2'));
+  rt.call('saveReturnDetails', { token: pat, orderId: '#OD-2', platform: 'D2C', returnType: 'RTO' });
+  rt.sheets.get('ReturnLog').rows.push(returnRow('#OD-4'));
+
+  const a = rt.call('getReturnAnalytics', { token: sue, fromDate: today(), toDate: today() });
+  assert.equal(a.success, true, a.error);
+  assert.equal(a.orderData.hasTags, true);
+  const t = (n) => a.byTag.find((x) => x.name === n);
+  assert.deepEqual([t('AiSensy (all)').orders, t('AiSensy (all)').packed, t('AiSensy (all)').returns, t('AiSensy (all)').rto], [3, 2, 1, 1]);
+  assert.equal(t('AiSensy (all)').returnRate, 50); // 1 of 2 packed
+  assert.deepEqual([t('AiSensy_COD_Confirmed').orders, t('AiSensy_COD_Confirmed').returns], [2, 1]);
+  assert.equal(t('AiSensy_COD_Cancelled').packed, 0);
+  assert.equal(t('Source: Facebook').returns, 1);
+  assert.equal(t('No tag').orders, 1);
+  assert.ok(a.tags.includes('AiSensy (all)') && a.tags.includes('AiSensy_COD_Confirmed'));
+  const cod = a.byPayment.find((x) => x.name === 'COD');
+  assert.deepEqual([cod.orders, cod.returns], [3, 1]);
+
+  const f = rt.call('getReturnAnalytics', { token: sue, fromDate: today(), toDate: today(), tag: 'AiSensy*' });
+  assert.equal(f.totals.returns, 1);
+  assert.equal(f.totals.ordersInData, 3);
+  assert.equal(f.totals.forwardPacked, 2);
+  const g = rt.call('getReturnAnalytics', { token: sue, fromDate: today(), toDate: today(), tag: 'Source: Facebook' });
+  assert.equal(g.totals.returns, 1);
+  assert.equal(g.recent[0].orderId, '#OD-4');
 });

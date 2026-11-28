@@ -8583,13 +8583,17 @@ function orderDirectory_() {
     city: find([/city/]),
     state: find([/^(shipping\s*)?state$|province/]),
     courier: find([/courier|carrier|tracking\s*company|logistic/]),
-    status: find([/^order\s*status$/, /^fulfil?ment(\s*status)?$/])
+    status: find([/^order\s*status$/, /^fulfil?ment(\s*status)?$/]),
+    tags: find([/^tags?$/, /^order\s*tags?$/]),
+    payMode: find([/^payment\s*mode$/, /^payment\s*method$/])
   };
   if (c.order < 0) return out;
   out.available = true;
   out.hasCustomer = c.phone >= 0 || c.email >= 0 || c.name >= 0;
   out.hasPincode = c.pin >= 0;
   out.hasCourier = c.courier >= 0;
+  out.hasTags = c.tags >= 0;
+  out.hasPayMode = c.payMode >= 0;
   const cell = function(row, i) { return i >= 0 ? row[i] : ''; };
   for (let i = 1; i < v.length; i++) {
     const order = String(cell(v[i], c.order) || '').trim();
@@ -8599,7 +8603,9 @@ function orderDirectory_() {
       name: String(cell(v[i], c.name) || '').trim(), phone: normalizePhone_(cell(v[i], c.phone)),
       email: normalize_(cell(v[i], c.email)), pincode: normalizePincode_(cell(v[i], c.pin)),
       city: String(cell(v[i], c.city) || '').trim(), state: String(cell(v[i], c.state) || '').trim(),
-      courier: String(cell(v[i], c.courier) || '').trim(), status: String(cell(v[i], c.status) || '').trim()
+      courier: String(cell(v[i], c.courier) || '').trim(), status: String(cell(v[i], c.status) || '').trim(),
+      tags: String(cell(v[i], c.tags) || '').split(',').map(function(t) { return t.trim(); }).filter(String),
+      payMode: String(cell(v[i], c.payMode) || '').trim()
     };
     out.byOrder[o.key] = o;
     out.list.push(o);
@@ -8651,6 +8657,17 @@ function getReturnAnalytics_(p) {
   const platform = normalize_(p.platform);
   const dir = orderDirectory_();
   const details = returnDetailsByOrder_();
+  // Optional Shopify tag filter: an exact tag, or "AiSensy*" for every tag starting with AiSensy.
+  const tagF = String(p.tag || '').trim().toLowerCase();
+  const tagOk = function(key) {
+    if (!tagF) return true;
+    const o = dir.byOrder[key];
+    if (!o) return false;
+    return o.tags.some(function(t) {
+      const x = t.toLowerCase();
+      return tagF.slice(-1) === '*' ? x.indexOf(tagF.slice(0, -1)) === 0 : x === tagF;
+    });
+  };
 
   // Every Return video in range (ReturnLog), with its details if saved.
   const returns = [];
@@ -8658,6 +8675,7 @@ function getReturnAnalytics_(p) {
   const addReturn = function(key, orderId, pf, ts, by) {
     if (!key || seen[key]) return;
     if (platform && normalize_(pf) !== platform) return;
+    if (!tagOk(key)) return;
     seen[key] = true;
     const d = details[key] || {};
     const o = dir.byOrder[key] || {};
@@ -8685,23 +8703,26 @@ function getReturnAnalytics_(p) {
 
   // Forward videos packed in range (denominator when there is no order data).
   let forwardCount = 0;
+  const packedAll = {}; // every order with a packing video (any date), for 'packed' per tag
   try {
     const sh = ss_().getSheetByName(CONFIG.ORDER_LOG_SHEET);
     const v = sh ? sh.getDataRange().getValues() : [];
     const fseen = {};
     for (let i = 1; i < v.length; i++) {
+      const k0 = normalizeOrderId_(v[i][1]);
+      if (k0) packedAll[k0] = true;
       const ts = rowDate_(v[i][0]);
       if (isNaN(ts) || !inRange_(ts, from, to)) continue;
       if (platform && normalize_(v[i][2]) !== platform) continue;
-      const k = normalizeOrderId_(v[i][1]);
-      if (!k || fseen[k]) continue;
+      const k = k0;
+      if (!k || fseen[k] || !tagOk(k)) continue;
       fseen[k] = true;
       forwardCount++;
     }
   } catch (_) {}
 
   // Orders in range from the order data (by order date).
-  const ordersInRange = dir.list.filter(function(o) { return !isNaN(o.date) && o.date >= from && o.date <= to; });
+  const ordersInRange = dir.list.filter(function(o) { return !isNaN(o.date) && o.date >= from && o.date <= to && tagOk(o.key); });
 
   const totals = { returns: returns.length, rto: 0, customerReturns: 0, untyped: 0, notReceivedClaims: 0, damaged: 0,
     withDetails: 0, forwardPacked: forwardCount, ordersInData: ordersInRange.length };
@@ -8816,10 +8837,60 @@ function getReturnAnalytics_(p) {
     }).filter(function(g) { return g.returns > 0 || g.orders > 0; })
       .sort(function(a, b) { return b.returns - a.returns || (b.orders || 0) - (a.orders || 0); });
   };
+  // Shopify tags and payment mode: orders in range, how many were packed, and how many came back.
+  // A tag like AiSensy_COD_Confirmed also counts under "AiSensy (all)".
+  const byTag = {}, byPay = {}, allTags = {};
+  const tagGroup = function() { return { orders: 0, packed: 0, returns: 0, rto: 0, customerReturns: 0, claims: 0 }; };
+  const tagNames = function(o) {
+    const out = {};
+    (o.tags || []).forEach(function(t) {
+      out[t] = true;
+      const fam = t.indexOf('_') > 0 ? t.slice(0, t.indexOf('_')) : '';
+      if (fam) out[fam + ' (all)'] = true;
+    });
+    if (!Object.keys(out).length) out['No tag'] = true;
+    return Object.keys(out);
+  };
+  dir.list.forEach(function(o) { tagNames(o).forEach(function(t) { if (t !== 'No tag') allTags[t] = true; }); });
+  if (dir.hasTags || dir.hasPayMode) {
+    ordersInRange.forEach(function(o) {
+      const groups = [];
+      if (dir.hasTags) tagNames(o).forEach(function(t) { groups.push(bump(byTag, t, tagGroup)); });
+      if (dir.hasPayMode) groups.push(bump(byPay, o.payMode || 'Not set', tagGroup));
+      groups.forEach(function(g) { g.orders++; if (packedAll[o.key]) g.packed++; });
+    });
+    returns.forEach(function(r) {
+      const o = dir.byOrder[r.key];
+      if (!o) return;
+      const groups = [];
+      if (dir.hasTags) tagNames(o).forEach(function(t) { groups.push(bump(byTag, t, tagGroup)); });
+      if (dir.hasPayMode) groups.push(bump(byPay, o.payMode || 'Not set', tagGroup));
+      groups.forEach(function(g) {
+        g.returns++;
+        if (r.returnType === 'RTO') g.rto++;
+        if (r.returnType === 'Customer Return') g.customerReturns++;
+        if (r.claim) g.claims++;
+      });
+    });
+  }
+  const tagList = function(map) {
+    return Object.keys(map).map(function(k) {
+      const g = map[k];
+      return { name: k, orders: g.orders, packed: g.packed, returns: g.returns, rto: g.rto, customerReturns: g.customerReturns,
+        claims: g.claims, returnRate: rate(g.returns, g.packed || g.orders), rtoRate: rate(g.rto, g.packed || g.orders) };
+    }).sort(function(a, b) {
+      const rank = function(x) { return /\(all\)$/.test(x.name) ? 0 : x.name === 'No tag' || x.name === 'Not set' ? 2 : 1; };
+      return rank(a) - rank(b) || b.orders - a.orders || b.returns - a.returns;
+    });
+  };
+
   const denom = ordersInRange.length || forwardCount;
   return {
     success: true, fromDate: p.fromDate, toDate: p.toDate,
-    orderData: { available: dir.available, hasCustomer: dir.hasCustomer, hasPincode: dir.hasPincode, hasCourier: dir.hasCourier },
+    orderData: { available: dir.available, hasCustomer: dir.hasCustomer, hasPincode: dir.hasPincode, hasCourier: dir.hasCourier,
+      hasTags: !!dir.hasTags, hasPayMode: !!dir.hasPayMode },
+    tag: String(p.tag || '').trim(), tags: Object.keys(allTags).sort(),
+    byTag: tagList(byTag).slice(0, 200), byPayment: tagList(byPay),
     totals: totals,
     returnRate: rate(totals.returns, denom), rtoRate: rate(totals.rto, denom), rateBase: ordersInRange.length ? 'orders' : 'packed',
     byPartner: groupList(byPartner, dir.hasCourier).slice(0, 100),

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Download, Loader2, PackageX, RefreshCw, Repeat, Search, Truck, MapPin, Info } from 'lucide-react';
+import { AlertTriangle, Download, Loader2, PackageX, RefreshCw, Repeat, Search, Truck, MapPin, Info, Tag, Wallet } from 'lucide-react';
 import { requestApi } from '../lib/api';
 import { fmtDate } from '../lib/dateFormat';
 
@@ -51,9 +51,24 @@ interface RecentReturn {
   phone: string;
 }
 
+interface TagGroup {
+  name: string;
+  orders: number;
+  packed: number;
+  returns: number;
+  rto: number;
+  customerReturns: number;
+  claims: number;
+  returnRate: number | null;
+  rtoRate: number | null;
+}
+
 export interface ReturnAnalyticsData {
   success: boolean;
-  orderData: { available: boolean; hasCustomer: boolean; hasPincode: boolean; hasCourier: boolean };
+  orderData: { available: boolean; hasCustomer: boolean; hasPincode: boolean; hasCourier: boolean; hasTags?: boolean; hasPayMode?: boolean };
+  tags?: string[];
+  byTag?: TagGroup[];
+  byPayment?: TagGroup[];
   totals: { returns: number; rto: number; customerReturns: number; untyped: number; notReceivedClaims: number; damaged: number; withDetails: number; forwardPacked: number; ordersInData: number };
   returnRate: number | null;
   rtoRate: number | null;
@@ -100,6 +115,9 @@ export const ReturnsAnalytics: React.FC<Props> = ({ fromDate, toDate, platform, 
   const [pinSearch, setPinSearch] = useState('');
   const [custSearch, setCustSearch] = useState('');
   const [openCustomer, setOpenCustomer] = useState<string>('');
+  // Shopify tag filter: '' = all orders; "AiSensy (all)" is sent as "AiSensy*".
+  const [tagFilter, setTagFilter] = useState('');
+  const [tagOptions, setTagOptions] = useState<string[]>([]);
   const seq = useRef(0);
 
   const load = useCallback(async () => {
@@ -108,8 +126,13 @@ export const ReturnsAnalytics: React.FC<Props> = ({ fromDate, toDate, platform, 
     setLoading(true);
     setError('');
     try {
-      const res = await requestApi<ReturnAnalyticsData>('getReturnAnalytics', { fromDate, toDate, platform: platform === 'all' ? '' : platform });
-      if (n === seq.current) setData(res as unknown as ReturnAnalyticsData);
+      const tag = tagFilter.endsWith(' (all)') ? `${tagFilter.slice(0, -6)}*` : tagFilter;
+      const res = await requestApi<ReturnAnalyticsData>('getReturnAnalytics', { fromDate, toDate, platform: platform === 'all' ? '' : platform, tag });
+      if (n === seq.current) {
+        setData(res as unknown as ReturnAnalyticsData);
+        const list = (res as any)?.tags;
+        if (Array.isArray(list) && list.length) setTagOptions(list);
+      }
     } catch (e: any) {
       const msg = String(e?.message || '');
       if (n === seq.current) setError(/unknown action/i.test(msg)
@@ -118,7 +141,7 @@ export const ReturnsAnalytics: React.FC<Props> = ({ fromDate, toDate, platform, 
     } finally {
       if (n === seq.current) setLoading(false);
     }
-  }, [fromDate, toDate, platform]);
+  }, [fromDate, toDate, platform, tagFilter]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -154,13 +177,19 @@ export const ReturnsAnalytics: React.FC<Props> = ({ fromDate, toDate, platform, 
         'Returned Orders': (c.returnOrders || []).map((o) => o.orderId).join(', '),
       }));
       add('Summary', [{
-        From: fmtDate(fromDate), To: fmtDate(toDate), Returns: data.totals.returns, RTO: data.totals.rto, 'Customer Returns': data.totals.customerReturns,
+        From: fmtDate(fromDate), To: fmtDate(toDate), 'Order Tag': tagFilter || 'All orders', Returns: data.totals.returns, RTO: data.totals.rto, 'Customer Returns': data.totals.customerReturns,
         'Not Received Claims': data.totals.notReceivedClaims, Damaged: data.totals.damaged,
         'Return Rate %': data.returnRate ?? '', 'RTO Rate %': data.rtoRate ?? '',
         'Rate Based On': data.rateBase === 'orders' ? `${data.totals.ordersInData} orders in order data` : `${data.totals.forwardPacked} packed videos`,
       }]);
       add('By Logistics Partner', groupRows(data.byPartner, 'Logistics Partner'));
       add('By Pincode', groupRows(data.byPincode, 'Pincode'));
+      const tagRows = (list: TagGroup[] | undefined, label: string) => (list || []).map((g) => ({
+        [label]: g.name, Orders: g.orders, Packed: g.packed, Returns: g.returns, RTO: g.rto, 'Customer Returns': g.customerReturns,
+        'Not Received Claims': g.claims, 'Return Rate %': g.returnRate ?? '', 'RTO Rate %': g.rtoRate ?? '',
+      }));
+      if (data.orderData.hasTags) add('By Order Tag', tagRows(data.byTag, 'Tag'));
+      if (data.orderData.hasPayMode) add('By Payment Mode', tagRows(data.byPayment, 'Payment Mode'));
       add('By Condition', data.byCondition.map((c) => ({ Condition: c.name, Returns: c.count })));
       add('Suspicious Customers', custRows(data.suspicious));
       add('Repeat Customers', custRows(data.repeatCustomers));
@@ -169,7 +198,7 @@ export const ReturnsAnalytics: React.FC<Props> = ({ fromDate, toDate, platform, 
         Date: fmtDate(r.date), 'Order ID': r.orderId, Platform: r.platform, 'Return Type': r.returnType, 'Logistics Partner': r.partner,
         Condition: r.condition, 'Not Received Claim': r.claim ? 'Yes' : 'No', Pincode: r.pincode, Customer: r.name, Notes: r.notes,
       })));
-      XLSX.writeFile(wb, `Returns_RTO_${fmtDate(fromDate)}_to_${fmtDate(toDate)}.xlsx`);
+      XLSX.writeFile(wb, `Returns_RTO_${tagFilter ? tagFilter.replace(/[^A-Za-z0-9]+/g, '_') + '_' : ''}${fmtDate(fromDate)}_to_${fmtDate(toDate)}.xlsx`);
       onShowToast('Returns & RTO report downloaded.', 'success');
     } catch (e: any) {
       onShowToast(e?.message || 'Could not create the Excel file.', 'error');
@@ -223,6 +252,42 @@ export const ReturnsAnalytics: React.FC<Props> = ({ fromDate, toDate, platform, 
               <td className={tdNum}>{g.damaged}</td>
               {showOrders(list) ? <td className={tdNum}>{pct(g.returnRate)}</td> : <td className={tdNum}>{pct(g.share)}</td>}
               {showOrders(list) && <td className={tdNum}>{pct(g.rtoRate)}</td>}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  const tagTable = (id: string, list: TagGroup[], label: string) => (
+    <div className="overflow-x-auto max-h-96 overflow-y-auto border border-slate-200 rounded-xl">
+      <table id={id} className="min-w-full divide-y divide-slate-100">
+        <thead className="bg-slate-50 sticky top-0">
+          <tr>
+            <th className={th}>{label}</th>
+            <th className={`${th} text-right`}>Orders</th>
+            <th className={`${th} text-right`}>Packed</th>
+            <th className={`${th} text-right`}>Returns</th>
+            <th className={`${th} text-right`}>RTO</th>
+            <th className={`${th} text-right`}>Customer returns</th>
+            <th className={`${th} text-right`}>Not received</th>
+            <th className={`${th} text-right`}>Return rate</th>
+            <th className={`${th} text-right`}>RTO rate</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {list.length === 0 && <tr><td className={td} colSpan={9}>No orders in this range.</td></tr>}
+          {list.map((g) => (
+            <tr key={g.name} className={`hover:bg-slate-50 ${g.name.endsWith(' (all)') ? 'bg-amber-50/40' : ''}`}>
+              <td className={`${td} font-semibold`}>{g.name}</td>
+              <td className={tdNum}>{g.orders}</td>
+              <td className={tdNum}>{g.packed}</td>
+              <td className={tdNum}>{g.returns}</td>
+              <td className={`${tdNum} ${g.rto ? 'text-rose-700 font-semibold' : ''}`}>{g.rto}</td>
+              <td className={tdNum}>{g.customerReturns}</td>
+              <td className={tdNum}>{g.claims}</td>
+              <td className={tdNum}>{pct(g.returnRate)}</td>
+              <td className={tdNum}>{pct(g.rtoRate)}</td>
             </tr>
           ))}
         </tbody>
@@ -295,7 +360,14 @@ export const ReturnsAnalytics: React.FC<Props> = ({ fromDate, toDate, platform, 
     <div id="returns-analytics" className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-base font-bold text-slate-800 flex items-center gap-2"><PackageX className="w-4 h-4 text-amber-600" /> Returns & RTO</h3>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {(od.hasTags || tagOptions.length > 0) && (
+            <select id="returns-tag-filter" value={tagFilter} onChange={(e) => setTagFilter(e.target.value)}
+              className="px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 focus:bg-white focus:outline-none cursor-pointer max-w-[16rem]">
+              <option value="">All orders (any tag)</option>
+              {tagOptions.map((t) => <option key={t} value={t}>{`Tag: ${t}`}</option>)}
+            </select>
+          )}
           <button onClick={load} disabled={loading} className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer">
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
           </button>
@@ -325,6 +397,27 @@ export const ReturnsAnalytics: React.FC<Props> = ({ fromDate, toDate, platform, 
         <Tile id="ret-rate" label="Return rate" value={pct(data.returnRate)} sub={rateSub} />
         <Tile id="ret-rto-rate" label="RTO rate" value={pct(data.rtoRate)} sub={rateSub} tone="rose" />
       </div>
+
+      {tagFilter && (
+        <div id="returns-tag-active" className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+          Showing only orders tagged <strong>{tagFilter}</strong>: {t.ordersInData} orders, {t.forwardPacked} packed, {t.returns} returned.
+        </div>
+      )}
+
+      {od.hasTags && (data.byTag || []).length > 0 && (
+        <section className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
+          <h4 className="text-sm font-bold text-slate-800 flex items-center gap-2"><Tag className="w-4 h-4 text-blue-600" /> By order tag</h4>
+          <p className="text-[11px] text-slate-500">Shopify tags on orders placed in this range. Packed = a packing video exists. Return rate = returns ÷ packed. A tag like AiSensy_COD_Confirmed also counts under "AiSensy (all)".</p>
+          {tagTable('returns-tag-table', data.byTag || [], 'Tag')}
+        </section>
+      )}
+
+      {od.hasPayMode && (data.byPayment || []).length > 0 && (
+        <section className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
+          <h4 className="text-sm font-bold text-slate-800 flex items-center gap-2"><Wallet className="w-4 h-4 text-blue-600" /> By payment mode</h4>
+          {tagTable('returns-payment-table', data.byPayment || [], 'Payment mode')}
+        </section>
+      )}
 
       <section className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
         <h4 className="text-sm font-bold text-slate-800 flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-rose-600" /> Suspicious customers</h4>
